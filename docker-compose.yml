@@ -14,14 +14,22 @@ services:
     # included) — root always has write permission on /data. The container
     # is the isolation boundary, not the in-container UID, so this is safe.
     user: "0:0"
+    # SurrealDB reads SURREAL_USER / SURREAL_PASS from its own container env
+    # as fallbacks for the --user / --pass flags. Putting them in
+    # `environment:` means they travel with the container image regardless of
+    # how the compose orchestrator handles ${...} substitution at up-time.
+    environment:
+      SURREAL_USER: ${SURREAL_USER:-root}
+      SURREAL_PASS: ${SURREAL_PASS:-root}
     command:
       - start
-      - --user=${SURREAL_USER:-root}
-      - --pass=${SURREAL_PASS:-root}
       - --bind=0.0.0.0:8000
       - rocksdb:///data/tv.db
-    ports:
-      - "${SURREAL_BIND:-127.0.0.1}:${SURREAL_PORT:-37422}:8000"
+    # No host port mapping. The app reaches SurrealDB at `ws://surrealdb:8000`
+    # on the internal compose network. Other SurrealDB instances on the same
+    # Dokploy host are invisible — they live in their own compose networks.
+    expose:
+      - "8000"
     volumes:
       - surreal-data:/data
 
@@ -36,9 +44,11 @@ services:
       RUSTFS_ADDRESS: 0.0.0.0:9000
       RUSTFS_CONSOLE_ENABLE: "true"
       RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
-    ports:
-      - "${RUSTFS_BIND:-127.0.0.1}:${RUSTFS_PORT:-37421}:9000"        # S3 API
-      - "${RUSTFS_BIND:-127.0.0.1}:${RUSTFS_CONSOLE_PORT:-37423}:9001" # console
+    # No host port mappings either — only the app (on the internal network)
+    # talks to rustfs, and only via `http://rustfs:9000`.
+    expose:
+      - "9000"
+      - "9001"
     volumes:
       - rustfs-data:/data
 
@@ -48,8 +58,13 @@ services:
       - surrealdb
       - rustfs
     restart: unless-stopped
-    ports:
-      - "${APP_BIND:-0.0.0.0}:${APP_PORT:-37420}:37420"
+    # `expose` (vs `ports`) means the container is only reachable on the
+    # internal docker network. Traefik reaches it via the dokploy-network
+    # and does the TLS termination; there's no need to publish a host port.
+    # This also keeps Dokploy from auto-generating a Traefik label pointing
+    # at the wrong host-side port.
+    expose:
+      - "37420"
     environment:
       # Server
       APP_NAME: ${APP_NAME:-TransactVault}
