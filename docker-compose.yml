@@ -1,12 +1,17 @@
 services:
   # Ports are deliberately unusual (37420-37423) so this stack coexists with
   # any other dockers you have running on 3000/8000/9000.
+  #
+  # Every credential flows from `.env` (or Dokploy's Environment tab in prod)
+  # so dev and prod share the same compose file — only the .env differs.
+
   surrealdb:
     image: surrealdb/surrealdb:v3
+    restart: unless-stopped
     command:
       - start
-      - --user=root
-      - --pass=root
+      - --user=${SURREAL_USER:-root}
+      - --pass=${SURREAL_PASS:-root}
       - --bind=0.0.0.0:8000
       - surrealkv:///data/tv.db
     ports:
@@ -16,9 +21,10 @@ services:
 
   rustfs:
     image: rustfs/rustfs:latest
+    restart: unless-stopped
     environment:
-      RUSTFS_ROOT_USER: rustfsadmin
-      RUSTFS_ROOT_PASSWORD: rustfsadmin
+      RUSTFS_ROOT_USER: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
+      RUSTFS_ROOT_PASSWORD: ${RUSTFS_SECRET_KEY:-rustfsadmin}
       RUSTFS_ADDRESS: 0.0.0.0:9000
       RUSTFS_CONSOLE_ENABLE: "true"
       RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
@@ -34,17 +40,16 @@ services:
       - surrealdb
       - rustfs
     restart: unless-stopped
-    # Pull sensitive values (JWT_SECRET, RESEND_API_KEY) from the host .env
-    # instead of baking them into the compose file.
+    # Pull sensitive values (JWT_SECRET, RESEND_API_KEY, SURREAL_PASS, etc.)
+    # from the host .env instead of baking them into the compose file.
     env_file:
       - .env
     environment:
       HOST: 0.0.0.0
       PORT: "37420"
       PRETTY_LOGS: "false"
-      BASE_URL: http://localhost:37420
 
-      # Override the host-centric values from .env so the app reaches the
+      # Override the host-centric URLs from .env so the app reaches the
       # backing services via the docker-compose network instead of localhost.
       SURREAL_URL: ws://surrealdb:8000
       RUSTFS_ENDPOINT: http://rustfs:9000
