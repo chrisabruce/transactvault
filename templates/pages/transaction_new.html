@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+
+{% block title %}New transaction — {{ app_name }}{% endblock %}
+{% block body_class %}page-app{% endblock %}
+
+{% block body %}
+{% include "components/app_header.html" %}
+
+<main class="app-main">
+    <header class="page-title">
+        <section>
+            <h1>New transaction</h1>
+            <p class="subtitle">We'll spin up a default California checklist automatically.</p>
+        </section>
+        <a class="btn ghost" href="/app/transactions">Cancel</a>
+    </header>
+
+    {% match error %}{% when Some with (msg) %}
+        <p class="alert error" role="alert">{{ msg }}</p>
+    {% when None %}{% endmatch %}
+
+    <section class="panel">
+        <form method="post" action="/app/transactions">
+            <fieldset>
+                <legend>Property</legend>
+                <label>
+                    <span>Property address</span>
+                    <input type="text" name="property_address" required placeholder="42345 10th St W">
+                </label>
+                <div class="form-row">
+                    <label>
+                        <span>City</span>
+                        <input type="text" name="city" placeholder="Lancaster">
+                    </label>
+                    <label>
+                        <span>Postal code</span>
+                        <input type="text" name="postal_code" placeholder="93534">
+                    </label>
+                </div>
+                <label>
+                    <span>Price</span>
+                    <input type="text" name="price" placeholder="$649,000">
+                </label>
+            </fieldset>
+
+            <fieldset>
+                <legend>Parties</legend>
+                <div class="form-row">
+                    <label>
+                        <span>Buyer name</span>
+                        <input type="text" name="buyer_name">
+                    </label>
+                    <label>
+                        <span>Seller name</span>
+                        <input type="text" name="seller_name">
+                    </label>
+                </div>
+            </fieldset>
+
+            <fieldset>
+                <legend>Timeline</legend>
+                <div class="form-row">
+                    <label>
+                        <span>Expected close</span>
+                        <input type="date" name="expected_close">
+                    </label>
+                    <label>
+                        <span>Status</span>
+                        <select name="status">
+                            <option value="open">Open</option>
+                            <option value="under_contract">Under contract</option>
+                            <option value="closed">Closed</option>
+                            <option value="cancelled">Cancelled</option>
+                        </select>
+                    </label>
+                </div>
+            </fieldset>
+
+            <button type="submit">Create transaction</button>
+        </form>
+    </section>
+</main>
+{% endblock %}

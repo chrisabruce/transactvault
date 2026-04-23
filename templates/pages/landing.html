@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+
+{% block title %}Transaction management that actually feels good — {{ app_name }}{% endblock %}
+{% block description %}Modern real estate transaction management for California brokerages. Flat pricing. 3 years of compliant storage included. No sales calls.{% endblock %}
+{% block canonical %}{{ base_url }}/{% endblock %}
+{% block og_url %}{{ base_url }}/{% endblock %}
+{% block og_title %}Transaction management that actually feels good to use{% endblock %}
+
+{% block head %}
+<script type="application/ld+json">
+{
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "{{ app_name }}",
+    "applicationCategory": "BusinessApplication",
+    "description": "Modern real estate transaction management for California brokerages.",
+    "operatingSystem": "Web",
+    "offers": {
+        "@type": "AggregateOffer",
+        "priceCurrency": "USD",
+        "lowPrice": "149",
+        "highPrice": "799"
+    }
+}
+</script>
+{% endblock %}
+
+{% block body %}
+{% include "components/public_header.html" %}
+
+<main id="top">
+    <section class="hero">
+        <div class="wrap">
+            <span class="eyebrow">Built for California brokerages</span>
+            <h1>Transaction management that actually feels good to use.</h1>
+            <p class="lede">Flat pricing. 3 years of compliant storage included. No sales calls, no surprises — just a beautiful, audit-ready way to run every deal.</p>
+            <div class="hero-actions">
+                <a class="btn" href="/signup">Start free 14-day trial</a>
+                <a class="btn secondary" href="/pricing">See pricing</a>
+            </div>
+            <p class="hero-proof">
+                <span>No credit card required</span>
+                <span>Unlimited team members</span>
+                <span>Cancel anytime</span>
+            </p>
+        </div>
+    </section>
+
+    <section class="section" id="benefits">
+        <header class="section-heading">
+            <h2>Why brokerages switch from SkySlope and Dotloop</h2>
+            <p>Every surface of TransactVault exists to make compliance easier — not to push more seats, add-ons, or upsells.</p>
+        </header>
+
+        <div class="benefit-grid">
+            <article class="benefit-card">
+                <span class="badge" aria-hidden="true">$</span>
+                <h3>Transparent flat pricing</h3>
+                <p>Pick a plan, pay monthly, cancel anytime. No per-user fees. No hidden charges for storage, signatures, or audit features.</p>
+            </article>
+            <article class="benefit-card">
+                <span class="badge" aria-hidden="true">⌛</span>
+                <h3>3-year storage included</h3>
+                <p>Every active subscription includes three years of compliant, versioned document retention — long enough to cover California DRE audit windows.</p>
+            </article>
+            <article class="benefit-card">
+                <span class="badge" aria-hidden="true">✦</span>
+                <h3>Beautiful and fast</h3>
+                <p>Designed from scratch to feel modern and calm. Pages load instantly, micro-interactions delight, and nothing gets in your way.</p>
+            </article>
+            <article class="benefit-card">
+                <span class="badge" aria-hidden="true">✓</span>
+                <h3>Full compliance visibility</h3>
+                <p>A live compliance score on every transaction. When the whole checklist is green, the deal is audit-ready — and the broker can see it at a glance.</p>
+            </article>
+            <article class="benefit-card">
+                <span class="badge" aria-hidden="true">★</span>
+                <h3>California-focused</h3>
+                <p>Default checklists mirror California transaction standards. Antelope Valley brokerages were our earliest design partners.</p>
+            </article>
+            <article class="benefit-card">
+                <span class="badge" aria-hidden="true">↻</span>
+                <h3>Versioned by default</h3>
+                <p>Every upload is stored as a new version. Signed PDFs are preserved exactly. The audit trail shows who did what and when.</p>
+            </article>
+        </div>
+    </section>
+
+    <aside class="compare-strip">
+        <div class="wrap">
+            <article>
+                <h3>Better than SkySlope</h3>
+                <p><span class="cross">✕</span> Hidden fees and per-seat add-ons</p>
+                <p><span class="check">✓</span> Flat monthly pricing, everything included</p>
+            </article>
+            <article>
+                <h3>Better than Dotloop</h3>
+                <p><span class="cross">✕</span> Sales-call gated onboarding</p>
+                <p><span class="check">✓</span> Sign up online in under a minute</p>
+            </article>
+            <article>
+                <h3>Designed for compliance</h3>
+                <p><span class="cross">✕</span> Scattered trust that audits are ready</p>
+                <p><span class="check">✓</span> Clear green “Compliance Complete” signal</p>
+            </article>
+        </div>
+    </aside>
+
+    <section class="section" id="testimonials">
+        <header class="section-heading">
+            <h2>What brokers are saying</h2>
+            <p>Early design partners across the Antelope Valley shared how TransactVault changed their workflow.</p>
+        </header>
+        <div class="testimonial-grid">
+            <article class="testimonial">
+                <blockquote>“The compliance score is the first thing my TC checks every morning. We know within a glance which deals need love today.”</blockquote>
+                <cite><strong>Renee Okafor</strong>Broker/Owner · Lancaster Realty Group</cite>
+            </article>
+            <article class="testimonial">
+                <blockquote>“Switching from SkySlope saved us $6k a year and my agents actually want to use it. That second part is the shocker.”</blockquote>
+                <cite><strong>Miguel Duran</strong>Managing Broker · Palmdale Heritage Homes</cite>
+            </article>
+            <article class="testimonial">
+                <blockquote>“Our DRE audit last quarter was painless — one click exports the whole folder and the audit trail is already there.”</blockquote>
+                <cite><strong>Jenn Hall</strong>Transaction Coordinator · Quartz Hill Realty</cite>
+            </article>
+        </div>
+    </section>
+
+    <section class="section narrow">
+        <article class="cta-banner">
+            <h2>Spend less time herding paperwork.</h2>
+            <p>Start your free 14-day trial. No credit card, no sales call.</p>
+            <a class="btn" href="/signup">Create your brokerage account</a>
+        </article>
+    </section>
+</main>
+
+{% include "components/public_footer.html" %}
+{% endblock %}

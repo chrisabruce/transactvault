@@ -1,0 +1,54 @@
+<section class="panel" id="compliance-panel" aria-labelledby="compliance-heading">
+    <h2 id="compliance-heading">Compliance checklist</h2>
+
+    {% if all_complete %}
+        <aside class="compliance-banner" role="status">
+            <section>
+                <strong>Compliance complete</strong>
+                <p>All {{ total }} items are green — this transaction is audit-ready.</p>
+            </section>
+        </aside>
+    {% endif %}
+
+    <section class="compliance-summary" aria-label="Progress">
+        <p class="score">{{ completed }}/{{ total }}</p>
+        <div class="progress" role="progressbar"
+             aria-valuenow="{{ percent }}" aria-valuemin="0" aria-valuemax="100">
+            <div class="progress-bar" style="width: {{ percent }}%"></div>
+        </div>
+        <p class="score">{{ percent }}%</p>
+    </section>
+
+    <ul class="checklist" role="list">
+        {% for item in items %}
+            <li class="checklist-item{% if item.completed %} completed{% endif %}">
+                <form method="post" action="/app/checklist/{{ item.url_key() }}/toggle">
+                    <button class="toggle" type="submit"
+                            aria-label="{% if item.completed %}Mark incomplete{% else %}Mark complete{% endif %}">
+                        ✓
+                    </button>
+                </form>
+                <section>
+                    <p class="title">{{ item.title }}</p>
+                    <p class="category">{{ item.category_label() }}{% if item.completed %} · {{ audit_labels[loop.index0] }}{% endif %}</p>
+                </section>
+                <span class="chip">{{ item.category_label() }}</span>
+            </li>
+        {% endfor %}
+    </ul>
+
+    <form method="post" action="/app/transactions/{{ transaction_key }}/checklist" class="filter-bar">
+        <label class="visually-hidden" for="new-item-title">New item title</label>
+        <input id="new-item-title" type="text" name="title" placeholder="Add a custom checklist item…" required>
+        <select name="category" aria-label="Category">
+            <option value="general">General</option>
+            <option value="contract">Contract</option>
+            <option value="disclosures">Disclosures</option>
+            <option value="inspection">Inspection</option>
+            <option value="appraisal">Appraisal</option>
+            <option value="title">Title</option>
+            <option value="closing">Closing</option>
+        </select>
+        <button type="submit" class="btn small secondary">Add</button>
+    </form>
+</section>

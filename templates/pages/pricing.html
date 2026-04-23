@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+
+{% block title %}Pricing — {{ app_name }}{% endblock %}
+{% block description %}Transparent monthly pricing for every brokerage size. Three years of compliant storage is included on every plan.{% endblock %}
+{% block canonical %}{{ base_url }}/pricing{% endblock %}
+{% block og_url %}{{ base_url }}/pricing{% endblock %}
+
+{% block head %}
+<script type="application/ld+json">
+{
+    "@context": "https://schema.org",
+    "@type": "Product",
+    "name": "{{ app_name }}",
+    "description": "Transaction management software for real estate brokerages.",
+    "offers": [
+        {% for plan in plans %}{
+            "@type": "Offer",
+            "name": "{{ plan.name }}",
+            "price": "{{ plan.price_monthly }}",
+            "priceCurrency": "USD"
+        }{% if !loop.last %},{% endif %}{% endfor %}
+    ]
+}
+</script>
+{% endblock %}
+
+{% block body %}
+{% include "components/public_header.html" %}
+
+<main>
+    <section class="section">
+        <header class="section-heading">
+            <h1>Transparent pricing. No sales call required.</h1>
+            <p>Flat monthly pricing that scales with how many transactions your brokerage closes. Every plan includes three years of compliant storage, full audit trail, and unlimited team members.</p>
+        </header>
+
+        <section class="pricing-grid">
+            {% for plan in plans %}
+                <article class="plan-card{% if plan.popular %} popular{% endif %}">
+                    <header>
+                        <h3>{{ plan.name }}</h3>
+                        <p class="plan-best">{{ plan.best_for }}</p>
+                    </header>
+                    <p class="price">${{ plan.price_monthly }}<small>/month</small></p>
+                    <p class="plan-limit">{{ plan.limit }}</p>
+                    <ul class="plan-features" role="list">
+                        {% for feature in plan.features %}
+                            <li>{{ feature }}</li>
+                        {% endfor %}
+                    </ul>
+                    <a class="btn{% if !plan.popular %} secondary{% endif %}" href="/signup?plan={{ plan.slug }}">Start free trial</a>
+                </article>
+            {% endfor %}
+        </section>
+
+        <section class="pricing-assurances" aria-label="Your guarantees">
+            <article>
+                <strong>No hidden fees</strong>
+                <p>What you see is what you pay. Per month. Forever.</p>
+            </article>
+            <article>
+                <strong>Cancel anytime</strong>
+                <p>No contracts. No exit fees. No guilt-trip calls.</p>
+            </article>
+            <article>
+                <strong>60-day export window</strong>
+                <p>Download every file after cancellation — no rush.</p>
+            </article>
+            <article>
+                <strong>Save 15% annually</strong>
+                <p>Prefer yearly? Billed once, 15% off every plan.</p>
+            </article>
+        </section>
+    </section>
+
+    <section class="section narrow">
+        <article class="cta-banner">
+            <h2>Try TransactVault free for 14 days.</h2>
+            <p>No credit card required. Full access to every feature.</p>
+            <a class="btn" href="/signup">Start your free trial</a>
+        </article>
+    </section>
+</main>
+
+{% include "components/public_footer.html" %}
+{% endblock %}

@@ -1,0 +1,49 @@
+[package]
+name = "transactvault"
+version = "0.1.0"
+edition = "2024"
+description = "TransactVault — modern real estate transaction management for California brokerages."
+license = "MIT"
+
+[dependencies]
+axum = { version = "0.8", features = ["macros", "multipart"] }
+tokio = { version = "1", features = ["full"] }
+surrealdb = { version = "3", features = ["kv-mem", "kv-surrealkv"] }
+askama = "0.14"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+jsonwebtoken = "9"
+argon2 = "0.5"
+chrono = { version = "0.4", features = ["serde"] }
+dotenvy = "0.15"
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "compression-gzip", "fs", "timeout"] }
+tower-cookies = "0.11"
+uuid = { version = "1", features = ["v7", "serde"] }
+futures = "0.3"
+sysinfo = "0.33"
+humansize = "2"
+humantime = "2"
+num-format = "0.4"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+mime = "0.3"
+http = "1"
+async-stream = "0.3"
+aws-sdk-s3 = { version = "1", default-features = false, features = ["rt-tokio", "rustls"] }
+aws-config = { version = "1", default-features = false, features = ["rt-tokio", "rustls", "behavior-version-latest"] }
+aws-credential-types = "1"
+aws-smithy-types = "1"
+resend-rs = { version = "0.25", default-features = false, features = ["rustls-tls"] }
+bytes = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

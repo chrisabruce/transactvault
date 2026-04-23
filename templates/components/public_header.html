@@ -1,0 +1,16 @@
+<header class="site-header">
+    <nav aria-label="Primary">
+        <a href="/" class="brand-mark">{{ app_name }}</a>
+        <ul class="primary-nav" role="list">
+            <li><a href="/#benefits">Why TransactVault</a></li>
+            <li><a href="/pricing">Pricing</a></li>
+            <li><a href="/#testimonials">Customers</a></li>
+            {% if signed_in %}
+                <li><a class="btn small" href="/app">Open dashboard</a></li>
+            {% else %}
+                <li><a href="/login">Sign in</a></li>
+                <li><a class="btn small" href="/signup">Start free trial</a></li>
+            {% endif %}
+        </ul>
+    </nav>
+</header>

@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}Sign in — {{ app_name }}{% endblock %}
+{% block description %}Sign in to TransactVault.{% endblock %}
+{% block body %}
+{% include "components/public_header.html" %}
+
+<main class="auth-shell">
+    <section class="auth-card" aria-labelledby="login-heading">
+        <h1 id="login-heading">Welcome back</h1>
+        <p>Sign in to pick up where you left off.</p>
+
+        {% match error %}{% when Some with (msg) %}
+            <p class="alert error" role="alert">{{ msg }}</p>
+        {% when None %}{% endmatch %}
+
+        <button type="button" class="btn google" disabled>Continue with Google <small>(coming soon)</small></button>
+        <p class="auth-divider">or with email</p>
+
+        <form method="post" action="/login">
+            <fieldset>
+                <legend class="visually-hidden">Sign in</legend>
+                <label>
+                    <span>Email</span>
+                    <input type="email" name="email" required autocomplete="email">
+                </label>
+                <label>
+                    <span>Password</span>
+                    <input type="password" name="password" required autocomplete="current-password">
+                </label>
+            </fieldset>
+            <button type="submit">Sign in</button>
+        </form>
+
+        <footer>
+            New here? <a href="/signup">Create a brokerage account</a>
+        </footer>
+    </section>
+</main>
+{% endblock %}

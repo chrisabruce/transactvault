@@ -1,0 +1,67 @@
+//! HTTP route table. Public marketing pages sit at the root, the app proper
+//! is namespaced under `/app`. Fragment endpoints return HTML chunks so
+//! Datastar can swap them straight into the DOM without client-side rendering.
+
+use std::time::Duration;
+
+use axum::Router;
+use axum::routing::{get, post};
+use tower_cookies::CookieManagerLayer;
+use tower_http::compression::CompressionLayer;
+use tower_http::services::ServeDir;
+use tower_http::trace::TraceLayer;
+
+use crate::controllers::{auth, checklists, documents, health, marketing, members, transactions};
+use crate::state::AppState;
+
+pub fn build(state: AppState) -> Router {
+    let public = Router::new()
+        .route("/", get(marketing::landing))
+        .route("/pricing", get(marketing::pricing))
+        .route("/login", get(auth::login_form).post(auth::login))
+        .route("/signup", get(auth::signup_form).post(auth::signup))
+        .route("/logout", post(auth::logout))
+        .route("/invite/{token}", get(auth::invite_form).post(auth::accept_invite));
+
+    let app = Router::new()
+        .route("/app", get(transactions::dashboard))
+        .route("/app/search", get(transactions::search))
+        .route(
+            "/app/transactions",
+            get(transactions::list).post(transactions::create),
+        )
+        .route("/app/transactions/new", get(transactions::new_form))
+        .route("/app/transactions/{id}", get(transactions::show))
+        .route("/app/transactions/{id}/status", post(transactions::update_status))
+        .route("/app/transactions/{id}/export", get(documents::export_zip))
+        .route(
+            "/app/transactions/{id}/checklist",
+            post(checklists::create),
+        )
+        .route(
+            "/app/checklist/{id}/toggle",
+            post(checklists::toggle),
+        )
+        .route(
+            "/app/transactions/{id}/documents",
+            post(documents::upload),
+        )
+        .route("/app/documents/{id}/download", get(documents::download))
+        .route("/app/team", get(members::list))
+        .route("/app/team/invite", post(members::invite));
+
+    Router::new()
+        .merge(public)
+        .merge(app)
+        .route("/healthcheck", get(health::healthcheck))
+        .nest_service("/static", ServeDir::new("static"))
+        .layer(CookieManagerLayer::new())
+        .layer(CompressionLayer::new())
+        .layer(TraceLayer::new_for_http())
+        .with_state(state)
+        .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024))
+        .layer(tower_http::timeout::TimeoutLayer::with_status_code(
+            axum::http::StatusCode::GATEWAY_TIMEOUT,
+            Duration::from_secs(60),
+        ))
+}

@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block title %}Transactions — {{ app_name }}{% endblock %}
+{% block body_class %}page-app{% endblock %}
+
+{% block body %}
+{% include "components/app_header.html" %}
+
+<main class="app-main">
+    <header class="page-title">
+        <section>
+            <h1>Transactions</h1>
+            <p class="subtitle">Everything {{ header.brokerage_name }} is working on.</p>
+        </section>
+        <a class="btn" href="/app/transactions/new">+ New transaction</a>
+    </header>
+
+    <section class="filter-bar" aria-label="Filters">
+        <form method="get" action="/app/transactions" role="search">
+            <label class="visually-hidden" for="tx-search">Search</label>
+            <input id="tx-search" type="search" name="q" value="{{ query }}" placeholder="Search property, buyer, seller…">
+            <select name="status" aria-label="Status">
+                <option value="all"{% if filter_status == "all" || filter_status == "" %} selected{% endif %}>All statuses</option>
+                <option value="open"{% if filter_status == "open" %} selected{% endif %}>Open</option>
+                <option value="under_contract"{% if filter_status == "under_contract" %} selected{% endif %}>Under contract</option>
+                <option value="closed"{% if filter_status == "closed" %} selected{% endif %}>Closed</option>
+                <option value="cancelled"{% if filter_status == "cancelled" %} selected{% endif %}>Cancelled</option>
+            </select>
+            <button type="submit" class="btn small secondary">Apply</button>
+        </form>
+    </section>
+
+    {% if transactions.is_empty() %}
+        <section class="panel">
+            <section class="empty-state">
+                <h3>Nothing matches those filters</h3>
+                <p>Clear your filters or start a new transaction to see something here.</p>
+                <a class="btn" href="/app/transactions/new">Create transaction</a>
+            </section>
+        </section>
+    {% else %}
+        <section class="transaction-list">
+            <ul role="list">
+                {% for tx in transactions %}
+                    <li class="transaction-row">
+                        <section>
+                            <p class="property"><a href="/app/transactions/{{ tx.url_key() }}">{{ tx.property_address }}</a></p>
+                            <p class="meta">{{ tx.city }}{% if tx.city != "" %} · {% endif %}{{ tx.state }}</p>
+                        </section>
+                        <section>
+                            <p class="meta">Price</p>
+                            <p>{{ tx.price_display() }}</p>
+                        </section>
+                        <section>
+                            <p class="meta">Expected close</p>
+                            <p>
+                                {% match tx.expected_close %}{% when Some with (when) %}
+                                    <time datetime="{{ when }}">{{ when.format("%b %-d, %Y") }}</time>
+                                {% when None %}—{% endmatch %}
+                            </p>
+                        </section>
+                        <section>
+                            <span class="chip {{ tx.status_class() }}">{{ tx.status_label() }}</span>
+                        </section>
+                        <a class="btn small secondary" href="/app/transactions/{{ tx.url_key() }}">Open</a>
+                    </li>
+                {% endfor %}
+            </ul>
+        </section>
+    {% endif %}
+</main>
+{% endblock %}

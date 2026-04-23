@@ -1,0 +1,8 @@
+/target
+/.env
+/surreal-data/
+/rustfs-data/
+/minio-data/
+*.db
+/uploads/
+.DS_Store

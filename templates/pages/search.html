@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block title %}Search — {{ app_name }}{% endblock %}
+{% block body_class %}page-app{% endblock %}
+
+{% block body %}
+{% include "components/app_header.html" %}
+
+<main class="app-main">
+    <header class="page-title">
+        <section>
+            <h1>Search</h1>
+            <p class="subtitle">Find a transaction or document across {{ header.brokerage_name }}.</p>
+        </section>
+    </header>
+
+    <section class="filter-bar">
+        <form method="get" action="/app/search" role="search">
+            <label class="visually-hidden" for="search-q">Search</label>
+            <input id="search-q" type="search" name="q" value="{{ query }}" placeholder="Address, city, filename…" autofocus>
+            <button type="submit" class="btn">Search</button>
+        </form>
+    </section>
+
+    {% if query == "" %}
+        <section class="panel">
+            <section class="empty-state">
+                <h3>Type to search</h3>
+                <p>Search property addresses, cities, and document filenames.</p>
+            </section>
+        </section>
+    {% else %}
+        <section class="panel" aria-labelledby="tx-results">
+            <h2 id="tx-results">Transactions ({{ transactions.len() }})</h2>
+            {% if transactions.is_empty() %}
+                <p>No transactions match “{{ query }}”.</p>
+            {% else %}
+                <section class="transaction-list">
+                    <ul role="list">
+                        {% for tx in transactions %}
+                            <li class="transaction-row">
+                                <section>
+                                    <p class="property"><a href="/app/transactions/{{ tx.url_key() }}">{{ tx.property_address }}</a></p>
+                                    <p class="meta">{{ tx.city }} · {{ tx.state }}</p>
+                                </section>
+                                <section><p class="meta">Price</p><p>{{ tx.price_display() }}</p></section>
+                                <section><span class="chip {{ tx.status_class() }}">{{ tx.status_label() }}</span></section>
+                                <span></span>
+                                <a class="btn small secondary" href="/app/transactions/{{ tx.url_key() }}">Open</a>
+                            </li>
+                        {% endfor %}
+                    </ul>
+                </section>
+            {% endif %}
+        </section>
+
+        <section class="panel" aria-labelledby="doc-results">
+            <h2 id="doc-results">Documents ({{ documents.len() }})</h2>
+            {% if documents.is_empty() %}
+                <p>No documents match “{{ query }}”.</p>
+            {% else %}
+                <ul class="document-list" role="list">
+                    {% for hit in documents %}
+                        <li class="document-item">
+                            <span class="file-icon" aria-hidden="true">{{ hit.document.extension_badge() }}</span>
+                            <section>
+                                <a class="filename" href="/app/documents/{{ hit.document.url_key() }}/download">{{ hit.document.filename }}</a>
+                                <p class="meta">
+                                    From <a href="/app/transactions/{{ hit.transaction_key }}">{{ hit.transaction_address }}</a>
+                                    · {{ hit.document.size_display() }}
+                                </p>
+                            </section>
+                            <span></span>
+                            <a class="btn small secondary" href="/app/documents/{{ hit.document.url_key() }}/download">Download</a>
+                        </li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+        </section>
+    {% endif %}
+</main>
+{% endblock %}

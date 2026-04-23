@@ -1,0 +1,23 @@
+<header class="app-header">
+    <nav aria-label="App">
+        <a href="/app" class="brand-mark">{{ app_name }}</a>
+        <ul class="app-nav" role="list">
+            <li><a href="/app" {% if header.active_nav == "dashboard" %}class="active" aria-current="page"{% endif %}>Dashboard</a></li>
+            <li><a href="/app/transactions" {% if header.active_nav == "transactions" %}class="active" aria-current="page"{% endif %}>Transactions</a></li>
+            <li><a href="/app/search" {% if header.active_nav == "search" %}class="active" aria-current="page"{% endif %}>Search</a></li>
+            {% if header.role.is_broker() %}
+                <li><a href="/app/team" {% if header.active_nav == "team" %}class="active" aria-current="page"{% endif %}>Team</a></li>
+            {% endif %}
+        </ul>
+        <section class="user-menu" aria-label="Account">
+            <span class="avatar" aria-hidden="true">{{ header.user_initials }}</span>
+            <section>
+                <p><strong>{{ header.user_name }}</strong></p>
+                <p>{{ header.brokerage_name }} · {{ header.role.label() }}</p>
+            </section>
+            <form method="post" action="/logout">
+                <button type="submit" class="btn ghost small">Sign out</button>
+            </form>
+        </section>
+    </nav>
+</header>

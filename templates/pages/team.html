@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block title %}Team — {{ app_name }}{% endblock %}
+{% block body_class %}page-app{% endblock %}
+
+{% block body %}
+{% include "components/app_header.html" %}
+
+<main class="app-main">
+    <header class="page-title">
+        <section>
+            <h1>Team</h1>
+            <p class="subtitle">Everyone at {{ header.brokerage_name }}.</p>
+        </section>
+    </header>
+
+    {% match invite_error %}{% when Some with (msg) %}
+        <p class="alert error" role="alert">{{ msg }}</p>
+    {% when None %}{% endmatch %}
+
+    {% match invite_link %}{% when Some with (link) %}
+        <p class="alert success" role="status">
+            Invitation created. Share this link with them:
+            <br>
+            <a href="{{ link }}">{{ link }}</a>
+        </p>
+    {% when None %}{% endmatch %}
+
+    <section class="panel" aria-labelledby="invite-heading">
+        <h2 id="invite-heading">Invite a teammate</h2>
+        <form method="post" action="/app/team/invite" class="filter-bar">
+            <label class="visually-hidden" for="invite-email">Email</label>
+            <input id="invite-email" type="email" name="email" placeholder="agent@brokerage.com" required>
+            <label class="visually-hidden" for="invite-role">Role</label>
+            <select id="invite-role" name="role">
+                <option value="agent">Agent</option>
+                <option value="coordinator">Transaction Coordinator</option>
+                <option value="broker">Broker</option>
+            </select>
+            <button type="submit" class="btn">Send invite</button>
+        </form>
+    </section>
+
+    <section class="panel" aria-labelledby="members-heading">
+        <h2 id="members-heading">Members</h2>
+        <ul class="member-list" role="list">
+            {% for member in members %}
+                <li class="member-card">
+                    <span class="avatar" aria-hidden="true">{{ member.initials }}</span>
+                    <section>
+                        <p class="name">{{ member.name }}</p>
+                        <p class="email">{{ member.email }}</p>
+                    </section>
+                    <span class="chip role-{{ member.role.as_str() }}">{{ member.role.label() }}</span>
+                </li>
+            {% endfor %}
+        </ul>
+    </section>
+
+    {% if !pending.is_empty() %}
+        <section class="panel" aria-labelledby="pending-heading">
+            <h2 id="pending-heading">Pending invitations</h2>
+            <ul class="member-list" role="list">
+                {% for inv in pending %}
+                    <li class="member-card">
+                        <span class="avatar" aria-hidden="true">?</span>
+                        <section>
+                            <p class="name">{{ inv.email }}</p>
+                            <p class="email">Invited <time datetime="{{ inv.created_at }}">{{ inv.created_at.format("%b %-d, %Y") }}</time></p>
+                        </section>
+                        <span class="chip role-{{ inv.role }}">{{ inv.role }}</span>
+                    </li>
+                {% endfor %}
+            </ul>
+        </section>
+    {% endif %}
+</main>
+{% endblock %}

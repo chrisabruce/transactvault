@@ -1,0 +1,9 @@
+target/
+surreal-data/
+rustfs-data/
+uploads/
+.env
+.git/
+.github/
+*.log
+.DS_Store

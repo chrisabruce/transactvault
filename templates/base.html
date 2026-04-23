@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}{{ app_name }}{% endblock %}</title>
+    <meta name="description" content="{% block description %}Transparent, compliant transaction management for California real estate brokerages.{% endblock %}">
+    <link rel="canonical" href="{% block canonical %}{{ base_url }}{% endblock %}">
+
+    <meta property="og:site_name" content="{{ app_name }}">
+    <meta property="og:title" content="{% block og_title %}{{ app_name }}{% endblock %}">
+    <meta property="og:description" content="{% block og_description %}Transparent, compliant transaction management for California real estate brokerages.{% endblock %}">
+    <meta property="og:type" content="{% block og_type %}website{% endblock %}">
+    <meta property="og:url" content="{% block og_url %}{{ base_url }}{% endblock %}">
+    <meta property="og:image" content="{{ base_url }}/static/images/og-default.png">
+    <meta name="twitter:card" content="summary_large_image">
+
+    <link rel="stylesheet" href="/static/css/main.css">
+    {% block head %}{% endblock %}
+</head>
+<body class="{% block body_class %}page-public{% endblock %}">
+    {% block body %}{% endblock %}
+    <script type="module" src="https://cdn.jsdelivr.net/npm/@starfederation/datastar"></script>
+</body>
+</html>

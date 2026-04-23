@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+
+{% block title %}{{ transaction.property_address }} — {{ app_name }}{% endblock %}
+{% block body_class %}page-app{% endblock %}
+
+{% block body %}
+{% include "components/app_header.html" %}
+
+<main class="app-main">
+    <header class="property-header">
+        <section>
+            <h1>{{ transaction.property_address }}</h1>
+            <p class="meta">{{ transaction.city }}{% if transaction.city != "" %} · {% endif %}{{ transaction.state }}{% if transaction.postal_code.is_some() %} · {{ transaction.postal_code.as_ref().unwrap() }}{% endif %}</p>
+        </section>
+        <section>
+            <span class="chip {{ transaction.status_class() }}">{{ transaction.status_label() }}</span>
+            <form method="post" action="/app/transactions/{{ transaction_key }}/status" class="filter-bar">
+                <label class="visually-hidden" for="status-select">Update status</label>
+                <select id="status-select" name="status">
+                    <option value="open"{% if transaction.status == "open" %} selected{% endif %}>Open</option>
+                    <option value="under_contract"{% if transaction.status == "under_contract" %} selected{% endif %}>Under contract</option>
+                    <option value="closed"{% if transaction.status == "closed" %} selected{% endif %}>Closed</option>
+                    <option value="cancelled"{% if transaction.status == "cancelled" %} selected{% endif %}>Cancelled</option>
+                </select>
+                <button class="btn small secondary" type="submit">Update</button>
+                <a class="btn small" href="/app/transactions/{{ transaction_key }}/export">Export ZIP</a>
+            </form>
+        </section>
+    </header>
+
+    <section class="detail-grid">
+        <section>
+            <section class="panel" id="compliance-panel" aria-labelledby="compliance-heading">
+                <h2 id="compliance-heading">Compliance checklist</h2>
+
+                {% if compliance.all_complete %}
+                    <aside class="compliance-banner" role="status">
+                        <section>
+                            <strong>Compliance complete</strong>
+                            <p>All {{ compliance.total }} items are green — this transaction is audit-ready.</p>
+                        </section>
+                    </aside>
+                {% endif %}
+
+                <section class="compliance-summary" aria-label="Progress">
+                    <p class="score">{{ compliance.completed }}/{{ compliance.total }}</p>
+                    <progress class="progress" value="{{ compliance.percent }}" max="100">{{ compliance.percent }}%</progress>
+                    <p class="score">{{ compliance.percent }}%</p>
+                </section>
+
+                <ul class="checklist" role="list">
+                    {% for item in compliance.items %}
+                        <li class="checklist-item{% if item.completed %} completed{% endif %}">
+                            <form method="post" action="/app/checklist/{{ item.url_key() }}/toggle">
+                                <button class="toggle" type="submit"
+                                        aria-label="{% if item.completed %}Mark incomplete{% else %}Mark complete{% endif %}">
+                                    ✓
+                                </button>
+                            </form>
+                            <section>
+                                <p class="title">{{ item.title }}</p>
+                                <p class="category">
+                                    {{ item.category_label() }}
+                                    {% if item.completed %} · {{ compliance.audit_labels[loop.index0] }}{% endif %}
+                                </p>
+                            </section>
+                            <span class="chip">{{ item.category_label() }}</span>
+                        </li>
+                    {% endfor %}
+                </ul>
+
+                <form method="post" action="/app/transactions/{{ compliance.transaction_key }}/checklist" class="filter-bar">
+                    <label class="visually-hidden" for="new-item-title">New item title</label>
+                    <input id="new-item-title" type="text" name="title" placeholder="Add a custom checklist item…" required>
+                    <select name="category" aria-label="Category">
+                        <option value="general">General</option>
+                        <option value="contract">Contract</option>
+                        <option value="disclosures">Disclosures</option>
+                        <option value="inspection">Inspection</option>
+                        <option value="appraisal">Appraisal</option>
+                        <option value="title">Title</option>
+                        <option value="closing">Closing</option>
+                    </select>
+                    <button type="submit" class="btn small secondary">Add</button>
+                </form>
+            </section>
+
+            <section class="panel" aria-labelledby="docs-heading">
+                <h2 id="docs-heading">Documents</h2>
+
+                <form class="upload-area" method="post" enctype="multipart/form-data"
+                      action="/app/transactions/{{ transaction_key }}/documents">
+                    <p><strong>Drag &amp; drop or choose a file to upload.</strong></p>
+                    <p>PDFs, images, and inspection reports. Uploads are auto-versioned.</p>
+                    <fieldset>
+                        <legend class="visually-hidden">Upload</legend>
+                        <div class="form-row">
+                            <label>
+                                <span>File</span>
+                                <input type="file" name="file" required>
+                            </label>
+                            <label>
+                                <span>Category</span>
+                                <select name="category">
+                                    <option value="general">General</option>
+                                    <option value="contract">Contract</option>
+                                    <option value="disclosures">Disclosures</option>
+                                    <option value="inspection">Inspection</option>
+                                    <option value="appraisal">Appraisal</option>
+                                    <option value="title">Title</option>
+                                    <option value="closing">Closing</option>
+                                </select>
+                            </label>
+                        </div>
+                    </fieldset>
+                    <button type="submit" class="btn">Upload document</button>
+                </form>
+
+                {% if documents.is_empty() %}
+                    <section class="empty-state">
+                        <h3>No documents yet</h3>
+                        <p>Upload the first contract or disclosure to start the paper trail.</p>
+                    </section>
+                {% else %}
+                    {% for group in documents %}
+                        <section class="document-group">
+                            <h3>{{ group.label }}</h3>
+                            <ul class="document-list" role="list">
+                                {% for doc in group.documents %}
+                                    <li class="document-item">
+                                        <span class="file-icon" aria-hidden="true">{{ doc.extension_badge() }}</span>
+                                        <section>
+                                            <a class="filename" href="/app/documents/{{ doc.url_key() }}/download">{{ doc.filename }}</a>
+                                            <p class="meta">
+                                                v{{ doc.version }} · {{ doc.size_display() }} ·
+                                                <time datetime="{{ doc.created_at }}">{{ doc.created_at.format("%b %-d, %Y") }}</time>
+                                                {% if doc.signed %}· <span class="signed">Signed</span>{% endif %}
+                                            </p>
+                                        </section>
+                                        <a class="btn small secondary" href="/app/documents/{{ doc.url_key() }}/download">Download</a>
+                                    </li>
+                                {% endfor %}
+                            </ul>
+                        </section>
+                    {% endfor %}
+                {% endif %}
+            </section>
+        </section>
+
+        <aside class="panel sidebar">
+            <h2>Details</h2>
+            <dl>
+                <dt>Owner</dt>
+                <dd>{{ owner_name }}</dd>
+                <dt>Price</dt>
+                <dd>{{ transaction.price_display() }}</dd>
+                <dt>Buyer</dt>
+                <dd>{% match transaction.buyer_name %}{% when Some with (n) %}{{ n }}{% when None %}—{% endmatch %}</dd>
+                <dt>Seller</dt>
+                <dd>{% match transaction.seller_name %}{% when Some with (n) %}{{ n }}{% when None %}—{% endmatch %}</dd>
+                <dt>Expected close</dt>
+                <dd>
+                    {% match transaction.expected_close %}{% when Some with (when) %}
+                        <time datetime="{{ when }}">{{ when.format("%b %-d, %Y") }}</time>
+                    {% when None %}—{% endmatch %}
+                </dd>
+                <dt>Created</dt>
+                <dd><time datetime="{{ transaction.created_at }}">{{ transaction.created_at.format("%b %-d, %Y") }}</time></dd>
+                <dt>Last updated</dt>
+                <dd><time datetime="{{ transaction.updated_at }}">{{ transaction.updated_at.format("%b %-d, %Y") }}</time></dd>
+            </dl>
+        </aside>
+    </section>
+</main>
+{% endblock %}

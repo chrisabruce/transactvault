@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block title %}Start your free trial — {{ app_name }}{% endblock %}
+{% block description %}Create your TransactVault brokerage account in under a minute.{% endblock %}
+{% block body %}
+{% include "components/public_header.html" %}
+
+<main class="auth-shell">
+    <section class="auth-card" aria-labelledby="signup-heading">
+        <h1 id="signup-heading">Create your brokerage account</h1>
+        <p>Your first user becomes the broker. You can invite agents and coordinators right after.</p>
+
+        {% match error %}{% when Some with (msg) %}
+            <p class="alert error" role="alert">{{ msg }}</p>
+        {% when None %}{% endmatch %}
+
+        <button type="button" class="btn google" disabled>Continue with Google <small>(coming soon)</small></button>
+        <p class="auth-divider">or with email</p>
+
+        <form method="post" action="/signup">
+            <fieldset>
+                <legend class="visually-hidden">Your details</legend>
+                <label>
+                    <span>Your name</span>
+                    <input type="text" name="name" required autocomplete="name" placeholder="Renee Okafor">
+                </label>
+                <label>
+                    <span>Work email</span>
+                    <input type="email" name="email" required autocomplete="email" placeholder="you@brokerage.com">
+                </label>
+                <label>
+                    <span>Password</span>
+                    <input type="password" name="password" required minlength="8" autocomplete="new-password">
+                </label>
+            </fieldset>
+            <fieldset>
+                <legend class="visually-hidden">Brokerage</legend>
+                <label>
+                    <span>Brokerage name</span>
+                    <input type="text" name="brokerage_name" required placeholder="Lancaster Realty Group">
+                </label>
+                <label>
+                    <span>City <small>(optional)</small></span>
+                    <input type="text" name="city" placeholder="Lancaster">
+                </label>
+            </fieldset>
+            <button type="submit">Create account</button>
+        </form>
+
+        <footer>
+            Already have an account? <a href="/login">Sign in</a>
+        </footer>
+    </section>
+</main>
+{% endblock %}

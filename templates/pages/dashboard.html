@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard — {{ app_name }}{% endblock %}
+{% block body_class %}page-app{% endblock %}
+
+{% block body %}
+{% include "components/app_header.html" %}
+
+<main class="app-main">
+    <header class="page-title">
+        <section>
+            <h1>Good to see you, {{ header.user_name }}.</h1>
+            <p class="subtitle">Here's how {{ header.brokerage_name }} is doing today.</p>
+        </section>
+        <a class="btn" href="/app/transactions/new">+ New transaction</a>
+    </header>
+
+    <section class="stat-grid" aria-label="Key metrics">
+        <article class="stat-card">
+            <p class="label">Total transactions</p>
+            <p class="value">{{ total }}</p>
+        </article>
+        <article class="stat-card">
+            <p class="label">Active</p>
+            <p class="value">{{ open_count }}</p>
+        </article>
+        <article class="stat-card">
+            <p class="label">Needs attention</p>
+            <p class="value warn">{{ needs_attention }}</p>
+        </article>
+        <article class="stat-card">
+            <p class="label">Closed</p>
+            <p class="value success">{{ complete_count }}</p>
+        </article>
+    </section>
+
+    <section class="panel" aria-labelledby="recent-heading">
+        <h2 id="recent-heading">Recent transactions</h2>
+
+        {% if recent.is_empty() %}
+            <section class="empty-state">
+                <h3>No transactions yet</h3>
+                <p>Once you create your first transaction, it'll show up here with a live compliance checklist.</p>
+                <a class="btn" href="/app/transactions/new">Create your first transaction</a>
+            </section>
+        {% else %}
+            <section class="transaction-list">
+                <ul role="list">
+                    {% for tx in recent %}
+                        <li class="transaction-row">
+                            <section>
+                                <p class="property"><a href="/app/transactions/{{ tx.url_key() }}">{{ tx.property_address }}</a></p>
+                                <p class="meta">{{ tx.city }}{% if tx.city != "" %} · {% endif %}{{ tx.state }}</p>
+                            </section>
+                            <section>
+                                <p class="meta">Price</p>
+                                <p>{{ tx.price_display() }}</p>
+                            </section>
+                            <section>
+                                <p class="meta">Expected close</p>
+                                <p>
+                                    {% match tx.expected_close %}{% when Some with (when) %}
+                                        <time datetime="{{ when }}">{{ when.format("%b %-d, %Y") }}</time>
+                                    {% when None %}—{% endmatch %}
+                                </p>
+                            </section>
+                            <section>
+                                <span class="chip {{ tx.status_class() }}">{{ tx.status_label() }}</span>
+                            </section>
+                            <a class="btn small secondary" href="/app/transactions/{{ tx.url_key() }}">Open</a>
+                        </li>
+                    {% endfor %}
+                </ul>
+            </section>
+        {% endif %}
+    </section>
+</main>
+{% endblock %}

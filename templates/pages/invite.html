@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block title %}Join {{ brokerage_name }} on {{ app_name }}{% endblock %}
+{% block description %}{{ inviter_name }} invited you to {{ brokerage_name }} on {{ app_name }}.{% endblock %}
+{% block body %}
+{% include "components/public_header.html" %}
+
+<main class="auth-shell">
+    <section class="auth-card" aria-labelledby="invite-heading">
+        <h1 id="invite-heading">Join {{ brokerage_name }}</h1>
+        <p>{{ inviter_name }} invited you to {{ brokerage_name }} as a {{ invitation.role }}.</p>
+
+        {% match error %}{% when Some with (msg) %}
+            <p class="alert error" role="alert">{{ msg }}</p>
+        {% when None %}{% endmatch %}
+
+        <form method="post" action="/invite/{{ invitation.token }}">
+            <fieldset>
+                <legend class="visually-hidden">Accept invitation</legend>
+                <label>
+                    <span>Your name</span>
+                    <input type="text" name="name" required autocomplete="name">
+                </label>
+                <label>
+                    <span>Email</span>
+                    <input type="email" value="{{ invitation.email }}" disabled>
+                </label>
+                <label>
+                    <span>Create a password</span>
+                    <input type="password" name="password" required minlength="8" autocomplete="new-password">
+                </label>
+            </fieldset>
+            <button type="submit">Accept &amp; sign in</button>
+        </form>
+    </section>
+</main>
+{% endblock %}

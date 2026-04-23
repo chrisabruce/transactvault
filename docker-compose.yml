@@ -1,0 +1,52 @@
+services:
+  # Ports are deliberately unusual (37420-37423) so this stack coexists with
+  # any other dockers you have running on 3000/8000/9000.
+  surrealdb:
+    image: surrealdb/surrealdb:v3
+    command:
+      - start
+      - --user=root
+      - --pass=root
+      - --bind=0.0.0.0:8000
+      - surrealkv:///data/tv.db
+    ports:
+      - "37422:8000"
+    volumes:
+      - ./surreal-data:/data
+
+  rustfs:
+    image: rustfs/rustfs:latest
+    environment:
+      RUSTFS_ROOT_USER: rustfsadmin
+      RUSTFS_ROOT_PASSWORD: rustfsadmin
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
+    ports:
+      - "37421:9000"   # S3 API
+      - "37423:9001"   # RustFS console
+    volumes:
+      - ./rustfs-data:/data
+
+  transactvault:
+    build: .
+    depends_on:
+      - surrealdb
+      - rustfs
+    restart: unless-stopped
+    # Pull sensitive values (JWT_SECRET, RESEND_API_KEY) from the host .env
+    # instead of baking them into the compose file.
+    env_file:
+      - .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: "37420"
+      PRETTY_LOGS: "false"
+      BASE_URL: http://localhost:37420
+
+      # Override the host-centric values from .env so the app reaches the
+      # backing services via the docker-compose network instead of localhost.
+      SURREAL_URL: ws://surrealdb:8000
+      RUSTFS_ENDPOINT: http://rustfs:9000
+    ports:
+      - "37420:37420"
