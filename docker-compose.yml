@@ -105,7 +105,18 @@ services:
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       RESEND_FROM: ${RESEND_FROM:-TransactVault <no-reply@transactvault.example>}
       RESEND_REPLY_TO: ${RESEND_REPLY_TO:-}
+    # Dokploy's Traefik lives on the shared `dokploy-network`. The app must
+    # join it to be reachable from the public domain; the `default` network
+    # keeps the app, surrealdb and rustfs on an isolated internal network.
+    networks:
+      - dokploy-network
+      - default
 
 volumes:
   surreal-data:
   rustfs-data:
+
+networks:
+  dokploy-network:
+    external: true
+  default: {}
