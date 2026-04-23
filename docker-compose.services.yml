@@ -1,0 +1,64 @@
+# ============================================================================
+# TransactVault — backing services (SurrealDB + RustFS) for Dokploy.
+#
+# Deploy this file as a Docker Compose app in Dokploy. The TransactVault Rust
+# app is a separate Dokploy Application that builds from the repo-root
+# `Dockerfile` — don't put it in this file.
+#
+# All credentials come from Dokploy's project-wide Environment tab:
+#   SURREAL_USER, SURREAL_PASS, RUSTFS_ACCESS_KEY, RUSTFS_SECRET_KEY
+# The `:?` suffix makes Dokploy refuse to deploy if any are missing.
+#
+# Service names are prefixed `tv-` (TransactVault) so they can't collide
+# with other SurrealDB/RustFS instances that may already be running on the
+# same Dokploy host — even though each container has its own IP on
+# dokploy-network, short-name DNS (`surrealdb`, `rustfs`) is not project-
+# scoped across an external overlay, so unique names remove any ambiguity.
+# ============================================================================
+
+services:
+    tv-surrealdb:
+        image: surrealdb/surrealdb:latest
+        container_name: tv-surrealdb
+        restart: unless-stopped
+        user: "0:0"
+        command:
+            - start
+            - --bind=0.0.0.0:8000
+            - rocksdb:///data/tv.db
+        environment:
+            SURREAL_USER: ${SURREAL_USER:?SURREAL_USER must be set in Dokploy project env}
+            SURREAL_PASS: ${SURREAL_PASS:?SURREAL_PASS must be set in Dokploy project env}
+        expose:
+            - "8000"
+        volumes:
+            - tv-surreal-data:/data
+        networks:
+            - dokploy-network
+
+    tv-rustfs:
+        image: rustfs/rustfs:latest
+        container_name: tv-rustfs
+        restart: unless-stopped
+        user: "0:0"
+        environment:
+            RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?RUSTFS_ACCESS_KEY must be set}
+            RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?RUSTFS_SECRET_KEY must be set}
+            RUSTFS_ADDRESS: 0.0.0.0:9000
+            RUSTFS_CONSOLE_ENABLE: "true"
+            RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
+        expose:
+            - "9000"    # S3 API
+            - "9001"    # admin console
+        volumes:
+            - tv-rustfs-data:/data
+        networks:
+            - dokploy-network
+
+volumes:
+    tv-surreal-data:
+    tv-rustfs-data:
+
+networks:
+    dokploy-network:
+        external: true
