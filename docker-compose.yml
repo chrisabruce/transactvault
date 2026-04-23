@@ -2,8 +2,9 @@ services:
   # Ports are deliberately unusual (37420-37423) so this stack coexists with
   # any other dockers you have running on 3000/8000/9000.
   #
-  # Every credential flows from `.env` (or Dokploy's Environment tab in prod)
-  # so dev and prod share the same compose file — only the .env differs.
+  # Every credential flows from `.env` locally (docker compose auto-loads it)
+  # and from Dokploy's Environment tab in prod (it populates the same
+  # ${...} interpolation). The compose file itself is identical in both.
 
   surrealdb:
     image: surrealdb/surrealdb:v3
@@ -17,7 +18,7 @@ services:
     ports:
       - "37422:8000"
     volumes:
-      - ./surreal-data:/data
+      - surreal-data:/data
 
   rustfs:
     image: rustfs/rustfs:latest
@@ -32,7 +33,7 @@ services:
       - "37421:9000"   # S3 API
       - "37423:9001"   # RustFS console
     volumes:
-      - ./rustfs-data:/data
+      - rustfs-data:/data
 
   transactvault:
     build: .
@@ -40,18 +41,42 @@ services:
       - surrealdb
       - rustfs
     restart: unless-stopped
-    # Pull sensitive values (JWT_SECRET, RESEND_API_KEY, SURREAL_PASS, etc.)
-    # from the host .env instead of baking them into the compose file.
-    env_file:
-      - .env
     environment:
+      # Server
+      APP_NAME: ${APP_NAME:-TransactVault}
+      BASE_URL: ${BASE_URL:-http://localhost:37420}
       HOST: 0.0.0.0
       PORT: "37420"
-      PRETTY_LOGS: "false"
+      PRETTY_LOGS: ${PRETTY_LOGS:-false}
+      RUST_LOG: ${RUST_LOG:-info,transactvault=info}
 
-      # Override the host-centric URLs from .env so the app reaches the
-      # backing services via the docker-compose network instead of localhost.
+      # SurrealDB — URL is fixed to the compose service DNS; credentials
+      # come from the same env that the surrealdb container was started with.
       SURREAL_URL: ws://surrealdb:8000
+      SURREAL_USER: ${SURREAL_USER:-root}
+      SURREAL_PASS: ${SURREAL_PASS:-root}
+      SURREAL_NS: ${SURREAL_NS:-transactvault}
+      SURREAL_DB: ${SURREAL_DB:-app}
+
+      # RustFS — endpoint is fixed; credentials must match what rustfs
+      # was initialized with.
       RUSTFS_ENDPOINT: http://rustfs:9000
+      RUSTFS_REGION: ${RUSTFS_REGION:-us-east-1}
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
+      RUSTFS_BUCKET: ${RUSTFS_BUCKET:-transactvault}
+
+      # Auth
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set}
+      JWT_EXPIRY_HOURS: ${JWT_EXPIRY_HOURS:-168}
+
+      # Resend
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_FROM: ${RESEND_FROM:-TransactVault <no-reply@transactvault.example>}
+      RESEND_REPLY_TO: ${RESEND_REPLY_TO:-}
     ports:
       - "37420:37420"
+
+volumes:
+  surreal-data:
+  rustfs-data:
