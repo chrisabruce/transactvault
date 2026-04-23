@@ -39,8 +39,11 @@ services:
     # Same reasoning as surrealdb — sidestep the host-volume UID clash.
     user: "0:0"
     environment:
-      RUSTFS_ROOT_USER: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
-      RUSTFS_ROOT_PASSWORD: ${RUSTFS_SECRET_KEY:-rustfsadmin}
+      # The rustfs/rustfs:latest image (v1.0.0-alpha.83) reads *_ACCESS_KEY /
+      # *_SECRET_KEY — the older *_ROOT_USER / *_ROOT_PASSWORD env vars are
+      # silently ignored and the server falls back to the default admin creds.
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
       RUSTFS_ADDRESS: 0.0.0.0:9000
       RUSTFS_CONSOLE_ENABLE: "true"
       RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
@@ -51,24 +54,16 @@ services:
       - "9001"
     volumes:
       - rustfs-data:/data
-    # Let the app wait until the S3 endpoint is actually responsive, not just
-    # when the container process has started. RustFS spends several seconds
-    # warming up (loading policies, initialising the IAM store, etc.) before
-    # its first request will succeed.
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- --tries=1 --timeout=2 http://127.0.0.1:9000/ 2>&1 | grep -q 'xml\\|Error\\|AccessDenied' || exit 1"]
-      interval: 3s
-      timeout: 3s
-      retries: 20
-      start_period: 5s
+    # No healthcheck — the rustfs image is minimal (no curl/wget) so probes
+    # are brittle. The app has its own retry-on-any-error loop for the S3
+    # warmup in src/storage.rs, which handles the "rustfs TCP is up but the
+    # IAM subsystem isn't quite ready" race.
 
   transactvault:
     build: .
     depends_on:
-      surrealdb:
-        condition: service_started
-      rustfs:
-        condition: service_healthy
+      - surrealdb
+      - rustfs
     restart: unless-stopped
     # `expose` (vs `ports`) means the container is only reachable on the
     # internal docker network. Traefik reaches it via the dokploy-network
