@@ -51,12 +51,24 @@ services:
       - "9001"
     volumes:
       - rustfs-data:/data
+    # Let the app wait until the S3 endpoint is actually responsive, not just
+    # when the container process has started. RustFS spends several seconds
+    # warming up (loading policies, initialising the IAM store, etc.) before
+    # its first request will succeed.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- --tries=1 --timeout=2 http://127.0.0.1:9000/ 2>&1 | grep -q 'xml\\|Error\\|AccessDenied' || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
 
   transactvault:
     build: .
     depends_on:
-      - surrealdb
-      - rustfs
+      surrealdb:
+        condition: service_started
+      rustfs:
+        condition: service_healthy
     restart: unless-stopped
     # `expose` (vs `ports`) means the container is only reachable on the
     # internal docker network. Traefik reaches it via the dokploy-network

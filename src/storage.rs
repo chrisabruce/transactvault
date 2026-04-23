@@ -61,23 +61,56 @@ impl Storage {
         Ok(storage)
     }
 
+    /// Confirm the bucket exists, creating it if not. Retries transient
+    /// startup failures because containerised S3 endpoints (RustFS, MinIO)
+    /// frequently take a couple of seconds after accepting TCP before their
+    /// IAM/storage subsystems are actually ready to handle a HeadBucket.
     async fn ensure_bucket(&self) -> anyhow::Result<()> {
-        match self.client.head_bucket().bucket(&self.bucket).send().await {
-            Ok(_) => {
-                tracing::info!(bucket = %self.bucket, "bucket reachable");
-                Ok(())
+        let mut attempt: u32 = 0;
+        loop {
+            match self.client.head_bucket().bucket(&self.bucket).send().await {
+                Ok(_) => {
+                    tracing::info!(bucket = %self.bucket, "bucket reachable");
+                    return Ok(());
+                }
+                Err(SdkError::ServiceError(svc))
+                    if matches!(svc.err(), HeadBucketError::NotFound(_)) =>
+                {
+                    tracing::info!(bucket = %self.bucket, "creating bucket");
+                    // Creation itself can also race the storage warmup; retry
+                    // briefly if the service rejects the first attempt.
+                    let created = self
+                        .client
+                        .create_bucket()
+                        .bucket(&self.bucket)
+                        .send()
+                        .await;
+                    match created {
+                        Ok(_) => return Ok(()),
+                        Err(e) if attempt < 10 => {
+                            tracing::warn!(
+                                attempt = attempt + 1,
+                                error = %e,
+                                "create_bucket failed, retrying"
+                            );
+                            tokio::time::sleep(Duration::from_millis(500 * (attempt as u64 + 1))).await;
+                            attempt += 1;
+                            continue;
+                        }
+                        Err(e) => return Err(anyhow::anyhow!("create_bucket: {e}")),
+                    }
+                }
+                Err(e) if attempt < 10 => {
+                    tracing::warn!(
+                        attempt = attempt + 1,
+                        error = %e,
+                        "head_bucket failed, retrying (rustfs may still be warming up)"
+                    );
+                    tokio::time::sleep(Duration::from_millis(500 * (attempt as u64 + 1))).await;
+                    attempt += 1;
+                }
+                Err(e) => return Err(anyhow::anyhow!("head bucket: {e}")),
             }
-            Err(SdkError::ServiceError(svc)) if matches!(svc.err(), HeadBucketError::NotFound(_)) => {
-                tracing::info!(bucket = %self.bucket, "creating bucket");
-                self.client
-                    .create_bucket()
-                    .bucket(&self.bucket)
-                    .send()
-                    .await
-                    .context("creating bucket")?;
-                Ok(())
-            }
-            Err(e) => Err(anyhow::anyhow!("head bucket: {e}")),
         }
     }
 
