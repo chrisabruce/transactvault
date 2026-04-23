@@ -60,6 +60,11 @@ services:
     # IAM subsystem isn't quite ready" race.
 
   transactvault:
+    # In Swarm / Stack mode, `docker stack deploy` ignores `build:` — it only
+    # pulls images. Dokploy's Stack deploys usually build the Dockerfile and
+    # publish to its internal registry; the resolved image is injected via
+    # the IMAGE env var at deploy time. Compose (local dev) uses `build:`.
+    image: ${IMAGE:-transactvault:local}
     build: .
     depends_on:
       - surrealdb
