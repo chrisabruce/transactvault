@@ -9,12 +9,17 @@ services:
   surrealdb:
     image: surrealdb/surrealdb:v3
     restart: unless-stopped
+    # Run as root in the container. The `surrealdb` image's non-root default
+    # collides with named-volume ownership on some Docker hosts (Dokploy
+    # included) — root always has write permission on /data. The container
+    # is the isolation boundary, not the in-container UID, so this is safe.
+    user: "0:0"
     command:
       - start
       - --user=${SURREAL_USER:-root}
       - --pass=${SURREAL_PASS:-root}
       - --bind=0.0.0.0:8000
-      - surrealkv:///data/tv.db
+      - rocksdb:///data/tv.db
     ports:
       - "${SURREAL_BIND:-127.0.0.1}:${SURREAL_PORT:-37422}:8000"
     volumes:
@@ -23,6 +28,8 @@ services:
   rustfs:
     image: rustfs/rustfs:latest
     restart: unless-stopped
+    # Same reasoning as surrealdb — sidestep the host-volume UID clash.
+    user: "0:0"
     environment:
       RUSTFS_ROOT_USER: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
       RUSTFS_ROOT_PASSWORD: ${RUSTFS_SECRET_KEY:-rustfsadmin}
