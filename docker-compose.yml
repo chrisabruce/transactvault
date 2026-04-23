@@ -1,10 +1,10 @@
 services:
-  # Ports are deliberately unusual (37420-37423) so this stack coexists with
-  # any other dockers you have running on 3000/8000/9000.
+  # Every host port and bind address is driven by env vars so prod can rebind
+  # or hide them without forking the compose file.
   #
-  # Every credential flows from `.env` locally (docker compose auto-loads it)
-  # and from Dokploy's Environment tab in prod (it populates the same
-  # ${...} interpolation). The compose file itself is identical in both.
+  #   Dev (defaults):   app on 0.0.0.0:37420, services on 127.0.0.1:37421-37423
+  #   Prod (Dokploy):   set *_BIND to 127.0.0.1 and *_PORT to unused ports,
+  #                     or set them to ports you've reserved.
 
   surrealdb:
     image: surrealdb/surrealdb:v3
@@ -16,7 +16,7 @@ services:
       - --bind=0.0.0.0:8000
       - surrealkv:///data/tv.db
     ports:
-      - "37422:8000"
+      - "${SURREAL_BIND:-127.0.0.1}:${SURREAL_PORT:-37422}:8000"
     volumes:
       - surreal-data:/data
 
@@ -30,8 +30,8 @@ services:
       RUSTFS_CONSOLE_ENABLE: "true"
       RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
     ports:
-      - "37421:9000"   # S3 API
-      - "37423:9001"   # RustFS console
+      - "${RUSTFS_BIND:-127.0.0.1}:${RUSTFS_PORT:-37421}:9000"        # S3 API
+      - "${RUSTFS_BIND:-127.0.0.1}:${RUSTFS_CONSOLE_PORT:-37423}:9001" # console
     volumes:
       - rustfs-data:/data
 
@@ -41,6 +41,8 @@ services:
       - surrealdb
       - rustfs
     restart: unless-stopped
+    ports:
+      - "${APP_BIND:-0.0.0.0}:${APP_PORT:-37420}:37420"
     environment:
       # Server
       APP_NAME: ${APP_NAME:-TransactVault}
@@ -74,8 +76,6 @@ services:
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       RESEND_FROM: ${RESEND_FROM:-TransactVault <no-reply@transactvault.example>}
       RESEND_REPLY_TO: ${RESEND_REPLY_TO:-}
-    ports:
-      - "37420:37420"
 
 volumes:
   surreal-data:
