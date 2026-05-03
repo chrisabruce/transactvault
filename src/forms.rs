@@ -101,6 +101,136 @@ pub struct DefaultItem {
     pub required: bool,
 }
 
+/// Canonical PDF-order index for a form code within its group. The order
+/// here mirrors the printed CAR transaction checklists exactly so the UI
+/// always renders items in the expected sequence — independent of when
+/// each item was attached to the transaction.
+///
+/// Codes not in this map sort after every known code, in alphabetical
+/// order by their slug. Custom (non-CAR) items sort at the very end.
+pub fn canonical_position(code: &str) -> u32 {
+    // The order this match arm lists codes in IS the canonical PDF order.
+    // The integer returned is each code's rank — assign sequentially from
+    // 0 within each group's section so the sort is deterministic.
+    match code {
+        // MLS Data Sheets
+        "ACT"  =>   0,
+        "PEND" =>   1,
+        "SOLD" =>   2,
+
+        // Listing / Purchasing Contracts (residential, commercial, lots,
+        // mobile, business). Order intentionally interleaved to match the
+        // PDFs, with residential first since it's the most common.
+        "RPA"   => 100,
+        "RIPA"  => 101,
+        "RLA"   => 102,
+        "CPA"   => 103,
+        "CLA"   => 104,
+        "VLPA"  => 105,
+        "VLL"   => 106,
+        "MHPA"  => 107,
+        "MHLA"  => 108,
+        "BPA"   => 109,
+        "BLA"   => 110,
+        "LR"    => 111,
+        "LL"    => 112,
+
+        // Mandatory Disclosures
+        "AVID-1" => 200,
+        "AVID-2" => 201,
+        "FHDS"   => 202,
+        "LPD"    => 203,
+        "RGM"    => 204,
+        "SBSA"   => 205,
+        "SPQ"    => 206,
+        "TDS"    => 207,
+        "WCMD"   => 208,
+        "WFDA"   => 209,
+        "WHSD"   => 210,
+        "VP"     => 211,
+        "CSPQ"   => 212,
+        "MHDA"   => 213,
+        "MHTDS"  => 214,
+        "VLQ"    => 215,
+        "BDS"    => 216,
+
+        // Special Conditions Disclosures
+        "PLA"  => 300,
+        "SSA"  => 301,
+        "SSLA" => 302,
+        "REO"  => 303,
+        "REOL" => 304,
+
+        // Additional Disclosures
+        "AVAA"   => 400,
+        "BCA"    => 401,
+        "BRBC"   => 402,
+        "EQ"     => 403,
+        "EQ-R"   => 404,
+        "HID"    => 405,
+        "MCA"    => 406,
+        "QUAL"   => 407,
+        "POF"    => 408,
+        "BP-FFE" => 409,
+
+        // Disclosures — If Applicable
+        "ADM"  => 500,
+        "CO"   => 501,
+        "COP"  => 502,
+        "CR"   => 503,
+        "ESD"  => 504,
+        "ETA"  => 505,
+        "FVAC" => 506,
+        "HOA-IR" => 507,
+        "MT"   => 508,
+        "NTP"  => 509,
+        "RCSD" => 510,
+        "RR"   => 511,
+        "RRRR" => 512,
+        "SPRP" => 513,
+        "SWPI" => 514,
+        "TA"   => 515,
+
+        // Escrow Documents
+        "APRL" => 600,
+        "CC&R" => 601,
+        "CLSD" => 602,
+        "COMM" => 603,
+        "EMD"  => 604,
+        "EA"   => 605,
+        "EI"   => 606,
+        "HOA"  => 607,
+        "NET"  => 608,
+        "NHD"  => 609,
+        "NHDS" => 610,
+        "PREL" => 611,
+
+        // Reports, Certificates & Clearances
+        "BIW"   => 700,
+        "CHIM"  => 701,
+        "HOME"  => 702,
+        "HPP"   => 703,
+        "POOL"  => 704,
+        "ROOF"  => 705,
+        "SEPT"  => 706,
+        "SOLAR" => 707,
+        "TERM"  => 708,
+        "WELL"  => 709,
+
+        // Release Disclosures
+        "CC"  => 800,
+        "COL" => 801,
+        "WOO" => 802,
+
+        // Catch-all bucket
+        "MISC" => 900,
+
+        // Unknown CAR form code: drop after every known one but before
+        // free-text custom items (which return u32::MAX from the caller).
+        _ => 950,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Master CAR forms library — every code referenced anywhere below MUST appear
 // here. Keep alphabetised by code within each thematic block for maintenance.

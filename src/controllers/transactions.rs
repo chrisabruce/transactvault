@@ -516,7 +516,10 @@ async fn build_grouped_checklist(
         }))
         .await?;
 
-    // Bucket rows into groups, in the canonical render order.
+    // Bucket rows into groups, in the canonical render order
+    // (FormGroup::ORDERED matches the section order in the printed CAR
+    // checklists). Items inside each bucket are sorted by their form code's
+    // canonical PDF position, falling back to created_at for custom items.
     let mut buckets: Vec<(FormGroup, Vec<ChecklistRow>)> = FormGroup::ORDERED
         .iter()
         .map(|g| (*g, Vec::new()))
@@ -538,6 +541,21 @@ async fn build_grouped_checklist(
         if let Some((_, bucket)) = buckets.iter_mut().find(|(g, _)| *g == group) {
             bucket.push(row);
         }
+    }
+
+    // Sort each bucket by canonical PDF order. Items with a known CAR form
+    // code use `forms::canonical_position`; custom (form_code == None) items
+    // sort to the end of their group, ordered by creation time.
+    for (_, bucket) in buckets.iter_mut() {
+        bucket.sort_by_key(|row| {
+            let primary = row
+                .item
+                .form_code
+                .as_deref()
+                .map(forms::canonical_position)
+                .unwrap_or(u32::MAX);
+            (primary, row.item.created_at)
+        });
     }
 
     // Drop empty groups so the page doesn't render hollow sections.
