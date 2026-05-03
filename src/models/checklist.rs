@@ -1,4 +1,9 @@
 //! `checklist_item` table — one compliance step on a transaction.
+//!
+//! Each item now lives inside a named group (matching the printed CAR
+//! checklists: Mandatory Disclosures, Escrow Documents, etc.) and may
+//! point at a specific form code in the master CAR library. Custom items
+//! created by an agent leave `form_code` as `None`.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -10,8 +15,10 @@ use crate::record_key;
 pub struct ChecklistItem {
     pub id: RecordId,
     pub title: String,
-    pub category: String,
+    pub form_code: Option<String>,
+    pub group_slug: String,
     pub position: i64,
+    pub required: bool,
     pub completed: bool,
     pub completed_at: Option<DateTime<Utc>>,
     pub completed_by: Option<RecordId>,
@@ -23,38 +30,13 @@ impl ChecklistItem {
     pub fn url_key(&self) -> String {
         record_key(&self.id)
     }
-
-    pub fn category_label(&self) -> &str {
-        match self.category.as_str() {
-            "contract" => "Contract",
-            "disclosures" => "Disclosures",
-            "inspection" => "Inspection",
-            "appraisal" => "Appraisal",
-            "title" => "Title",
-            "closing" => "Closing",
-            _ => "General",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, SurrealValue)]
 pub struct NewChecklistItem {
     pub title: String,
-    pub category: String,
+    pub form_code: Option<String>,
+    pub group_slug: String,
     pub position: i64,
+    pub required: bool,
 }
-
-/// Canonical starter checklist every new transaction receives. Brokers can
-/// add their own items; this set matches California TC standards.
-pub const DEFAULT_CHECKLIST: &[(&str, &str)] = &[
-    ("Purchase Contract signed", "contract"),
-    ("Seller Disclosures delivered", "disclosures"),
-    ("Transfer Disclosure Statement", "disclosures"),
-    ("Natural Hazard Disclosure", "disclosures"),
-    ("Home Inspection Report", "inspection"),
-    ("Pest Inspection Report", "inspection"),
-    ("Appraisal Report", "appraisal"),
-    ("Preliminary Title Report", "title"),
-    ("Closing Disclosure", "closing"),
-    ("Final Settlement Statement", "closing"),
-];

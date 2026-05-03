@@ -1,8 +1,9 @@
 //! Document upload, download, and transaction-level ZIP export.
 //!
-//! Storage is backed by [`Storage`] — the S3-compatible RustFS client. All
-//! object keys live under `<brokerage_key>/<transaction_key>/<uuid>` so that
-//! one glance at the bucket explains which tenant owns which bytes.
+//! Storage layout follows: `<brokerage>/<property folder>/<form code>/<file>`
+//! where the property folder uses APN if available, otherwise the
+//! transaction record key. This mirrors how a brokerage would organise
+//! files in a physical filing cabinet.
 
 use std::io::Write;
 
@@ -15,25 +16,19 @@ use surrealdb::types::RecordId;
 use crate::auth::CurrentUser;
 use crate::controllers::transactions::authorize_transaction;
 use crate::error::AppError;
+use crate::forms;
 use crate::models::{Document, NewDocument, Transaction};
 use crate::state::AppState;
 use crate::storage::Storage;
 
-const ALLOWED_CATEGORIES: &[&str] = &[
-    "contract",
-    "disclosures",
-    "inspection",
-    "appraisal",
-    "title",
-    "closing",
-    "general",
-];
-
 /// Multipart upload handler.
 ///
-/// Accepts one file per request under the `file` field and an optional
-/// `category` text field. Any existing document with the same filename is
-/// linked as the previous version via `version_of`, preserving history.
+/// Form fields:
+/// - `file` (required) — the binary
+/// - `form_code` (required) — which CAR form this fulfils (e.g. `RPA`)
+/// - `item_id` (optional) — link the upload to a specific checklist item
+///   so the per-item document list shows it. If empty, the document is
+///   still attached to the transaction but not tied to a checklist row.
 pub async fn upload(
     State(state): State<AppState>,
     user: CurrentUser,
@@ -41,9 +36,10 @@ pub async fn upload(
     mut multipart: Multipart,
 ) -> Result<Redirect, AppError> {
     let tx_id = RecordId::new("transaction", id.as_str());
-    let _ = authorize_transaction(&state, &user, &tx_id).await?;
+    let tx = authorize_transaction(&state, &user, &tx_id).await?;
 
-    let mut category = String::from("general");
+    let mut form_code = String::from("MISC");
+    let mut item_id: Option<String> = None;
     let mut filename = String::new();
     let mut content_type = String::from("application/octet-stream");
     let mut bytes: Vec<u8> = Vec::new();
@@ -54,13 +50,22 @@ pub async fn upload(
         .map_err(|e| AppError::invalid(format!("upload read failed: {e}")))?
     {
         match field.name().unwrap_or("") {
-            "category" => {
+            "form_code" => {
                 let v = field
                     .text()
                     .await
-                    .map_err(|e| AppError::invalid(format!("bad category: {e}")))?;
-                if ALLOWED_CATEGORIES.contains(&v.as_str()) {
-                    category = v;
+                    .map_err(|e| AppError::invalid(format!("bad form_code: {e}")))?;
+                if forms::lookup(&v).is_some() {
+                    form_code = v.to_ascii_uppercase();
+                }
+            }
+            "item_id" => {
+                let v = field
+                    .text()
+                    .await
+                    .map_err(|e| AppError::invalid(format!("bad item_id: {e}")))?;
+                if !v.is_empty() {
+                    item_id = Some(v);
                 }
             }
             "file" => {
@@ -86,24 +91,45 @@ pub async fn upload(
         return Err(AppError::invalid("Please choose a file to upload."));
     }
 
-    // Determine versioning by looking for an existing document with the same
-    // filename on this transaction.
+    // If item_id was sent, look up the item's form_code to use as the
+    // canonical bucket — keeps the storage layout consistent even if the
+    // form-code field on the upload form is stale.
+    if let Some(ref iid) = item_id {
+        let item_ref = RecordId::new("checklist_item", iid.as_str());
+        use surrealdb::types::SurrealValue;
+        #[derive(serde::Deserialize, SurrealValue)]
+        struct CodeRow {
+            form_code: Option<String>,
+        }
+        let mut r = state
+            .db
+            .query("SELECT form_code FROM ONLY $i")
+            .bind(("i", item_ref))
+            .await?;
+        let row: Option<CodeRow> = r.take(0).ok().flatten();
+        if let Some(code) = row.and_then(|r| r.form_code) {
+            form_code = code.to_ascii_uppercase();
+        }
+    }
+
+    // Versioning: latest doc with the same filename + form code on this tx.
     let mut existing_q = state
         .db
         .query(
             "SELECT * FROM $t->has_document->document
-             WHERE filename = $f
+             WHERE filename = $f AND form_code = $fc
              ORDER BY version DESC LIMIT 1",
         )
         .bind(("t", tx_id.clone()))
         .bind(("f", filename.clone()))
+        .bind(("fc", form_code.clone()))
         .await?;
     let previous: Option<Document> = existing_q.take(0)?;
 
     let version = previous.as_ref().map(|p| p.version + 1).unwrap_or(1);
     let signed = looks_signed(&filename, &content_type, &bytes);
 
-    let storage_key = make_storage_key(&user.brokerage_id, &tx_id);
+    let storage_key = make_storage_key(&user.brokerage_id, &tx, &form_code, &filename);
     state
         .storage
         .put_bytes(&storage_key, bytes.clone(), &content_type)
@@ -111,9 +137,10 @@ pub async fn upload(
         .map_err(|e| AppError::Internal(anyhow::anyhow!("store upload: {e}")))?;
     tracing::info!(
         %filename,
+        %form_code,
         bytes = bytes.len(),
         key = %storage_key,
-        "document stored in RustFS"
+        "document stored"
     );
 
     let new_doc: Option<Document> = state
@@ -121,7 +148,7 @@ pub async fn upload(
         .create("document")
         .content(NewDocument {
             filename: filename.clone(),
-            category: category.clone(),
+            form_code: form_code.clone(),
             storage_key: storage_key.clone(),
             size_bytes: bytes.len() as i64,
             content_type,
@@ -131,7 +158,6 @@ pub async fn upload(
         .await?;
     let doc = new_doc.ok_or_else(|| AppError::Internal(anyhow::anyhow!("insert returned nothing")))?;
 
-    // Graph relations — uploaded, attached, versioned.
     state
         .db
         .query("RELATE $t->has_document->$d; RELATE $u->uploaded->$d;")
@@ -139,6 +165,16 @@ pub async fn upload(
         .bind(("d", doc.id.clone()))
         .bind(("u", user.user_id.clone()))
         .await?;
+
+    if let Some(iid) = item_id {
+        let item_ref = RecordId::new("checklist_item", iid.as_str());
+        state
+            .db
+            .query("RELATE $d->for_item->$i")
+            .bind(("d", doc.id.clone()))
+            .bind(("i", item_ref))
+            .await?;
+    }
 
     if let Some(prev) = previous {
         state
@@ -152,8 +188,8 @@ pub async fn upload(
     Ok(Redirect::to(&format!("/app/transactions/{id}")))
 }
 
-/// Stream a single document's bytes to the browser, preserving the original
-/// filename via `Content-Disposition`.
+/// Stream a single document's bytes to the browser, preserving the
+/// original filename via `Content-Disposition`.
 pub async fn download(
     State(state): State<AppState>,
     user: CurrentUser,
@@ -163,7 +199,6 @@ pub async fn download(
     let doc: Option<Document> = state.db.select(doc_ref.clone()).await?;
     let doc = doc.ok_or(AppError::NotFound)?;
 
-    // Prove the caller can see the owning transaction.
     let mut r = state
         .db
         .query("SELECT VALUE in FROM has_document WHERE out = $d LIMIT 1")
@@ -198,7 +233,8 @@ pub async fn download(
 }
 
 /// Download a ZIP of every document attached to a transaction — the
-/// one-click compliance export that the PRD calls for.
+/// one-click compliance export. Files are nested under their CAR form code
+/// folder so the archive mirrors the storage layout.
 pub async fn export_zip(
     State(state): State<AppState>,
     user: CurrentUser,
@@ -209,7 +245,10 @@ pub async fn export_zip(
 
     let mut r = state
         .db
-        .query("SELECT * FROM $t->has_document->document ORDER BY category, filename, version DESC")
+        .query(
+            "SELECT * FROM $t->has_document->document \
+             ORDER BY form_code, filename, version DESC",
+        )
         .bind(("t", tx_id.clone()))
         .await?;
     let documents: Vec<Document> = r.take(0)?;
@@ -232,13 +271,46 @@ pub async fn export_zip(
 // Storage + ZIP helpers
 // ---------------------------------------------------------------------------
 
-fn make_storage_key(brokerage: &RecordId, transaction: &RecordId) -> String {
+/// `brokerage/<property folder>/<form code>/<uuid-filename>`.
+/// Property folder = APN if available, else the transaction record key.
+fn make_storage_key(
+    brokerage: &RecordId,
+    tx: &Transaction,
+    form_code: &str,
+    filename: &str,
+) -> String {
+    let property = property_folder(tx);
     format!(
-        "{}/{}/{}",
-        crate::record_key(brokerage),
-        crate::record_key(transaction),
-        uuid::Uuid::now_v7(),
+        "{brokerage_key}/{property}/{form}/{uuid}-{name}",
+        brokerage_key = crate::record_key(brokerage),
+        property = property,
+        form = sanitize_path_segment(form_code),
+        uuid = uuid::Uuid::now_v7(),
+        name = sanitize_path_segment(filename),
     )
+}
+
+fn property_folder(tx: &Transaction) -> String {
+    let raw = tx
+        .apn
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| crate::record_key(&tx.id));
+    sanitize_path_segment(&raw)
+}
+
+fn sanitize_path_segment(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            '/' | '\\' | '\0' | ' ' => '_',
+            c if c.is_control() => '_',
+            c => c,
+        })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string()
 }
 
 async fn build_zip(
@@ -248,8 +320,6 @@ async fn build_zip(
 ) -> Result<Vec<u8>, AppError> {
     use zip::write::SimpleFileOptions;
 
-    // Fetch every document body concurrently so the ZIP render is bound by
-    // RustFS's slowest GET, not the sum of them.
     let payloads = futures::future::join_all(docs.iter().map(|doc| async move {
         let bytes = storage
             .get_bytes(&doc.storage_key)
@@ -266,11 +336,19 @@ async fn build_zip(
             SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
         let manifest = format!(
-            "TransactVault export\nProperty: {}\nStatus: {}\nGenerated: {}\nDocument count: {}\n",
+            "TransactVault export\n\
+             Property: {}\n\
+             APN: {}\n\
+             Status: {}\n\
+             Type: {}\n\
+             Generated: {}\n\
+             Document count: {}\n",
             tx.property_address,
+            tx.apn.as_deref().unwrap_or("—"),
             tx.status,
+            tx.transaction_type,
             chrono::Utc::now().to_rfc3339(),
-            docs.len()
+            docs.len(),
         );
         writer
             .start_file("MANIFEST.txt", options)
@@ -280,7 +358,7 @@ async fn build_zip(
             .map_err(|e| AppError::Internal(anyhow::anyhow!("zip manifest write: {e}")))?;
 
         for (doc, bytes) in payloads {
-            let arc_name = format!("{}/{}", doc.category, zip_safe_filename(doc));
+            let arc_name = format!("{}/{}", doc.form_code, zip_safe_filename(doc));
             writer
                 .start_file(arc_name, options)
                 .map_err(|e| AppError::Internal(anyhow::anyhow!("zip entry: {e}")))?;
@@ -340,8 +418,8 @@ fn sanitize_filename(name: String) -> String {
 }
 
 /// Heuristic: treat uploads as "signed" if the filename hints at it. PDFs
-/// containing `/Sig` inside a signature dictionary would be a nicer signal,
-/// but that needs a PDF parser we don't want to bring in for the PoC.
+/// containing a signature dictionary would be a nicer signal but require
+/// a PDF parser we don't want to bring in for the PoC.
 fn looks_signed(filename: &str, content_type: &str, _bytes: &[u8]) -> bool {
     let lower = filename.to_ascii_lowercase();
     (content_type == "application/pdf" || lower.ends_with(".pdf"))

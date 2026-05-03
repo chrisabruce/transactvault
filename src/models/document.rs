@@ -1,4 +1,10 @@
 //! `document` table — a stored file attached to a transaction.
+//!
+//! Documents are grouped under a specific CAR form code so the storage
+//! layout follows: brokerage / property folder / form code / file. Each
+//! `document` may also be linked to one or more `checklist_item`s via the
+//! `for_item` graph edge — the same uploaded contract can fulfil more than
+//! one checklist requirement.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -10,7 +16,7 @@ use crate::record_key;
 pub struct Document {
     pub id: RecordId,
     pub filename: String,
-    pub category: String,
+    pub form_code: String,
     pub storage_key: String,
     pub size_bytes: i64,
     pub content_type: String,
@@ -29,8 +35,8 @@ impl Document {
         humansize::format_size(self.size_bytes as u64, humansize::DECIMAL)
     }
 
-    /// First few uppercase characters of the filename extension; used as the
-    /// little badge in document lists.
+    /// First few uppercase characters of the filename extension; used as
+    /// the little badge in document lists.
     pub fn extension_badge(&self) -> String {
         match self.filename.rsplit('.').next() {
             Some(ext) if ext.len() <= 5 && !ext.contains(' ') => ext.to_ascii_uppercase(),
@@ -38,16 +44,10 @@ impl Document {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn category_label(&self) -> &str {
-        match self.category.as_str() {
-            "contract" => "Contract",
-            "disclosures" => "Disclosures",
-            "inspection" => "Inspection",
-            "appraisal" => "Appraisal",
-            "title" => "Title",
-            "closing" => "Closing",
-            _ => "General",
+    pub fn form_label(&self) -> String {
+        match crate::forms::lookup(&self.form_code) {
+            Some(f) => format!("{} — {}", f.code, f.name),
+            None => self.form_code.clone(),
         }
     }
 }
@@ -55,7 +55,7 @@ impl Document {
 #[derive(Debug, Clone, Serialize, SurrealValue)]
 pub struct NewDocument {
     pub filename: String,
-    pub category: String,
+    pub form_code: String,
     pub storage_key: String,
     pub size_bytes: i64,
     pub content_type: String,

@@ -1,6 +1,9 @@
 <header class="app-header">
     <nav aria-label="App">
-        <a href="/app" class="brand-mark">{{ app_name }}</a>
+        <a href="/app" class="brand-mark" aria-label="{{ app_name }} home">
+            <img src="/static/images/logo.svg" alt="" width="26" height="26">
+            <span><span class="brand-light">Transact</span><span class="brand-heavy">Vault</span></span>
+        </a>
         <ul class="app-nav" role="list">
             <li><a href="/app" {% if header.active_nav == "dashboard" %}class="active" aria-current="page"{% endif %}>Dashboard</a></li>
             <li><a href="/app/transactions" {% if header.active_nav == "transactions" %}class="active" aria-current="page"{% endif %}>Transactions</a></li>

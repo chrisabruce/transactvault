@@ -41,7 +41,7 @@
                             <li class="transaction-row">
                                 <section>
                                     <p class="property"><a href="/app/transactions/{{ tx.url_key() }}">{{ tx.property_address }}</a></p>
-                                    <p class="meta">{{ tx.city }} · {{ tx.state }}</p>
+                                    <p class="meta">{{ tx.city }} · CA</p>
                                 </section>
                                 <section><p class="meta">Price</p><p>{{ tx.price_display() }}</p></section>
                                 <section><span class="chip {{ tx.status_class() }}">{{ tx.status_label() }}</span></section>

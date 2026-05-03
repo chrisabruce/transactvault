@@ -50,19 +50,15 @@
                         <li class="transaction-row">
                             <section>
                                 <p class="property"><a href="/app/transactions/{{ tx.url_key() }}">{{ tx.property_address }}</a></p>
-                                <p class="meta">{{ tx.city }}{% if tx.city != "" %} · {% endif %}{{ tx.state }}</p>
+                                <p class="meta">{{ tx.city }}{% if tx.city != "" %} · {% endif %}CA</p>
                             </section>
                             <section>
                                 <p class="meta">Price</p>
                                 <p>{{ tx.price_display() }}</p>
                             </section>
                             <section>
-                                <p class="meta">Expected close</p>
-                                <p>
-                                    {% match tx.expected_close %}{% when Some with (when) %}
-                                        <time datetime="{{ when }}">{{ when.format("%b %-d, %Y") }}</time>
-                                    {% when None %}—{% endmatch %}
-                                </p>
+                                <p class="meta">Type</p>
+                                <p>{{ tx.type_label() }}</p>
                             </section>
                             <section>
                                 <span class="chip {{ tx.status_class() }}">{{ tx.status_label() }}</span>

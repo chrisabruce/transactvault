@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="TransactVault logo">
+    <!-- Rounded teal tile background -->
+    <rect width="32" height="32" rx="7" ry="7" fill="#0f766e"/>
+    <!-- "Vault" mark: four circles at the corners with a centered diamond,
+         their overlap creates an X/cross-hatch impression of a sealed vault. -->
+    <g fill="#ffffff" fill-opacity="0.92">
+        <circle cx="9"  cy="9"  r="3.2"/>
+        <circle cx="23" cy="9"  r="3.2"/>
+        <circle cx="9"  cy="23" r="3.2"/>
+        <circle cx="23" cy="23" r="3.2"/>
+    </g>
+    <!-- Center diamond -->
+    <path d="M16 10 L22 16 L16 22 L10 16 Z"
+          fill="#ffffff" fill-opacity="0.95"/>
+    <!-- Inner cutout — the "lock" of the vault -->
+    <circle cx="16" cy="16" r="1.8" fill="#0f766e"/>
+</svg>

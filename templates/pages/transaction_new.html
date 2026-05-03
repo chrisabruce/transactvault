@@ -9,10 +9,10 @@
 <main class="app-main">
     <header class="page-title">
         <section>
-            <h1>New transaction</h1>
+            <h1>New Transaction</h1>
             <p class="subtitle">We'll spin up a default California checklist automatically.</p>
         </section>
-        <a class="btn ghost" href="/app/transactions">Cancel</a>
+        <a class="btn" href="/app/transactions">Cancel</a>
     </header>
 
     {% match error %}{% when Some with (msg) %}
@@ -20,63 +20,92 @@
     {% when None %}{% endmatch %}
 
     <section class="panel">
-        <form method="post" action="/app/transactions">
+        <form method="post" action="/app/transactions" class="tx-form">
             <fieldset>
-                <legend>Property</legend>
-                <label>
-                    <span>Property address</span>
-                    <input type="text" name="property_address" required placeholder="42345 10th St W">
-                </label>
+                <legend>Property Information</legend>
+                <div class="form-row">
+                    <label>
+                        <span>Property Address</span>
+                        <input type="text" name="property_address" required placeholder="42235 Brittle Bush Drive, #AB706">
+                    </label>
+                    <label>
+                        <span>Assessor's Parcel Number (APN)</span>
+                        <input type="text" name="apn" placeholder="3205-005-0002">
+                    </label>
+                </div>
                 <div class="form-row">
                     <label>
                         <span>City</span>
                         <input type="text" name="city" placeholder="Lancaster">
                     </label>
                     <label>
-                        <span>Postal code</span>
-                        <input type="text" name="postal_code" placeholder="93534">
+                        <span>Postal Code</span>
+                        <input type="text" name="postal_code" placeholder="93536-1323">
                     </label>
                 </div>
-                <label>
-                    <span>Price</span>
-                    <input type="text" name="price" placeholder="$649,000">
-                </label>
-            </fieldset>
-
-            <fieldset>
-                <legend>Parties</legend>
                 <div class="form-row">
                     <label>
-                        <span>Buyer name</span>
-                        <input type="text" name="buyer_name">
+                        <span>Sales Price</span>
+                        <input type="text" name="sales_price" placeholder="$7,999,985.00">
                     </label>
                     <label>
-                        <span>Seller name</span>
-                        <input type="text" name="seller_name">
+                        <span>Client Name</span>
+                        <input type="text" name="client_name" placeholder="John & Jane Smith">
                     </label>
                 </div>
             </fieldset>
 
             <fieldset>
-                <legend>Timeline</legend>
+                <legend>Transaction Information</legend>
                 <div class="form-row">
                     <label>
-                        <span>Expected close</span>
-                        <input type="date" name="expected_close">
+                        <span>Primary MLS Number</span>
+                        <input type="text" name="mls_number" placeholder="SR150573033">
                     </label>
                     <label>
-                        <span>Status</span>
+                        <span>Office File Number</span>
+                        <input type="text" name="office_file_number" placeholder="AV40829-27A">
+                    </label>
+                </div>
+                <div class="form-row">
+                    <label>
+                        <span>Transaction Status</span>
                         <select name="status">
-                            <option value="open">Open</option>
-                            <option value="under_contract">Under contract</option>
-                            <option value="closed">Closed</option>
-                            <option value="cancelled">Cancelled</option>
+                            {% for s in statuses %}
+                                <option value="{{ s.as_str() }}"{% if s.as_str() == "active" %} selected{% endif %}>{{ s.label() }}</option>
+                            {% endfor %}
+                        </select>
+                    </label>
+                    <label>
+                        <span>Transaction Type</span>
+                        <select name="transaction_type">
+                            {% for t in types %}
+                                <option value="{{ t.as_str() }}"{% if t.as_str() == "residential" %} selected{% endif %}>{{ t.label() }}</option>
+                            {% endfor %}
+                        </select>
+                    </label>
+                </div>
+                <div class="form-row">
+                    <label>
+                        <span>Sales Type</span>
+                        <select name="sales_type">
+                            {% for s in sales_types %}
+                                <option value="{{ s.as_str() }}"{% if s.as_str() == "listing" %} selected{% endif %}>{{ s.label() }}</option>
+                            {% endfor %}
+                        </select>
+                    </label>
+                    <label>
+                        <span>Special Sales Condition</span>
+                        <select name="special_sales_condition">
+                            {% for c in conditions %}
+                                <option value="{{ c.as_str() }}"{% if c.as_str() == "none" %} selected{% endif %}>{{ c.label() }}</option>
+                            {% endfor %}
                         </select>
                     </label>
                 </div>
             </fieldset>
 
-            <button type="submit">Create transaction</button>
+            <button type="submit">Create Transaction</button>
         </form>
     </section>
 </main>

@@ -14,6 +14,7 @@ mod controllers;
 mod db;
 mod email;
 mod error;
+mod forms;
 mod models;
 mod router;
 mod state;

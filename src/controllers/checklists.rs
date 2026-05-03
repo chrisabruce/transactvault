@@ -1,9 +1,11 @@
 //! Checklist item create + toggle.
 //!
-//! Completions write both a timestamp and the completing user onto the item,
-//! giving us a free audit trail. The toggle endpoint redirects back to the
-//! transaction page — a new full render is effectively instantaneous because
-//! everything is a single SurrealDB round-trip.
+//! Two creation paths:
+//!
+//! - **Add from CAR library** — pick a known form code; we look up its
+//!   canonical group + name automatically.
+//! - **Add custom item** — free-text title, lands in
+//!   `Additional Disclosures` so it's visible but never blocks compliance.
 
 use axum::Form;
 use axum::extract::{Path, State};
@@ -12,16 +14,23 @@ use serde::Deserialize;
 use surrealdb::types::{RecordId, SurrealValue};
 
 use crate::auth::CurrentUser;
-use crate::controllers::transactions::{authorize_transaction, load_brokerage};
+use crate::controllers::transactions::authorize_transaction;
 use crate::error::AppError;
+use crate::forms::{self, FormGroup};
 use crate::models::{ChecklistItem, NewChecklistItem};
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct NewItemInput {
-    pub title: String,
+    /// Either a CAR form code (preferred) or empty if `title` is set.
     #[serde(default)]
-    pub category: Option<String>,
+    pub form_code: Option<String>,
+    /// Custom title for free-text items. Ignored if `form_code` is set.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Optional required flag — defaults to false for additions.
+    #[serde(default)]
+    pub required: Option<String>,
 }
 
 pub async fn create(
@@ -32,18 +41,6 @@ pub async fn create(
 ) -> Result<Redirect, AppError> {
     let tx_id = RecordId::new("transaction", id.as_str());
     let _ = authorize_transaction(&state, &user, &tx_id).await?;
-
-    let title = input.title.trim().to_string();
-    if title.is_empty() {
-        return Err(AppError::invalid("Checklist item needs a title."));
-    }
-
-    let category = match input.category.as_deref() {
-        Some("contract" | "disclosures" | "inspection" | "appraisal" | "title" | "closing") => {
-            input.category.unwrap()
-        }
-        _ => "general".into(),
-    };
 
     // Position = count of existing items, so new items land at the bottom.
     let mut count_q = state
@@ -58,12 +55,59 @@ pub async fn create(
     let count: Option<CountRow> = count_q.take(0)?;
     let position = count.map(|c| c.count).unwrap_or(0);
 
-    let item: Option<ChecklistItem> = state
-        .db
-        .create("checklist_item")
-        .content(NewChecklistItem { title, category, position })
-        .await?;
-    let item = item.ok_or_else(|| AppError::Internal(anyhow::anyhow!("insert returned nothing")))?;
+    let required = input
+        .required
+        .as_deref()
+        .map(|v| matches!(v, "1" | "true" | "on" | "yes"))
+        .unwrap_or(false);
+
+    let new_item = match input.form_code.as_deref().filter(|s| !s.is_empty()) {
+        Some(code) => {
+            // Look up canonical metadata for the form. Unknown codes get a
+            // graceful fallback — title = code, group = Additional.
+            let form = forms::lookup(code);
+            let title = form
+                .map(|f| f.name.to_string())
+                .unwrap_or_else(|| code.to_string());
+            let group = form
+                .and_then(|f| {
+                    forms::LIBRARY.iter().find(|cf| cf.code == f.code).map(|_| {
+                        // Most ad-hoc adds are supporting docs — drop them
+                        // into "Disclosures — If Applicable" by default,
+                        // unless the code is for a contract or report.
+                        infer_group_from_code(f.code)
+                    })
+                })
+                .unwrap_or(FormGroup::AdditionalDisclosures);
+            NewChecklistItem {
+                title,
+                form_code: Some(code.to_string()),
+                group_slug: group.slug().to_string(),
+                position,
+                required,
+            }
+        }
+        None => {
+            let title = input
+                .title
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| AppError::invalid("Either pick a form or enter a custom title."))?
+                .to_string();
+            NewChecklistItem {
+                title,
+                form_code: None,
+                group_slug: FormGroup::AdditionalDisclosures.slug().to_string(),
+                position,
+                required,
+            }
+        }
+    };
+
+    let item: Option<ChecklistItem> = state.db.create("checklist_item").content(new_item).await?;
+    let item =
+        item.ok_or_else(|| AppError::Internal(anyhow::anyhow!("checklist insert returned nothing")))?;
 
     state
         .db
@@ -71,10 +115,6 @@ pub async fn create(
         .bind(("t", tx_id.clone()))
         .bind(("c", item.id))
         .await?;
-
-    // We don't strictly need this load, but it keeps the function honest about
-    // side effects on the current user's brokerage context.
-    let _ = load_brokerage(&state, &user).await?;
 
     Ok(Redirect::to(&format!("/app/transactions/{id}")))
 }
@@ -86,8 +126,8 @@ pub async fn toggle(
 ) -> Result<Redirect, AppError> {
     let item_ref = RecordId::new("checklist_item", item_id.as_str());
 
-    // Graph hop: find the transaction that owns this item (incoming `has_item`
-    // edge) so we can authorize the caller and redirect them back.
+    // Find the owning transaction via the incoming `has_item` edge so we
+    // can authorize the caller and redirect them back.
     let mut response = state
         .db
         .query("SELECT VALUE in FROM has_item WHERE out = $c LIMIT 1")
@@ -97,7 +137,6 @@ pub async fn toggle(
     let tx_id = txs.into_iter().next().ok_or(AppError::NotFound)?;
     let _ = authorize_transaction(&state, &user, &tx_id).await?;
 
-    // Flip the `completed` bit and stamp the audit fields atomically.
     state
         .db
         .query(
@@ -112,4 +151,45 @@ pub async fn toggle(
 
     let key = crate::record_key(&tx_id);
     Ok(Redirect::to(&format!("/app/transactions/{key}")))
+}
+
+/// Best-guess of which checklist group a freshly-added form should live in.
+/// We can't know for sure without the original transaction-type context,
+/// so use the printed CAR taxonomy: contracts go to Contracts, reports to
+/// Reports, escrow forms to Escrow, mandatory disclosures to Mandatory,
+/// everything else falls into "Disclosures — If Applicable".
+fn infer_group_from_code(code: &str) -> FormGroup {
+    match code {
+        // Listing / purchase agreements
+        "RPA" | "RIPA" | "RLA" | "CPA" | "CLA" | "VLPA" | "VLL"
+        | "BPA" | "BLA" | "MHPA" | "MHLA" | "LR" | "LL" => FormGroup::ListingPurchasingContracts,
+
+        // Mandatory disclosures
+        "AVID-1" | "AVID-2" | "FHDS" | "LPD" | "RGM" | "SBSA" | "SPQ" | "TDS"
+        | "WCMD" | "WFDA" | "WHSD" | "VP" | "CSPQ" | "MHDA" | "MHTDS"
+        | "VLQ" | "BDS" => FormGroup::MandatoryDisclosures,
+
+        // Special-conditions
+        "PLA" | "SSA" | "SSLA" | "REO" | "REOL" => FormGroup::SpecialConditionsDisclosures,
+
+        // MLS sheets
+        "ACT" | "PEND" | "SOLD" => FormGroup::MlsDataSheets,
+
+        // Escrow
+        "APRL" | "CC&R" | "CLSD" | "COMM" | "EMD" | "EA" | "EI" | "HOA"
+        | "NET" | "NHD" | "NHDS" | "PREL" => FormGroup::EscrowDocuments,
+
+        // Reports & clearances
+        "BIW" | "CHIM" | "HOME" | "HPP" | "POOL" | "ROOF" | "SEPT"
+        | "SOLAR" | "TERM" | "WELL" => FormGroup::ReportsCertificatesClearances,
+
+        // Release
+        "CC" | "COL" | "WOO" => FormGroup::ReleaseDisclosures,
+
+        // Additional support
+        "AVAA" | "BCA" | "BRBC" | "EQ" | "EQ-R" | "HID" | "MCA" | "QUAL"
+        | "POF" | "BP-FFE" => FormGroup::AdditionalDisclosures,
+
+        _ => FormGroup::DisclosuresIfApplicable,
+    }
 }

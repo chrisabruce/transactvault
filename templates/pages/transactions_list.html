@@ -18,13 +18,14 @@
     <section class="filter-bar" aria-label="Filters">
         <form method="get" action="/app/transactions" role="search">
             <label class="visually-hidden" for="tx-search">Search</label>
-            <input id="tx-search" type="search" name="q" value="{{ query }}" placeholder="Search property, buyer, seller…">
+            <input id="tx-search" type="search" name="q" value="{{ query }}" placeholder="Search property, client, MLS…">
             <select name="status" aria-label="Status">
                 <option value="all"{% if filter_status == "all" || filter_status == "" %} selected{% endif %}>All statuses</option>
-                <option value="open"{% if filter_status == "open" %} selected{% endif %}>Open</option>
-                <option value="under_contract"{% if filter_status == "under_contract" %} selected{% endif %}>Under contract</option>
-                <option value="closed"{% if filter_status == "closed" %} selected{% endif %}>Closed</option>
-                <option value="cancelled"{% if filter_status == "cancelled" %} selected{% endif %}>Cancelled</option>
+                <option value="active"{% if filter_status == "active" %} selected{% endif %}>Active</option>
+                <option value="pending"{% if filter_status == "pending" %} selected{% endif %}>Pending</option>
+                <option value="sold"{% if filter_status == "sold" %} selected{% endif %}>Sold</option>
+                <option value="canceled"{% if filter_status == "canceled" %} selected{% endif %}>Canceled</option>
+                <option value="withdrawn"{% if filter_status == "withdrawn" %} selected{% endif %}>Withdrawn</option>
             </select>
             <button type="submit" class="btn small secondary">Apply</button>
         </form>
@@ -45,19 +46,15 @@
                     <li class="transaction-row">
                         <section>
                             <p class="property"><a href="/app/transactions/{{ tx.url_key() }}">{{ tx.property_address }}</a></p>
-                            <p class="meta">{{ tx.city }}{% if tx.city != "" %} · {% endif %}{{ tx.state }}</p>
+                            <p class="meta">{{ tx.city }}{% if tx.city != "" %} · {% endif %}CA</p>
                         </section>
                         <section>
                             <p class="meta">Price</p>
                             <p>{{ tx.price_display() }}</p>
                         </section>
                         <section>
-                            <p class="meta">Expected close</p>
-                            <p>
-                                {% match tx.expected_close %}{% when Some with (when) %}
-                                    <time datetime="{{ when }}">{{ when.format("%b %-d, %Y") }}</time>
-                                {% when None %}—{% endmatch %}
-                            </p>
+                            <p class="meta">Type</p>
+                            <p>{{ tx.type_label() }}</p>
                         </section>
                         <section>
                             <span class="chip {{ tx.status_class() }}">{{ tx.status_label() }}</span>

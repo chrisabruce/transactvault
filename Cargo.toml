@@ -33,10 +33,7 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 mime = "0.3"
 http = "1"
 async-stream = "0.3"
-aws-sdk-s3 = { version = "1", default-features = false, features = ["rt-tokio", "rustls"] }
-aws-config = { version = "1", default-features = false, features = ["rt-tokio", "rustls", "behavior-version-latest"] }
-aws-credential-types = "1"
-aws-smithy-types = "1"
+rust-s3 = { version = "0.37", default-features = false, features = ["tokio-rustls-tls"] }
 resend-rs = { version = "0.25", default-features = false, features = ["rustls-tls"] }
 bytes = "1"
 

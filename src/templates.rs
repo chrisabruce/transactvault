@@ -9,7 +9,11 @@
 use askama::Template;
 
 use crate::auth::Role;
-use crate::models::{ChecklistItem, Document, Invitation, Transaction};
+use crate::forms::{CarForm, FormGroup};
+use crate::models::{
+    ChecklistItem, Document, Invitation, SalesType, SpecialSalesCondition, Transaction,
+    TransactionStatus, TransactionType,
+};
 
 // ---------------------------------------------------------------------------
 // Marketing
@@ -217,6 +221,10 @@ pub struct TransactionNewPage<'a> {
     pub signed_in: bool,
     pub header: AppHeader<'a>,
     pub error: Option<&'a str>,
+    pub statuses: Vec<TransactionStatus>,
+    pub types: Vec<TransactionType>,
+    pub conditions: Vec<SpecialSalesCondition>,
+    pub sales_types: Vec<SalesType>,
 }
 
 #[derive(Template)]
@@ -229,55 +237,110 @@ pub struct TransactionShowPage<'a> {
     pub transaction: Transaction,
     pub transaction_key: String,
     pub compliance: CompliancePanel,
-    pub documents: Vec<DocumentGroup>,
     pub owner_name: String,
+    /// Forms NOT yet on this transaction's checklist — feeds the
+    /// "Add optional form" picker.
+    pub available_forms: Vec<&'static CarForm>,
+    pub statuses: Vec<TransactionStatus>,
 }
 
-/// Data bundle for the compliance panel on the transaction show page.
-/// Rendered inline from the parent template via `compliance.*` accessors —
-/// no standalone `Template` derive because it only ever renders as part of
-/// the larger page.
-pub struct CompliancePanel {
+/// One row within a checklist group on the transaction show page. Bundles
+/// the persisted item with denormalised form metadata + per-item documents
+/// so the template doesn't have to look anything up at render time.
+#[derive(Debug, Clone)]
+pub struct ChecklistRow {
+    pub item: ChecklistItem,
+    pub form: Option<&'static CarForm>,
+    pub audit_label: String,
+    pub documents: Vec<Document>,
+}
+
+/// One section of the grouped checklist (e.g. Mandatory Disclosures).
+#[derive(Debug, Clone)]
+pub struct ChecklistGroup {
+    pub group: FormGroup,
+    pub label: &'static str,
+    pub slug: &'static str,
+    pub items: Vec<ChecklistRow>,
     pub total: usize,
     pub completed: usize,
+    pub required_total: usize,
+    pub required_completed: usize,
     pub percent: u32,
-    pub all_complete: bool,
-    pub items: Vec<ChecklistItem>,
-    pub audit_labels: Vec<String>,
-    pub transaction_key: String,
 }
 
-impl CompliancePanel {
-    pub fn build(
-        items: Vec<ChecklistItem>,
-        audit_labels: Vec<String>,
-        transaction_key: String,
-    ) -> Self {
+impl ChecklistGroup {
+    pub fn build(group: FormGroup, items: Vec<ChecklistRow>) -> Self {
         let total = items.len();
-        let completed = items.iter().filter(|i| i.completed).count();
+        let completed = items.iter().filter(|r| r.item.completed).count();
+        let required_total = items.iter().filter(|r| r.item.required).count();
+        let required_completed = items
+            .iter()
+            .filter(|r| r.item.required && r.item.completed)
+            .count();
         let percent = if total == 0 {
             0
         } else {
             ((completed as f32 / total as f32) * 100.0).round() as u32
         };
-        let all_complete = total > 0 && completed == total;
         Self {
+            group,
+            label: group.label(),
+            slug: group.slug(),
+            items,
             total,
             completed,
+            required_total,
+            required_completed,
             percent,
-            all_complete,
-            items,
-            audit_labels,
-            transaction_key,
         }
+    }
+
+    pub fn complete(&self) -> bool {
+        self.required_total > 0 && self.required_completed == self.required_total
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct DocumentGroup {
-    pub category: String,
-    pub label: String,
-    pub documents: Vec<Document>,
+/// Aggregate panel covering the whole transaction's checklist.
+pub struct CompliancePanel {
+    pub groups: Vec<ChecklistGroup>,
+    pub transaction_key: String,
+    pub total: usize,
+    pub completed: usize,
+    pub required_total: usize,
+    pub required_completed: usize,
+    pub percent: u32,
+    pub all_required_complete: bool,
+}
+
+impl CompliancePanel {
+    pub fn build(groups: Vec<ChecklistGroup>, transaction_key: String) -> Self {
+        let total: usize = groups.iter().map(|g| g.total).sum();
+        let completed: usize = groups.iter().map(|g| g.completed).sum();
+        let required_total: usize = groups.iter().map(|g| g.required_total).sum();
+        let required_completed: usize = groups.iter().map(|g| g.required_completed).sum();
+        let percent = if required_total == 0 {
+            if total == 0 {
+                0
+            } else {
+                ((completed as f32 / total as f32) * 100.0).round() as u32
+            }
+        } else {
+            ((required_completed as f32 / required_total as f32) * 100.0).round() as u32
+        };
+        let all_required_complete =
+            required_total > 0 && required_completed == required_total;
+        Self {
+            groups,
+            transaction_key,
+            total,
+            completed,
+            required_total,
+            required_completed,
+            percent,
+            all_required_complete,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

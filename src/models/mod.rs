@@ -11,9 +11,12 @@ pub mod transaction;
 pub mod user;
 
 pub use brokerage::{Brokerage, NewBrokerage};
-pub use checklist::{ChecklistItem, NewChecklistItem, DEFAULT_CHECKLIST};
+pub use checklist::{ChecklistItem, NewChecklistItem};
 pub use document::{Document, NewDocument};
 pub use invitation::{Invitation, NewInvitation};
-pub use transaction::{NewTransaction, Transaction};
+pub use transaction::{
+    NewTransaction, SalesType, SpecialSalesCondition, Transaction, TransactionStatus,
+    TransactionType,
+};
 #[allow(unused_imports)]
 pub use user::{NewUser, User, UserProfile};
