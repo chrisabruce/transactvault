@@ -622,6 +622,22 @@ form textarea:focus {
     border-color: var(--color-brand);
     box-shadow: 0 0 0 3px var(--color-brand-soft);
 }
+
+/* Lighter, italic placeholder so it's visually subordinate to user-typed text. */
+form input::placeholder,
+form textarea::placeholder {
+    color: var(--color-mute-soft);
+    opacity: 0.7;
+    font-weight: 400;
+    font-style: italic;
+}
+form input::-webkit-input-placeholder,
+form textarea::-webkit-input-placeholder {
+    color: var(--color-mute-soft);
+    opacity: 0.7;
+    font-weight: 400;
+    font-style: italic;
+}
 form .form-row { display: grid; gap: var(--sp-3); grid-template-columns: 1fr 1fr; }
 @media (max-width: 40rem) { form .form-row { grid-template-columns: 1fr; } }
 
@@ -647,57 +663,134 @@ form .form-row { display: grid; gap: var(--sp-3); grid-template-columns: 1fr 1fr
     background: var(--color-bg);
     min-height: 100vh;
 }
+/* --- App-wide top navigation -------------------------------------------- */
 .app-header {
     background: var(--color-surface);
     border-bottom: 1px solid var(--color-line);
+    box-shadow: 0 1px 0 rgba(15, 23, 42, 0.02);
+    position: sticky;
+    top: 0;
+    z-index: 30;
 }
 .app-header > nav {
     max-width: var(--container);
     margin-inline: auto;
-    padding: var(--sp-3) var(--sp-5);
-    display: flex;
+    padding: 0.9rem var(--sp-5);
+    display: grid;
+    grid-template-columns: auto 1fr auto;
     align-items: center;
-    gap: var(--sp-4);
-}
-.app-nav {
-    display: flex;
     gap: var(--sp-5);
-    margin-inline-start: var(--sp-6);
+}
+
+.app-nav {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    margin: 0;
+    padding: 0.3rem;
+    background: var(--color-surface-alt);
+    border: 1px solid var(--color-line);
+    border-radius: 999px;
+    justify-self: center;
 }
 .app-nav a {
+    display: inline-flex;
+    align-items: center;
     color: var(--color-muted);
     font-weight: 500;
     font-size: var(--fs-sm);
-    padding: 0.25rem 0;
-    border-bottom: 2px solid transparent;
+    padding: 0.45rem 0.95rem;
+    border-radius: 999px;
+    line-height: 1;
+    transition: background var(--transition), color var(--transition);
 }
-.app-nav a.active, .app-nav a:hover { color: var(--color-ink); border-bottom-color: var(--color-brand); text-decoration: none; }
+.app-nav a:hover {
+    color: var(--color-ink);
+    text-decoration: none;
+    background: var(--color-line-soft);
+}
+.app-nav a.active {
+    color: var(--color-brand-ink);
+    background: var(--color-brand-soft);
+    text-decoration: none;
+}
 
+/* --- Right-aligned user menu -------------------------------------------- */
 .user-menu {
-    margin-inline-start: auto;
-    display: flex;
+    display: grid;
+    grid-template-columns: auto auto auto;
+    grid-template-areas:
+        "meta avatar signout"
+        "meta avatar signout";
     align-items: center;
-    gap: var(--sp-3);
-    color: var(--color-muted);
+    column-gap: var(--sp-3);
+    row-gap: 0;
+}
+.user-meta {
+    grid-area: meta;
+    text-align: end;
+    display: grid;
+    gap: 0;
+    line-height: 1.2;
+}
+.user-meta .user-name {
+    margin: 0;
+    color: var(--color-ink);
+    font-weight: 600;
     font-size: var(--fs-sm);
 }
+.user-meta .user-role {
+    margin: 0;
+    color: var(--color-muted);
+    font-size: var(--fs-xs);
+}
+.user-meta .user-brokerage {
+    margin: 0;
+    color: var(--color-mute-soft);
+    font-size: var(--fs-xs);
+}
 .user-menu .avatar {
-    width: 2rem; height: 2rem;
+    grid-area: avatar;
+    width: 2.4rem;
+    height: 2.4rem;
     border-radius: 50%;
     background: var(--color-brand-soft);
     color: var(--color-brand-ink);
-    display: grid; place-items: center;
+    display: grid;
+    place-items: center;
     font-weight: 700;
+    font-size: var(--fs-sm);
+    border: 2px solid var(--color-surface);
+    box-shadow: 0 0 0 1px var(--color-brand);
 }
-.user-menu form { display: inline; }
-.user-menu button {
+.signout-form {
+    grid-area: signout;
+    margin: 0;
+}
+.signout-link {
     background: transparent;
     border: 0;
     cursor: pointer;
     color: var(--color-muted);
-    font-size: var(--fs-sm);
+    font-size: var(--fs-xs);
+    font-weight: 500;
+    padding: 0.4rem 0.65rem;
+    border-radius: var(--radius-sm);
+    transition: color var(--transition), background var(--transition);
 }
-.user-menu button:hover { color: var(--color-ink); }
+.signout-link:hover {
+    color: var(--color-ink);
+    background: var(--color-line-soft);
+}
+
+@media (max-width: 56rem) {
+    .app-header > nav { grid-template-columns: auto auto; row-gap: var(--sp-3); }
+    .app-nav { grid-column: 1 / -1; justify-self: stretch; }
+    .user-menu { justify-self: end; }
+}
+@media (max-width: 36rem) {
+    .user-meta { display: none; }
+}
 
 .app-main {
     max-width: var(--container);

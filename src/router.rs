@@ -9,7 +9,8 @@ use axum::routing::{get, post};
 use tower_cookies::CookieManagerLayer;
 use tower_http::compression::CompressionLayer;
 use tower_http::services::ServeDir;
-use tower_http::trace::TraceLayer;
+use tower_http::trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse, TraceLayer};
+use tracing::Level;
 
 use crate::controllers::{auth, checklists, documents, health, marketing, members, transactions};
 use crate::state::AppState;
@@ -57,7 +58,20 @@ pub fn build(state: AppState) -> Router {
         .nest_service("/static", ServeDir::new("static"))
         .layer(CookieManagerLayer::new())
         .layer(CompressionLayer::new())
-        .layer(TraceLayer::new_for_http())
+        .layer(
+            // Promote request/response tracing so 4xx and 5xx responses
+            // never go to the void: span at INFO with method+uri, response
+            // log at INFO so successful POSTs are visible, and the failure
+            // log at ERROR so 500s scream from the log stream.
+            TraceLayer::new_for_http()
+                .make_span_with(
+                    DefaultMakeSpan::new()
+                        .level(Level::INFO)
+                        .include_headers(false),
+                )
+                .on_response(DefaultOnResponse::new().level(Level::INFO))
+                .on_failure(DefaultOnFailure::new().level(Level::ERROR)),
+        )
         .with_state(state)
         .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024))
         .layer(tower_http::timeout::TimeoutLayer::with_status_code(

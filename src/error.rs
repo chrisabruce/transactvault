@@ -46,7 +46,10 @@ impl IntoResponse for AppError {
             AppError::Validation(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
             other => {
-                tracing::error!(error = %other, "internal server error");
+                // Use {:?} so the full error chain (cause/source) prints,
+                // not just the top-level Display message — surrealdb and
+                // askama errors hide the most useful detail in their source.
+                tracing::error!(error = ?other, error_display = %other, "internal server error");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "Something went wrong. Please try again.".to_string(),
