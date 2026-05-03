@@ -185,7 +185,13 @@ hr {
     gap: var(--sp-5);
     margin-inline-start: auto;
     align-items: center;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    margin-inline-start: auto;
 }
+.primary-nav li { list-style: none; }
+.primary-nav li::marker { content: ""; }
 .primary-nav a {
     color: var(--color-body);
     font-weight: 500;
@@ -686,6 +692,7 @@ form .form-row { display: grid; gap: var(--sp-3); grid-template-columns: 1fr 1fr
     display: inline-flex;
     align-items: center;
     gap: 0.25rem;
+    list-style: none;
     margin: 0;
     padding: 0.3rem;
     background: var(--color-surface-alt);
@@ -693,6 +700,8 @@ form .form-row { display: grid; gap: var(--sp-3); grid-template-columns: 1fr 1fr
     border-radius: 999px;
     justify-self: center;
 }
+.app-nav li { list-style: none; }
+.app-nav li::marker { content: ""; }
 .app-nav a {
     display: inline-flex;
     align-items: center;
