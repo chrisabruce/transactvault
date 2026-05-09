@@ -257,28 +257,6 @@ impl SalesType {
             Self::Referral,
         ]
     }
-
-    /// Does the deal require buyer-side disclosures?
-    pub fn has_buyer_side(self) -> bool {
-        matches!(
-            self,
-            Self::Purchase
-                | Self::ListingAndPurchase
-                | Self::LeaseTenant
-                | Self::LeaseTenantAndLandlord
-        )
-    }
-
-    /// Does the deal require listing-side disclosures?
-    pub fn has_listing_side(self) -> bool {
-        matches!(
-            self,
-            Self::Listing
-                | Self::ListingAndPurchase
-                | Self::LeaseLandlord
-                | Self::LeaseTenantAndLandlord
-        )
-    }
 }
 
 // ---------------------------------------------------------------------------

@@ -171,7 +171,7 @@ fn infer_group_from_code(code: &str) -> FormGroup {
         }
 
         // Special-conditions
-        "PLA" | "SSA" | "SSLA" | "REO" | "REOL" => FormGroup::SpecialConditionsDisclosures,
+        "PLA" | "PA" | "SSA" | "SSLA" | "REO" | "REOL" => FormGroup::SpecialConditionsDisclosures,
 
         // MLS sheets
         "ACT" | "PEND" | "SOLD" => FormGroup::MlsDataSheets,

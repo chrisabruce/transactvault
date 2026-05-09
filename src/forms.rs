@@ -156,10 +156,11 @@ pub fn canonical_position(code: &str) -> u32 {
 
         // Special Conditions Disclosures
         "PLA" => 300,
-        "SSA" => 301,
-        "SSLA" => 302,
-        "REO" => 303,
-        "REOL" => 304,
+        "PA" => 301,
+        "SSA" => 302,
+        "SSLA" => 303,
+        "REO" => 304,
+        "REOL" => 305,
 
         // Additional Disclosures
         "AVAA" => 400,
@@ -258,7 +259,7 @@ pub const LIBRARY: &[CarForm] = &[
     },
     CarForm {
         code: "SOLD",
-        name: "Sold Status MLS Report",
+        name: "Sold, Canceled or Withdrawn Status MLS Report",
         description: "Sold MLS listing report",
         allows_multiple: true,
     },
@@ -449,6 +450,12 @@ pub const LIBRARY: &[CarForm] = &[
         code: "PLA",
         name: "Probate Listing Addendum",
         description: "Required when listing is part of a probate sale",
+        allows_multiple: false,
+    },
+    CarForm {
+        code: "PA",
+        name: "Probate Advisory",
+        description: "Buyer-side advisory for probate sales",
         allows_multiple: false,
     },
     CarForm {
@@ -800,17 +807,26 @@ pub const LIBRARY: &[CarForm] = &[
 // Lifted directly from the official 2026 CAR transaction checklists.
 // ---------------------------------------------------------------------------
 
-/// Pick the default checklist for a transaction type. Special-condition forms
-/// (Probate, Short Sale, REO) and sales-type-specific items get layered on
-/// top in [`build_default_checklist`].
-fn defaults_for_type(t: TransactionType) -> &'static [DefaultItem] {
-    match t {
-        TransactionType::Residential | TransactionType::RentalLease => RESIDENTIAL_DEFAULTS,
-        TransactionType::Commercial | TransactionType::CommercialLease => COMMERCIAL_DEFAULTS,
-        TransactionType::MultiFamily => MULTI_FAMILY_DEFAULTS,
-        TransactionType::VacantLotsLand => LOTS_LAND_DEFAULTS,
-        TransactionType::ManufacturedHome => MOBILE_HOME_DEFAULTS,
-        TransactionType::BusinessOpportunity => BUSINESS_OP_DEFAULTS,
+/// Resolve a sales type to the buyer/listing side(s) it represents. The
+/// per-combo defaults below split into "Listing" and "Purchase" arrays;
+/// [`SalesSide::Both`] unions them.
+#[derive(Clone, Copy)]
+enum SalesSide {
+    Listing,
+    Purchase,
+    Both,
+}
+
+fn sales_side(sales: SalesType) -> SalesSide {
+    match sales {
+        // Pure listing-side deals
+        SalesType::Listing | SalesType::LeaseLandlord => SalesSide::Listing,
+        // Pure buyer/tenant-side deals
+        SalesType::Purchase | SalesType::LeaseTenant | SalesType::Referral => {
+            SalesSide::Purchase
+        }
+        // Dual-representation deals
+        SalesType::ListingAndPurchase | SalesType::LeaseTenantAndLandlord => SalesSide::Both,
     }
 }
 
@@ -822,41 +838,39 @@ const fn item(code: &'static str, group: FormGroup, required: bool) -> DefaultIt
     }
 }
 
-/// Residential checklist (full set, required flags reflect items the printed
-/// CAR checklist marks as "required to close" or as standard contracts).
-const RESIDENTIAL_DEFAULTS: &[DefaultItem] = &[
-    // MLS Data Sheets — optional reports, complete one for the relevant status
-    item("ACT", FormGroup::MlsDataSheets, false),
-    item("PEND", FormGroup::MlsDataSheets, false),
-    item("SOLD", FormGroup::MlsDataSheets, false),
-    // Listing/Purchasing Contracts — at least one is required, sales_type filter trims this
-    item("RPA", FormGroup::ListingPurchasingContracts, true),
+// ---------------------------------------------------------------------------
+// Per-(TransactionType × SalesType) checklist defaults.
+//
+// Required flags below match the red/green colour-coding in the printed CAR
+// checklists under `docs/updated sales type/`. Listing-side and Purchase-side
+// arrays are kept separate so each deal type pulls the correct contract,
+// disclosures, and escrow paperwork; dual-side deals (Listing & Purchase,
+// Lease Tenant & Landlord) merge the two lists with required = (L || P).
+// ---------------------------------------------------------------------------
+
+// Residential — Listing
+const RESIDENTIAL_LISTING: &[DefaultItem] = &[
+    item("ACT", FormGroup::MlsDataSheets, true),
+    item("PEND", FormGroup::MlsDataSheets, true),
+    item("SOLD", FormGroup::MlsDataSheets, true),
     item("RLA", FormGroup::ListingPurchasingContracts, true),
-    // Mandatory disclosures — required to close
     item("AVID-1", FormGroup::MandatoryDisclosures, true),
     item("AVID-2", FormGroup::MandatoryDisclosures, true),
     item("FHDS", FormGroup::MandatoryDisclosures, true),
-    item("LPD", FormGroup::MandatoryDisclosures, false), // pre-1978 only
-    item("RGM", FormGroup::MandatoryDisclosures, true),
+    item("LPD", FormGroup::MandatoryDisclosures, false),
     item("SBSA", FormGroup::MandatoryDisclosures, true),
     item("SPQ", FormGroup::MandatoryDisclosures, true),
     item("TDS", FormGroup::MandatoryDisclosures, true),
     item("WCMD", FormGroup::MandatoryDisclosures, true),
-    item("WFDA", FormGroup::MandatoryDisclosures, true),
     item("WHSD", FormGroup::MandatoryDisclosures, true),
     item("VP", FormGroup::MandatoryDisclosures, true),
-    // Additional disclosures — usually optional supporting docs
-    item("AVAA", FormGroup::AdditionalDisclosures, false),
     item("BCA", FormGroup::AdditionalDisclosures, false),
-    item("BRBC", FormGroup::AdditionalDisclosures, false),
     item("EQ", FormGroup::AdditionalDisclosures, false),
     item("EQ-R", FormGroup::AdditionalDisclosures, false),
-    item("HID", FormGroup::AdditionalDisclosures, false),
     item("MCA", FormGroup::AdditionalDisclosures, false),
     item("QUAL", FormGroup::AdditionalDisclosures, false),
     item("POF", FormGroup::AdditionalDisclosures, false),
-    // Escrow
-    item("APRL", FormGroup::EscrowDocuments, true),
+    item("APRL", FormGroup::EscrowDocuments, false),
     item("CC&R", FormGroup::EscrowDocuments, false),
     item("CLSD", FormGroup::EscrowDocuments, true),
     item("COMM", FormGroup::EscrowDocuments, true),
@@ -868,7 +882,6 @@ const RESIDENTIAL_DEFAULTS: &[DefaultItem] = &[
     item("NHD", FormGroup::EscrowDocuments, true),
     item("NHDS", FormGroup::EscrowDocuments, true),
     item("PREL", FormGroup::EscrowDocuments, true),
-    // Reports
     item("BIW", FormGroup::ReportsCertificatesClearances, false),
     item("CHIM", FormGroup::ReportsCertificatesClearances, false),
     item("HOME", FormGroup::ReportsCertificatesClearances, false),
@@ -879,14 +892,109 @@ const RESIDENTIAL_DEFAULTS: &[DefaultItem] = &[
     item("SOLAR", FormGroup::ReportsCertificatesClearances, false),
     item("TERM", FormGroup::ReportsCertificatesClearances, false),
     item("WELL", FormGroup::ReportsCertificatesClearances, false),
+    item("CC", FormGroup::ReleaseDisclosures, false),
+    item("COL", FormGroup::ReleaseDisclosures, false),
+    item("WOO", FormGroup::ReleaseDisclosures, false),
 ];
 
-const COMMERCIAL_DEFAULTS: &[DefaultItem] = &[
-    item("ACT", FormGroup::MlsDataSheets, false),
-    item("PEND", FormGroup::MlsDataSheets, false),
-    item("SOLD", FormGroup::MlsDataSheets, false),
-    item("CPA", FormGroup::ListingPurchasingContracts, true),
+// Residential — Purchase. RPA is the standard contract; RIPA is an
+// alternative for income properties (PDF heading: "ONLY ONE IS MANDATORY").
+// We mark RPA required and RIPA optional — brokers handling income deals
+// can flip RIPA's required flag in the UI.
+const RESIDENTIAL_PURCHASE: &[DefaultItem] = &[
+    item("ACT", FormGroup::MlsDataSheets, true),
+    item("PEND", FormGroup::MlsDataSheets, true),
+    item("SOLD", FormGroup::MlsDataSheets, true),
+    item("RPA", FormGroup::ListingPurchasingContracts, true),
+    item("RIPA", FormGroup::ListingPurchasingContracts, false),
+    item("AVID-1", FormGroup::MandatoryDisclosures, true),
+    item("AVID-2", FormGroup::MandatoryDisclosures, true),
+    item("FHDS", FormGroup::MandatoryDisclosures, true),
+    item("LPD", FormGroup::MandatoryDisclosures, false),
+    item("RGM", FormGroup::MandatoryDisclosures, true),
+    item("SBSA", FormGroup::MandatoryDisclosures, true),
+    item("SPQ", FormGroup::MandatoryDisclosures, true),
+    item("TDS", FormGroup::MandatoryDisclosures, true),
+    item("WCMD", FormGroup::MandatoryDisclosures, true),
+    item("WFDA", FormGroup::MandatoryDisclosures, true),
+    item("WHSD", FormGroup::MandatoryDisclosures, true),
+    item("VP", FormGroup::MandatoryDisclosures, true),
+    item("BCA", FormGroup::AdditionalDisclosures, false),
+    item("BRBC", FormGroup::AdditionalDisclosures, false),
+    item("EQ", FormGroup::AdditionalDisclosures, false),
+    item("EQ-R", FormGroup::AdditionalDisclosures, false),
+    item("HID", FormGroup::AdditionalDisclosures, false),
+    item("MCA", FormGroup::AdditionalDisclosures, false),
+    item("QUAL", FormGroup::AdditionalDisclosures, false),
+    item("POF", FormGroup::AdditionalDisclosures, false),
+    item("APRL", FormGroup::EscrowDocuments, false),
+    item("CC&R", FormGroup::EscrowDocuments, false),
+    item("CLSD", FormGroup::EscrowDocuments, true),
+    item("COMM", FormGroup::EscrowDocuments, true),
+    item("EMD", FormGroup::EscrowDocuments, true),
+    item("EA", FormGroup::EscrowDocuments, false),
+    item("EI", FormGroup::EscrowDocuments, true),
+    item("HOA", FormGroup::EscrowDocuments, false),
+    item("NET", FormGroup::EscrowDocuments, false),
+    item("NHD", FormGroup::EscrowDocuments, true),
+    item("NHDS", FormGroup::EscrowDocuments, true),
+    item("PREL", FormGroup::EscrowDocuments, true),
+    item("BIW", FormGroup::ReportsCertificatesClearances, false),
+    item("CHIM", FormGroup::ReportsCertificatesClearances, false),
+    item("HOME", FormGroup::ReportsCertificatesClearances, false),
+    item("HPP", FormGroup::ReportsCertificatesClearances, false),
+    item("POOL", FormGroup::ReportsCertificatesClearances, false),
+    item("ROOF", FormGroup::ReportsCertificatesClearances, false),
+    item("SEPT", FormGroup::ReportsCertificatesClearances, false),
+    item("SOLAR", FormGroup::ReportsCertificatesClearances, false),
+    item("TERM", FormGroup::ReportsCertificatesClearances, false),
+    item("WELL", FormGroup::ReportsCertificatesClearances, false),
+    item("CC", FormGroup::ReleaseDisclosures, false),
+    item("COL", FormGroup::ReleaseDisclosures, false),
+    item("WOO", FormGroup::ReleaseDisclosures, false),
+];
+
+// Commercial — Listing
+const COMMERCIAL_LISTING: &[DefaultItem] = &[
+    item("ACT", FormGroup::MlsDataSheets, true),
+    item("PEND", FormGroup::MlsDataSheets, true),
+    item("SOLD", FormGroup::MlsDataSheets, true),
     item("CLA", FormGroup::ListingPurchasingContracts, true),
+    item("AVID-1", FormGroup::MandatoryDisclosures, true),
+    item("AVID-2", FormGroup::MandatoryDisclosures, true),
+    item("CSPQ", FormGroup::MandatoryDisclosures, true),
+    item("SBSA", FormGroup::MandatoryDisclosures, true),
+    item("VP", FormGroup::MandatoryDisclosures, true),
+    item("BCA", FormGroup::AdditionalDisclosures, false),
+    item("QUAL", FormGroup::AdditionalDisclosures, false),
+    item("POF", FormGroup::AdditionalDisclosures, false),
+    item("APRL", FormGroup::EscrowDocuments, false),
+    item("CC&R", FormGroup::EscrowDocuments, false),
+    item("CLSD", FormGroup::EscrowDocuments, true),
+    item("COMM", FormGroup::EscrowDocuments, true),
+    item("EMD", FormGroup::EscrowDocuments, true),
+    item("EA", FormGroup::EscrowDocuments, false),
+    item("EI", FormGroup::EscrowDocuments, true),
+    item("NHD", FormGroup::EscrowDocuments, true),
+    item("NHDS", FormGroup::EscrowDocuments, true),
+    item("PREL", FormGroup::EscrowDocuments, true),
+    item("BIW", FormGroup::ReportsCertificatesClearances, false),
+    item("ROOF", FormGroup::ReportsCertificatesClearances, false),
+    item("SEPT", FormGroup::ReportsCertificatesClearances, false),
+    item("SOLAR", FormGroup::ReportsCertificatesClearances, false),
+    item("TERM", FormGroup::ReportsCertificatesClearances, false),
+    item("WELL", FormGroup::ReportsCertificatesClearances, false),
+    item("CC", FormGroup::ReleaseDisclosures, false),
+    item("COL", FormGroup::ReleaseDisclosures, false),
+    item("WOO", FormGroup::ReleaseDisclosures, false),
+];
+
+// Commercial — Purchase
+const COMMERCIAL_PURCHASE: &[DefaultItem] = &[
+    item("ACT", FormGroup::MlsDataSheets, true),
+    item("PEND", FormGroup::MlsDataSheets, true),
+    item("SOLD", FormGroup::MlsDataSheets, true),
+    item("CPA", FormGroup::ListingPurchasingContracts, true),
     item("AVID-1", FormGroup::MandatoryDisclosures, true),
     item("AVID-2", FormGroup::MandatoryDisclosures, true),
     item("CSPQ", FormGroup::MandatoryDisclosures, true),
@@ -897,7 +1005,7 @@ const COMMERCIAL_DEFAULTS: &[DefaultItem] = &[
     item("BRBC", FormGroup::AdditionalDisclosures, false),
     item("QUAL", FormGroup::AdditionalDisclosures, false),
     item("POF", FormGroup::AdditionalDisclosures, false),
-    item("APRL", FormGroup::EscrowDocuments, true),
+    item("APRL", FormGroup::EscrowDocuments, false),
     item("CC&R", FormGroup::EscrowDocuments, false),
     item("CLSD", FormGroup::EscrowDocuments, true),
     item("COMM", FormGroup::EscrowDocuments, true),
@@ -913,25 +1021,91 @@ const COMMERCIAL_DEFAULTS: &[DefaultItem] = &[
     item("SOLAR", FormGroup::ReportsCertificatesClearances, false),
     item("TERM", FormGroup::ReportsCertificatesClearances, false),
     item("WELL", FormGroup::ReportsCertificatesClearances, false),
+    item("CC", FormGroup::ReleaseDisclosures, false),
+    item("COL", FormGroup::ReleaseDisclosures, false),
+    item("WOO", FormGroup::ReleaseDisclosures, false),
 ];
 
-const MULTI_FAMILY_DEFAULTS: &[DefaultItem] = &[
-    item("ACT", FormGroup::MlsDataSheets, false),
-    item("PEND", FormGroup::MlsDataSheets, false),
-    item("SOLD", FormGroup::MlsDataSheets, false),
-    item("RIPA", FormGroup::ListingPurchasingContracts, true),
-    item("CLA", FormGroup::ListingPurchasingContracts, true),
-    item("LPD", FormGroup::MandatoryDisclosures, false),
-    item("RGM", FormGroup::MandatoryDisclosures, true),
+// Lots & Land — Listing
+const LOTS_LAND_LISTING: &[DefaultItem] = &[
+    item("ACT", FormGroup::MlsDataSheets, true),
+    item("PEND", FormGroup::MlsDataSheets, true),
+    item("SOLD", FormGroup::MlsDataSheets, true),
+    item("VLL", FormGroup::ListingPurchasingContracts, true),
+    item("SBSA", FormGroup::MandatoryDisclosures, true),
+    item("VLQ", FormGroup::MandatoryDisclosures, true),
+    item("BCA", FormGroup::AdditionalDisclosures, false),
+    item("POF", FormGroup::AdditionalDisclosures, false),
+    item("CC&R", FormGroup::EscrowDocuments, false),
+    item("CLSD", FormGroup::EscrowDocuments, true),
+    item("COMM", FormGroup::EscrowDocuments, true),
+    item("EMD", FormGroup::EscrowDocuments, true),
+    item("EA", FormGroup::EscrowDocuments, false),
+    item("EI", FormGroup::EscrowDocuments, true),
+    item("NET", FormGroup::EscrowDocuments, false),
+    item("NHD", FormGroup::EscrowDocuments, true),
+    item("NHDS", FormGroup::EscrowDocuments, true),
+    item("PREL", FormGroup::EscrowDocuments, true),
+    item("BIW", FormGroup::ReportsCertificatesClearances, false),
+    item("CC", FormGroup::ReleaseDisclosures, false),
+    item("COL", FormGroup::ReleaseDisclosures, false),
+    item("WOO", FormGroup::ReleaseDisclosures, false),
+];
+
+// Lots & Land — Purchase
+const LOTS_LAND_PURCHASE: &[DefaultItem] = &[
+    item("ACT", FormGroup::MlsDataSheets, true),
+    item("PEND", FormGroup::MlsDataSheets, true),
+    item("SOLD", FormGroup::MlsDataSheets, true),
+    item("VLPA", FormGroup::ListingPurchasingContracts, true),
     item("SBSA", FormGroup::MandatoryDisclosures, true),
     item("WFDA", FormGroup::MandatoryDisclosures, true),
-    item("VP", FormGroup::MandatoryDisclosures, true),
-    item("AVAA", FormGroup::AdditionalDisclosures, false),
+    item("VLQ", FormGroup::MandatoryDisclosures, true),
     item("BCA", FormGroup::AdditionalDisclosures, false),
     item("BRBC", FormGroup::AdditionalDisclosures, false),
+    item("POF", FormGroup::AdditionalDisclosures, false),
+    item("CC&R", FormGroup::EscrowDocuments, false),
+    item("CLSD", FormGroup::EscrowDocuments, true),
+    item("COMM", FormGroup::EscrowDocuments, true),
+    item("EMD", FormGroup::EscrowDocuments, true),
+    item("EA", FormGroup::EscrowDocuments, false),
+    item("EI", FormGroup::EscrowDocuments, true),
+    item("NET", FormGroup::EscrowDocuments, false),
+    item("NHD", FormGroup::EscrowDocuments, true),
+    item("NHDS", FormGroup::EscrowDocuments, true),
+    item("PREL", FormGroup::EscrowDocuments, true),
+    item("BIW", FormGroup::ReportsCertificatesClearances, false),
+    item("CC", FormGroup::ReleaseDisclosures, false),
+    item("COL", FormGroup::ReleaseDisclosures, false),
+    item("WOO", FormGroup::ReleaseDisclosures, false),
+];
+
+// Mobile/Manufactured Home — Listing. Both RLA and MHLA are required (the
+// listing addendum supplements the standard agreement).
+const MOBILE_HOME_LISTING: &[DefaultItem] = &[
+    item("ACT", FormGroup::MlsDataSheets, true),
+    item("PEND", FormGroup::MlsDataSheets, true),
+    item("SOLD", FormGroup::MlsDataSheets, true),
+    item("RLA", FormGroup::ListingPurchasingContracts, true),
+    item("MHLA", FormGroup::ListingPurchasingContracts, true),
+    item("AVID-1", FormGroup::MandatoryDisclosures, true),
+    item("AVID-2", FormGroup::MandatoryDisclosures, true),
+    item("FHDS", FormGroup::MandatoryDisclosures, true),
+    item("LPD", FormGroup::MandatoryDisclosures, false),
+    item("SBSA", FormGroup::MandatoryDisclosures, true),
+    item("SPQ", FormGroup::MandatoryDisclosures, true),
+    item("MHDA", FormGroup::MandatoryDisclosures, false),
+    item("MHTDS", FormGroup::MandatoryDisclosures, true),
+    item("WCMD", FormGroup::MandatoryDisclosures, true),
+    item("WHSD", FormGroup::MandatoryDisclosures, true),
+    item("VP", FormGroup::MandatoryDisclosures, true),
+    item("BCA", FormGroup::AdditionalDisclosures, false),
+    item("EQ", FormGroup::AdditionalDisclosures, false),
+    item("EQ-R", FormGroup::AdditionalDisclosures, false),
+    item("MCA", FormGroup::AdditionalDisclosures, false),
     item("QUAL", FormGroup::AdditionalDisclosures, false),
     item("POF", FormGroup::AdditionalDisclosures, false),
-    item("APRL", FormGroup::EscrowDocuments, true),
+    item("APRL", FormGroup::EscrowDocuments, false),
     item("CC&R", FormGroup::EscrowDocuments, false),
     item("CLSD", FormGroup::EscrowDocuments, true),
     item("COMM", FormGroup::EscrowDocuments, true),
@@ -953,42 +1127,18 @@ const MULTI_FAMILY_DEFAULTS: &[DefaultItem] = &[
     item("SOLAR", FormGroup::ReportsCertificatesClearances, false),
     item("TERM", FormGroup::ReportsCertificatesClearances, false),
     item("WELL", FormGroup::ReportsCertificatesClearances, false),
+    item("CC", FormGroup::ReleaseDisclosures, false),
+    item("COL", FormGroup::ReleaseDisclosures, false),
+    item("WOO", FormGroup::ReleaseDisclosures, false),
 ];
 
-const LOTS_LAND_DEFAULTS: &[DefaultItem] = &[
-    item("ACT", FormGroup::MlsDataSheets, false),
-    item("PEND", FormGroup::MlsDataSheets, false),
-    item("SOLD", FormGroup::MlsDataSheets, false),
-    item("VLPA", FormGroup::ListingPurchasingContracts, true),
-    item("VLL", FormGroup::ListingPurchasingContracts, true),
-    item("SBSA", FormGroup::MandatoryDisclosures, true),
-    item("WFDA", FormGroup::MandatoryDisclosures, true),
-    item("VLQ", FormGroup::MandatoryDisclosures, true),
-    item("AVAA", FormGroup::AdditionalDisclosures, false),
-    item("BCA", FormGroup::AdditionalDisclosures, false),
-    item("BRBC", FormGroup::AdditionalDisclosures, false),
-    item("POF", FormGroup::AdditionalDisclosures, false),
-    item("CC&R", FormGroup::EscrowDocuments, false),
-    item("CLSD", FormGroup::EscrowDocuments, true),
-    item("COMM", FormGroup::EscrowDocuments, true),
-    item("EMD", FormGroup::EscrowDocuments, true),
-    item("EA", FormGroup::EscrowDocuments, false),
-    item("EI", FormGroup::EscrowDocuments, true),
-    item("NET", FormGroup::EscrowDocuments, false),
-    item("NHD", FormGroup::EscrowDocuments, true),
-    item("NHDS", FormGroup::EscrowDocuments, true),
-    item("PREL", FormGroup::EscrowDocuments, true),
-    item("BIW", FormGroup::ReportsCertificatesClearances, false),
-];
-
-const MOBILE_HOME_DEFAULTS: &[DefaultItem] = &[
-    item("ACT", FormGroup::MlsDataSheets, false),
-    item("PEND", FormGroup::MlsDataSheets, false),
-    item("SOLD", FormGroup::MlsDataSheets, false),
+// Mobile/Manufactured Home — Purchase. RPA + MHPA (both required as a pair).
+const MOBILE_HOME_PURCHASE: &[DefaultItem] = &[
+    item("ACT", FormGroup::MlsDataSheets, true),
+    item("PEND", FormGroup::MlsDataSheets, true),
+    item("SOLD", FormGroup::MlsDataSheets, true),
     item("RPA", FormGroup::ListingPurchasingContracts, true),
-    item("RLA", FormGroup::ListingPurchasingContracts, true),
     item("MHPA", FormGroup::ListingPurchasingContracts, true),
-    item("MHLA", FormGroup::ListingPurchasingContracts, true),
     item("AVID-1", FormGroup::MandatoryDisclosures, true),
     item("AVID-2", FormGroup::MandatoryDisclosures, true),
     item("FHDS", FormGroup::MandatoryDisclosures, true),
@@ -1002,7 +1152,6 @@ const MOBILE_HOME_DEFAULTS: &[DefaultItem] = &[
     item("WFDA", FormGroup::MandatoryDisclosures, true),
     item("WHSD", FormGroup::MandatoryDisclosures, true),
     item("VP", FormGroup::MandatoryDisclosures, true),
-    item("AVAA", FormGroup::AdditionalDisclosures, false),
     item("BCA", FormGroup::AdditionalDisclosures, false),
     item("BRBC", FormGroup::AdditionalDisclosures, false),
     item("EQ", FormGroup::AdditionalDisclosures, false),
@@ -1011,7 +1160,7 @@ const MOBILE_HOME_DEFAULTS: &[DefaultItem] = &[
     item("MCA", FormGroup::AdditionalDisclosures, false),
     item("QUAL", FormGroup::AdditionalDisclosures, false),
     item("POF", FormGroup::AdditionalDisclosures, false),
-    item("APRL", FormGroup::EscrowDocuments, true),
+    item("APRL", FormGroup::EscrowDocuments, false),
     item("CC&R", FormGroup::EscrowDocuments, false),
     item("CLSD", FormGroup::EscrowDocuments, true),
     item("COMM", FormGroup::EscrowDocuments, true),
@@ -1033,19 +1182,48 @@ const MOBILE_HOME_DEFAULTS: &[DefaultItem] = &[
     item("SOLAR", FormGroup::ReportsCertificatesClearances, false),
     item("TERM", FormGroup::ReportsCertificatesClearances, false),
     item("WELL", FormGroup::ReportsCertificatesClearances, false),
+    item("CC", FormGroup::ReleaseDisclosures, false),
+    item("COL", FormGroup::ReleaseDisclosures, false),
+    item("WOO", FormGroup::ReleaseDisclosures, false),
 ];
 
-const BUSINESS_OP_DEFAULTS: &[DefaultItem] = &[
-    item("ACT", FormGroup::MlsDataSheets, false),
-    item("PEND", FormGroup::MlsDataSheets, false),
-    item("SOLD", FormGroup::MlsDataSheets, false),
-    item("BPA", FormGroup::ListingPurchasingContracts, true),
+// Business Opportunity — Listing
+const BUSINESS_OP_LISTING: &[DefaultItem] = &[
+    item("ACT", FormGroup::MlsDataSheets, true),
+    item("PEND", FormGroup::MlsDataSheets, true),
+    item("SOLD", FormGroup::MlsDataSheets, true),
     item("BLA", FormGroup::ListingPurchasingContracts, true),
+    item("SBSA", FormGroup::MandatoryDisclosures, true),
+    item("VP", FormGroup::MandatoryDisclosures, true),
+    item("BCA", FormGroup::AdditionalDisclosures, false),
+    item("BDS", FormGroup::AdditionalDisclosures, false),
+    item("BP-FFE", FormGroup::AdditionalDisclosures, false),
+    item("QUAL", FormGroup::AdditionalDisclosures, false),
+    item("POF", FormGroup::AdditionalDisclosures, false),
+    item("CC&R", FormGroup::EscrowDocuments, false),
+    item("CLSD", FormGroup::EscrowDocuments, true),
+    item("COMM", FormGroup::EscrowDocuments, true),
+    item("EMD", FormGroup::EscrowDocuments, true),
+    item("EA", FormGroup::EscrowDocuments, false),
+    item("EI", FormGroup::EscrowDocuments, true),
+    item("PREL", FormGroup::EscrowDocuments, true),
+    item("BIW", FormGroup::ReportsCertificatesClearances, false),
+    item("CC", FormGroup::ReleaseDisclosures, false),
+    item("COL", FormGroup::ReleaseDisclosures, false),
+    item("WOO", FormGroup::ReleaseDisclosures, false),
+];
+
+// Business Opportunity — Purchase
+const BUSINESS_OP_PURCHASE: &[DefaultItem] = &[
+    item("ACT", FormGroup::MlsDataSheets, true),
+    item("PEND", FormGroup::MlsDataSheets, true),
+    item("SOLD", FormGroup::MlsDataSheets, true),
+    item("BPA", FormGroup::ListingPurchasingContracts, true),
     item("SBSA", FormGroup::MandatoryDisclosures, true),
     item("WFDA", FormGroup::MandatoryDisclosures, true),
     item("VP", FormGroup::MandatoryDisclosures, true),
     item("BCA", FormGroup::AdditionalDisclosures, false),
-    item("BDS", FormGroup::AdditionalDisclosures, true),
+    item("BDS", FormGroup::AdditionalDisclosures, false),
     item("BP-FFE", FormGroup::AdditionalDisclosures, false),
     item("BRBC", FormGroup::AdditionalDisclosures, false),
     item("QUAL", FormGroup::AdditionalDisclosures, false),
@@ -1058,75 +1236,162 @@ const BUSINESS_OP_DEFAULTS: &[DefaultItem] = &[
     item("EI", FormGroup::EscrowDocuments, true),
     item("PREL", FormGroup::EscrowDocuments, true),
     item("BIW", FormGroup::ReportsCertificatesClearances, false),
+    item("CC", FormGroup::ReleaseDisclosures, false),
+    item("COL", FormGroup::ReleaseDisclosures, false),
+    item("WOO", FormGroup::ReleaseDisclosures, false),
 ];
 
-const PROBATE_ITEMS: &[DefaultItem] = &[item("PLA", FormGroup::SpecialConditionsDisclosures, true)];
-const SHORT_SALE_ITEMS: &[DefaultItem] = &[
+// Multi-Family — no separate Listing/Purchase PDFs yet; falls back to a
+// combined checklist similar to the original Multi-Family default. This
+// gets used regardless of sales side until per-side PDFs land.
+const MULTI_FAMILY_FALLBACK: &[DefaultItem] = &[
+    item("ACT", FormGroup::MlsDataSheets, true),
+    item("PEND", FormGroup::MlsDataSheets, true),
+    item("SOLD", FormGroup::MlsDataSheets, true),
+    item("RIPA", FormGroup::ListingPurchasingContracts, true),
+    item("CLA", FormGroup::ListingPurchasingContracts, true),
+    item("LPD", FormGroup::MandatoryDisclosures, false),
+    item("RGM", FormGroup::MandatoryDisclosures, true),
+    item("SBSA", FormGroup::MandatoryDisclosures, true),
+    item("WFDA", FormGroup::MandatoryDisclosures, true),
+    item("VP", FormGroup::MandatoryDisclosures, true),
+    item("BCA", FormGroup::AdditionalDisclosures, false),
+    item("BRBC", FormGroup::AdditionalDisclosures, false),
+    item("QUAL", FormGroup::AdditionalDisclosures, false),
+    item("POF", FormGroup::AdditionalDisclosures, false),
+    item("APRL", FormGroup::EscrowDocuments, true),
+    item("CC&R", FormGroup::EscrowDocuments, false),
+    item("CLSD", FormGroup::EscrowDocuments, true),
+    item("COMM", FormGroup::EscrowDocuments, true),
+    item("EMD", FormGroup::EscrowDocuments, true),
+    item("EA", FormGroup::EscrowDocuments, false),
+    item("EI", FormGroup::EscrowDocuments, true),
+    item("HOA", FormGroup::EscrowDocuments, false),
+    item("NET", FormGroup::EscrowDocuments, false),
+    item("NHD", FormGroup::EscrowDocuments, true),
+    item("NHDS", FormGroup::EscrowDocuments, true),
+    item("PREL", FormGroup::EscrowDocuments, true),
+    item("BIW", FormGroup::ReportsCertificatesClearances, false),
+    item("CC", FormGroup::ReleaseDisclosures, false),
+    item("COL", FormGroup::ReleaseDisclosures, false),
+    item("WOO", FormGroup::ReleaseDisclosures, false),
+];
+
+// Special-condition extras vary by side: listing-side gets the listing-
+// specific addenda (PLA, SSLA, REOL); purchase-side gets the buyer-side
+// advisories (PA, SSA, REO). Dual-side merges both.
+const PROBATE_LISTING: &[DefaultItem] =
+    &[item("PLA", FormGroup::SpecialConditionsDisclosures, true)];
+const PROBATE_PURCHASE: &[DefaultItem] =
+    &[item("PA", FormGroup::SpecialConditionsDisclosures, true)];
+const SHORT_SALE_LISTING: &[DefaultItem] = &[
     item("SSA", FormGroup::SpecialConditionsDisclosures, true),
     item("SSLA", FormGroup::SpecialConditionsDisclosures, true),
 ];
-const REO_ITEMS: &[DefaultItem] = &[
+const SHORT_SALE_PURCHASE: &[DefaultItem] =
+    &[item("SSA", FormGroup::SpecialConditionsDisclosures, true)];
+const REO_LISTING: &[DefaultItem] = &[
     item("REO", FormGroup::SpecialConditionsDisclosures, true),
     item("REOL", FormGroup::SpecialConditionsDisclosures, true),
 ];
+const REO_PURCHASE: &[DefaultItem] =
+    &[item("REO", FormGroup::SpecialConditionsDisclosures, true)];
 
-/// Special-condition extras: layered onto the base checklist when the user
-/// picks a non-`None` SpecialSalesCondition. These items always go into the
-/// `SpecialConditionsDisclosures` group and are required.
-fn special_condition_items(c: SpecialSalesCondition) -> &'static [DefaultItem] {
-    match c {
+fn special_condition_items(c: SpecialSalesCondition, side: SalesSide) -> Vec<DefaultItem> {
+    let listing: &[DefaultItem] = match c {
         SpecialSalesCondition::None => &[],
-        SpecialSalesCondition::Probate => PROBATE_ITEMS,
-        SpecialSalesCondition::ShortSale => SHORT_SALE_ITEMS,
-        SpecialSalesCondition::REO => REO_ITEMS,
+        SpecialSalesCondition::Probate => PROBATE_LISTING,
+        SpecialSalesCondition::ShortSale => SHORT_SALE_LISTING,
+        SpecialSalesCondition::REO => REO_LISTING,
+    };
+    let purchase: &[DefaultItem] = match c {
+        SpecialSalesCondition::None => &[],
+        SpecialSalesCondition::Probate => PROBATE_PURCHASE,
+        SpecialSalesCondition::ShortSale => SHORT_SALE_PURCHASE,
+        SpecialSalesCondition::REO => REO_PURCHASE,
+    };
+    match side {
+        SalesSide::Listing => listing.to_vec(),
+        SalesSide::Purchase => purchase.to_vec(),
+        SalesSide::Both => merge_sides(listing, purchase),
     }
 }
 
-/// Build the full default checklist for a transaction. Returns items in
-/// (group, position) order with stable codes; required flags reflect
-/// the chosen sales side (a Listing-only deal won't require buyer-side
-/// forms like RPA/AVID-2/RGM/WFDA).
+/// Pick the per-(type, side) checklist, returning a fresh `Vec` so the
+/// caller can mutate without affecting the static arrays.
+fn defaults_for(t: TransactionType, side: SalesSide) -> Vec<DefaultItem> {
+    match (t, side) {
+        (TransactionType::Residential | TransactionType::RentalLease, SalesSide::Listing) => {
+            RESIDENTIAL_LISTING.to_vec()
+        }
+        (TransactionType::Residential | TransactionType::RentalLease, SalesSide::Purchase) => {
+            RESIDENTIAL_PURCHASE.to_vec()
+        }
+        (TransactionType::Residential | TransactionType::RentalLease, SalesSide::Both) => {
+            merge_sides(RESIDENTIAL_LISTING, RESIDENTIAL_PURCHASE)
+        }
+
+        (TransactionType::Commercial | TransactionType::CommercialLease, SalesSide::Listing) => {
+            COMMERCIAL_LISTING.to_vec()
+        }
+        (TransactionType::Commercial | TransactionType::CommercialLease, SalesSide::Purchase) => {
+            COMMERCIAL_PURCHASE.to_vec()
+        }
+        (TransactionType::Commercial | TransactionType::CommercialLease, SalesSide::Both) => {
+            merge_sides(COMMERCIAL_LISTING, COMMERCIAL_PURCHASE)
+        }
+
+        (TransactionType::VacantLotsLand, SalesSide::Listing) => LOTS_LAND_LISTING.to_vec(),
+        (TransactionType::VacantLotsLand, SalesSide::Purchase) => LOTS_LAND_PURCHASE.to_vec(),
+        (TransactionType::VacantLotsLand, SalesSide::Both) => {
+            merge_sides(LOTS_LAND_LISTING, LOTS_LAND_PURCHASE)
+        }
+
+        (TransactionType::ManufacturedHome, SalesSide::Listing) => MOBILE_HOME_LISTING.to_vec(),
+        (TransactionType::ManufacturedHome, SalesSide::Purchase) => MOBILE_HOME_PURCHASE.to_vec(),
+        (TransactionType::ManufacturedHome, SalesSide::Both) => {
+            merge_sides(MOBILE_HOME_LISTING, MOBILE_HOME_PURCHASE)
+        }
+
+        (TransactionType::BusinessOpportunity, SalesSide::Listing) => BUSINESS_OP_LISTING.to_vec(),
+        (TransactionType::BusinessOpportunity, SalesSide::Purchase) => {
+            BUSINESS_OP_PURCHASE.to_vec()
+        }
+        (TransactionType::BusinessOpportunity, SalesSide::Both) => {
+            merge_sides(BUSINESS_OP_LISTING, BUSINESS_OP_PURCHASE)
+        }
+
+        // Multi-Family: no per-side PDFs yet; serve the combined fallback
+        // for every sales type so the broker still gets a usable checklist.
+        (TransactionType::MultiFamily, _) => MULTI_FAMILY_FALLBACK.to_vec(),
+    }
+}
+
+/// Combine two side-specific checklists for dual-representation deals.
+/// A code that appears on both sides keeps the listing-side group + the
+/// OR of both required flags (so anything mandatory on either side stays
+/// mandatory in the merged output).
+fn merge_sides(listing: &[DefaultItem], purchase: &[DefaultItem]) -> Vec<DefaultItem> {
+    let mut out: Vec<DefaultItem> = listing.to_vec();
+    for p in purchase {
+        if let Some(existing) = out.iter_mut().find(|d| d.code == p.code) {
+            existing.required = existing.required || p.required;
+        } else {
+            out.push(*p);
+        }
+    }
+    out
+}
+
+/// Build the full default checklist for a transaction, including the
+/// special-condition addenda layered on top.
 pub fn build_default_checklist(
     t: TransactionType,
     cond: SpecialSalesCondition,
     sales: SalesType,
 ) -> Vec<DefaultItem> {
-    let mut out: Vec<DefaultItem> = defaults_for_type(t).to_vec();
-    out.extend(special_condition_items(cond).iter().copied());
-
-    // Sales-type tailoring — drop required flag for items irrelevant to the
-    // chosen side. We don't *remove* them so the broker can still attach
-    // them later if the deal flips, but they don't block compliance.
-    let buyer_only = sales.has_buyer_side();
-    let listing_side = sales.has_listing_side();
-    for di in out.iter_mut() {
-        let buyer_form = matches!(
-            di.code,
-            "AVID-2"
-                | "RGM"
-                | "WFDA"
-                | "BRBC"
-                | "HID"
-                | "QUAL"
-                | "POF"
-                | "RPA"
-                | "RIPA"
-                | "CPA"
-                | "VLPA"
-                | "BPA"
-                | "MHPA"
-        );
-        let listing_form = matches!(
-            di.code,
-            "AVID-1" | "RLA" | "CLA" | "VLL" | "BLA" | "MHLA" | "REOL" | "SSLA" | "PLA"
-        );
-        if buyer_form && !buyer_only {
-            di.required = false;
-        }
-        if listing_form && !listing_side {
-            di.required = false;
-        }
-    }
-
+    let side = sales_side(sales);
+    let mut out = defaults_for(t, side);
+    out.extend(special_condition_items(cond, side));
     out
 }
