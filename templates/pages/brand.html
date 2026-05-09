@@ -1,0 +1,1110 @@
+{% extends "base.html" %}
+
+{% block title %}Brand book — {{ app_name }}{% endblock %}
+{% block description %}The TransactVault brand book — voice, messaging, logo, color, typography, gradients, radius, spacing, and rules for designers and partners.{% endblock %}
+{% block canonical %}{{ base_url }}/brand{% endblock %}
+{% block og_url %}{{ base_url }}/brand{% endblock %}
+{% block og_title %}TransactVault brand book{% endblock %}
+{% block og_description %}How TransactVault looks, sounds, and feels — for the people who design with us.{% endblock %}
+
+{% block body_class %}page-public page-brand{% endblock %}
+
+{% block body %}
+{% include "components/public_header.html" %}
+
+<main id="top" class="brand-book">
+    <header class="brand-hero">
+        <div class="wrap">
+            <span class="eyebrow">Brand book · v1.0 · May 2026</span>
+            <h1>How TransactVault looks, sounds, and feels.</h1>
+            <p class="lede">A working guide for the people who design with us &mdash; agency partners, print vendors, and our internal team. Use it to keep flyers, brochures, slides, ads, and the product itself unmistakably us.</p>
+            <div class="brand-hero-actions">
+                <a class="btn" href="/static/brand/transactvault-brand-book.pdf" download>Download PDF</a>
+                <a class="btn secondary" href="/static/images/logo.svg" download>Download logo (SVG)</a>
+            </div>
+            <dl class="brand-hero-meta">
+                <div>
+                    <dt>Maintained by</dt>
+                    <dd>Brand &amp; Design at TransactVault</dd>
+                </div>
+                <div>
+                    <dt>Questions</dt>
+                    <dd><a href="mailto:hello@transactvault.app">hello@transactvault.app</a></dd>
+                </div>
+                <div>
+                    <dt>Built in</dt>
+                    <dd>Antelope Valley, California</dd>
+                </div>
+            </dl>
+        </div>
+    </header>
+
+    <div class="brand-shell">
+        <nav class="brand-toc" aria-label="Brand book sections">
+            <p class="toc-title">In this guide</p>
+            <ol>
+                <li><a href="#essence">1. Brand essence</a></li>
+                <li><a href="#voice">2. Voice</a></li>
+                <li><a href="#tone">3. Tone by context</a></li>
+                <li><a href="#words">4. Words we use &amp; avoid</a></li>
+                <li><a href="#messaging">5. Messaging architecture</a></li>
+                <li><a href="#logo">6. Logo</a></li>
+                <li><a href="#color">7. Color system</a></li>
+                <li><a href="#gradients">8. Gradients</a></li>
+                <li><a href="#typography">9. Typography</a></li>
+                <li><a href="#radius">10. Radius &amp; shape</a></li>
+                <li><a href="#spacing">11. Spacing &amp; layout</a></li>
+                <li><a href="#elevation">12. Elevation &amp; shadow</a></li>
+                <li><a href="#motion">13. Motion</a></li>
+                <li><a href="#iconography">14. Iconography</a></li>
+                <li><a href="#components">15. Components in practice</a></li>
+                <li><a href="#standards">16. URL &amp; email standards</a></li>
+                <li><a href="#applications">17. Sample applications</a></li>
+                <li><a href="#dosdonts">18. Do&rsquo;s &amp; don&rsquo;ts</a></li>
+                <li><a href="#assets">19. Asset downloads</a></li>
+                <li><a href="#changelog">20. Versioning</a></li>
+            </ol>
+        </nav>
+
+        <article class="brand-content">
+
+            <!-- =========================================================
+                 1. BRAND ESSENCE
+                 ========================================================= -->
+            <section class="brand-section" id="essence">
+                <p class="section-num">01</p>
+                <h2>Brand essence</h2>
+                <p class="section-lede">What TransactVault is, who it&rsquo;s for, and what we&rsquo;re replacing.</p>
+
+                <div class="essence-grid">
+                    <article>
+                        <h3>What we are</h3>
+                        <p>Transparent, compliant transaction management built for California real estate brokerages. Flat monthly pricing, three years of audit-ready document retention, and a live compliance score on every deal.</p>
+                    </article>
+                    <article>
+                        <h3>Who we serve</h3>
+                        <p>California brokers, agents, and transaction coordinators &mdash; particularly independent and mid-size brokerages. We were designed in the Antelope Valley with brokers we know by name.</p>
+                    </article>
+                    <article>
+                        <h3>What we replace</h3>
+                        <p>SkySlope and Dotloop. We replace per-seat pricing, sales-call onboarding, and scattered audit confidence with flat plans, instant signup, and a single green &ldquo;Compliance Complete&rdquo; signal.</p>
+                    </article>
+                    <article>
+                        <h3>What we promise</h3>
+                        <p>Transparent. Compliant. Calm. Every surface of the product, the marketing, and the brand should make brokers&rsquo; days quieter and their audits painless.</p>
+                    </article>
+                </div>
+
+                <div class="belief-grid">
+                    <div class="belief good">
+                        <h4>What we believe</h4>
+                        <ul>
+                            <li>Brokers shouldn&rsquo;t need a sales call to evaluate software.</li>
+                            <li>Compliance should be visible at a glance, not earned through a spreadsheet.</li>
+                            <li>Per-seat pricing punishes the teams who can least afford to be punished.</li>
+                            <li>Software you have to use every day should feel good every day.</li>
+                            <li>California real estate has its own rules &mdash; build for them specifically.</li>
+                        </ul>
+                    </div>
+                    <div class="belief bad">
+                        <h4>What we&rsquo;re not</h4>
+                        <ul>
+                            <li>We&rsquo;re not a one-size-fits-all national platform.</li>
+                            <li>We&rsquo;re not an enterprise sales motion in disguise.</li>
+                            <li>We&rsquo;re not a checklist with a marketing site bolted on.</li>
+                            <li>We&rsquo;re not a place for hype, jargon, or buzzwords.</li>
+                            <li>We&rsquo;re not an e-signature tool &mdash; that&rsquo;s handled externally.</li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+
+            <!-- =========================================================
+                 2. VOICE
+                 ========================================================= -->
+            <section class="brand-section" id="voice">
+                <p class="section-num">02</p>
+                <h2>Voice</h2>
+                <p class="section-lede">Five attributes that make a sentence sound like us.</p>
+
+                <ol class="voice-list">
+                    <li>
+                        <h3>Plainspoken</h3>
+                        <p>Short sentences. Common words. We say &ldquo;three years&rdquo; instead of &ldquo;long-term retention windows.&rdquo; If a broker has to read it twice, it&rsquo;s wrong.</p>
+                        <div class="voice-pair">
+                            <p class="pair-yes"><strong>Write:</strong> Every plan includes three years of compliant storage.</p>
+                            <p class="pair-no"><strong>Not:</strong> All subscription tiers leverage best-in-class long-term retention infrastructure.</p>
+                        </div>
+                    </li>
+                    <li>
+                        <h3>Quietly confident</h3>
+                        <p>We don&rsquo;t need to shout. The product is good, the price is honest, and the audit trail does the bragging. We state facts and let them land.</p>
+                        <div class="voice-pair">
+                            <p class="pair-yes"><strong>Write:</strong> No sales calls, no surprises.</p>
+                            <p class="pair-no"><strong>Not:</strong> The most revolutionary, game-changing platform in real estate history.</p>
+                        </div>
+                    </li>
+                    <li>
+                        <h3>Specific</h3>
+                        <p>Numbers, names, places. &ldquo;Antelope Valley brokerages.&rdquo; &ldquo;$149 / month.&rdquo; &ldquo;60-day export window.&rdquo; Specifics build trust the way generalities can&rsquo;t.</p>
+                        <div class="voice-pair">
+                            <p class="pair-yes"><strong>Write:</strong> Switching from SkySlope saved us $6k a year.</p>
+                            <p class="pair-no"><strong>Not:</strong> Customers report meaningful savings.</p>
+                        </div>
+                    </li>
+                    <li>
+                        <h3>Warm</h3>
+                        <p>We like the people we serve. Brokers and TCs are the heroes of every story. We never condescend, never blame, never lecture.</p>
+                        <div class="voice-pair">
+                            <p class="pair-yes"><strong>Write:</strong> Spend less time herding paperwork.</p>
+                            <p class="pair-no"><strong>Not:</strong> Stop wasting your time on inefficient manual processes.</p>
+                        </div>
+                    </li>
+                    <li>
+                        <h3>Compliance-grounded</h3>
+                        <p>Every claim should be traceable to something the product actually does. We don&rsquo;t say &ldquo;audit-ready&rdquo; unless the export tool exists. If we mention DRE windows, we cover them.</p>
+                        <div class="voice-pair">
+                            <p class="pair-yes"><strong>Write:</strong> One click exports every document with a manifest.</p>
+                            <p class="pair-no"><strong>Not:</strong> Streamlined audit workflows for the modern brokerage.</p>
+                        </div>
+                    </li>
+                </ol>
+            </section>
+
+            <!-- =========================================================
+                 3. TONE BY CONTEXT
+                 ========================================================= -->
+            <section class="brand-section" id="tone">
+                <p class="section-num">03</p>
+                <h2>Tone by context</h2>
+                <p class="section-lede">The voice stays constant; the tone shifts to fit the moment.</p>
+
+                <table class="tone-table">
+                    <thead>
+                        <tr><th>Context</th><th>Tone</th><th>Example</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Marketing</td>
+                            <td>Confident, warm, plainspoken</td>
+                            <td>Transaction management that actually feels good to use.</td>
+                        </tr>
+                        <tr>
+                            <td>Product UI</td>
+                            <td>Brief, helpful, factual</td>
+                            <td>Compliance complete &mdash; this deal is audit-ready.</td>
+                        </tr>
+                        <tr>
+                            <td>Compliance &amp; legal</td>
+                            <td>Precise, calm, specific</td>
+                            <td>Documents are retained for three years from upload.</td>
+                        </tr>
+                        <tr>
+                            <td>Onboarding email</td>
+                            <td>Welcoming, low-pressure</td>
+                            <td>Welcome to TransactVault &mdash; let&rsquo;s get your first deal in.</td>
+                        </tr>
+                        <tr>
+                            <td>Support reply</td>
+                            <td>Patient, never condescending</td>
+                            <td>Good question &mdash; here&rsquo;s exactly what happened and how to fix it.</td>
+                        </tr>
+                        <tr>
+                            <td>Error state</td>
+                            <td>Honest, useful, never blaming</td>
+                            <td>That file didn&rsquo;t upload. The connection dropped &mdash; try again?</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </section>
+
+            <!-- =========================================================
+                 4. WORDS
+                 ========================================================= -->
+            <section class="brand-section" id="words">
+                <p class="section-num">04</p>
+                <h2>Words we use &amp; avoid</h2>
+                <p class="section-lede">A reach-for list and a never-list.</p>
+
+                <div class="word-grid">
+                    <div class="word-col yes">
+                        <h3>Reach for</h3>
+                        <ul>
+                            <li>compliance complete</li>
+                            <li>audit-ready</li>
+                            <li>every deal</li>
+                            <li>flat pricing</li>
+                            <li>no surprises</li>
+                            <li>no sales calls</li>
+                            <li>brokerage</li>
+                            <li>broker, agent, transaction coordinator (TC)</li>
+                            <li>three years of storage</li>
+                            <li>at a glance</li>
+                            <li>one click</li>
+                            <li>calm, beautiful, fast</li>
+                            <li>California, Antelope Valley</li>
+                            <li>built for</li>
+                        </ul>
+                    </div>
+                    <div class="word-col no">
+                        <h3>Avoid</h3>
+                        <ul>
+                            <li>synergy</li>
+                            <li>leverage (as a verb)</li>
+                            <li>robust</li>
+                            <li>world-class, best-in-class</li>
+                            <li>ecosystem</li>
+                            <li>revolutionize, disrupt</li>
+                            <li>game-changing, paradigm</li>
+                            <li>unlock potential</li>
+                            <li>solutions (we have a product)</li>
+                            <li>users (we have brokers, agents, TCs)</li>
+                            <li>seamless</li>
+                            <li>powerful (let the product show it)</li>
+                            <li>end-to-end</li>
+                            <li>AI-powered (unless literally true)</li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+
+            <!-- =========================================================
+                 5. MESSAGING
+                 ========================================================= -->
+            <section class="brand-section" id="messaging">
+                <p class="section-num">05</p>
+                <h2>Messaging architecture</h2>
+                <p class="section-lede">The hierarchy of what we say, in order.</p>
+
+                <div class="messaging-stack">
+                    <div class="msg-tier promise">
+                        <h3>Brand promise</h3>
+                        <p class="msg-headline">Transaction management that actually feels good to use.</p>
+                        <p class="msg-meta">The headline. Always set in display weight. Period included.</p>
+                    </div>
+                    <div class="msg-tier pillars">
+                        <h3>Pillars</h3>
+                        <ol class="pillar-list">
+                            <li><strong>Transparent.</strong> Flat pricing, public plans, no sales calls.</li>
+                            <li><strong>Compliant.</strong> Three-year storage, full audit trail, one-click export.</li>
+                            <li><strong>Calm.</strong> Beautiful, modern, fast. Designed to make days quieter.</li>
+                            <li><strong>Californian.</strong> Built in the Antelope Valley for the rules of California real estate.</li>
+                        </ol>
+                    </div>
+                    <div class="msg-tier boilerplates">
+                        <h3>Boilerplate</h3>
+                        <p class="msg-label">Short (45 words)</p>
+                        <p class="msg-body">TransactVault is transparent, compliant transaction management built for California real estate brokerages. Flat monthly pricing, three years of compliant storage, no sales calls. A live compliance score tells brokers, at a glance, which deals are truly audit-ready.</p>
+
+                        <p class="msg-label">Long (95 words)</p>
+                        <p class="msg-body">TransactVault is a modern transaction management platform for California real estate brokerages. We replace the per-seat add-ons and sales-call onboarding of legacy software with flat monthly pricing, three years of audit-ready document retention, and a live compliance score that tells brokers, at a glance, which deals are truly ready. Designed and built in the Antelope Valley for the brokerages who run California real estate. Transparent, compliant, calm &mdash; and a product agents actually want to use.</p>
+                    </div>
+                    <div class="msg-tier templates">
+                        <h3>Headline templates</h3>
+                        <ul class="template-list">
+                            <li><em>Verb that helps brokers.</em> &mdash; &ldquo;Spend less time herding paperwork.&rdquo;</li>
+                            <li><em>Specific number + relief.</em> &mdash; &ldquo;Three years of storage. Zero per-seat fees.&rdquo;</li>
+                            <li><em>The calm contrast.</em> &mdash; &ldquo;Audits used to take a week. Now they take a click.&rdquo;</li>
+                            <li><em>The local truth.</em> &mdash; &ldquo;Built in Lancaster for California brokerages.&rdquo;</li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+
+            <!-- =========================================================
+                 6. LOGO
+                 ========================================================= -->
+            <section class="brand-section" id="logo">
+                <p class="section-num">06</p>
+                <h2>Logo</h2>
+                <p class="section-lede">The mark and the wordmark, and how they live together.</p>
+
+                <div class="logo-row">
+                    <div class="logo-card primary">
+                        <div class="logo-stage">
+                            <img src="/static/images/logo.svg" alt="TransactVault mark" width="120" height="120">
+                        </div>
+                        <p class="logo-caption">Primary mark</p>
+                        <p class="logo-meta">Vault Teal tile, rounded corners (rx&nbsp;= 7 of 32), four white circles, center diamond, lock cutout in Vault Teal.</p>
+                    </div>
+                    <div class="logo-card primary">
+                        <div class="logo-stage">
+                            <span class="brand-mark logo-wordmark">
+                                <img src="/static/images/logo.svg" alt="" width="44" height="44">
+                                <span><span class="brand-light">Transact</span><span class="brand-heavy">Vault</span></span>
+                            </span>
+                        </div>
+                        <p class="logo-caption">Lockup</p>
+                        <p class="logo-meta">Mark + wordmark side-by-side. <code>Transact</code> is Inter 400, <code>Vault</code> is Inter 800. Both sit on the ink baseline.</p>
+                    </div>
+                    <div class="logo-card primary inverted">
+                        <div class="logo-stage dark">
+                            <span class="brand-mark logo-wordmark inverted">
+                                <img src="/static/images/logo.svg" alt="" width="44" height="44">
+                                <span><span class="brand-light">Transact</span><span class="brand-heavy">Vault</span></span>
+                            </span>
+                        </div>
+                        <p class="logo-caption">Lockup, dark surface</p>
+                        <p class="logo-meta">On Ink (#0f172a) or photography. Wordmark switches to white; mark stays Vault Teal.</p>
+                    </div>
+                </div>
+
+                <h3>Wordmark construction</h3>
+                <p>The wordmark is a single word with two weights. <code>Transact</code> sets in Inter 400 (light); <code>Vault</code> sets in Inter 800 (heavy). The contrast carries the meaning &mdash; the &ldquo;vault&rdquo; is what we&rsquo;re selling. Letter-spacing is &minus;0.01em.</p>
+
+                <h3>Clear space &amp; minimum size</h3>
+                <p>Reserve a clear space equal to the height of the &ldquo;V&rdquo; in &ldquo;Vault&rdquo; on every side of the lockup. Minimum sizes:</p>
+                <ul class="bullet-list">
+                    <li><strong>Digital, lockup:</strong> wordmark text no smaller than 14&nbsp;px.</li>
+                    <li><strong>Digital, mark only:</strong> 24&nbsp;px square.</li>
+                    <li><strong>Print, lockup:</strong> 18&nbsp;mm wide.</li>
+                    <li><strong>Print, mark only:</strong> 8&nbsp;mm square.</li>
+                </ul>
+
+                <h3>Don&rsquo;ts</h3>
+                <ol class="dont-list">
+                    <li>Don&rsquo;t set the wordmark all-caps (&ldquo;TRANSACTVAULT&rdquo;) or all-lowercase (&ldquo;transactvault&rdquo;). The casing carries the brand.</li>
+                    <li>Don&rsquo;t flip the weight contrast. <code>Transact</code> is always lighter than <code>Vault</code>.</li>
+                    <li>Don&rsquo;t replace the tile color with anything other than Vault Teal #0f766e or pure white (on dark surfaces).</li>
+                    <li>Don&rsquo;t add a stroke, shadow, gradient, glow, or bevel to the mark.</li>
+                    <li>Don&rsquo;t crop the rounded corners off the tile.</li>
+                    <li>Don&rsquo;t place the mark on a busy photograph &mdash; use a solid panel or scrim.</li>
+                    <li>Don&rsquo;t rotate, skew, or stretch the mark or wordmark.</li>
+                    <li>Don&rsquo;t recreate the wordmark in another typeface. Use the rendered SVG for print at any size.</li>
+                </ol>
+            </section>
+
+            <!-- =========================================================
+                 7. COLOR
+                 ========================================================= -->
+            <section class="brand-section" id="color">
+                <p class="section-num">07</p>
+                <h2>Color system</h2>
+                <p class="section-lede">Tokens straight from <code>static/css/main.css</code>. CMYK values are recommended print conversions &mdash; verify on a contract proof.</p>
+
+                <h3>Brand</h3>
+                <div class="swatch-grid">
+                    <article class="swatch" data-color="brand">
+                        <div class="swatch-chip" style="background:#0f766e"></div>
+                        <p class="swatch-name">Vault Teal</p>
+                        <p class="swatch-token"><code>--color-brand</code></p>
+                        <dl>
+                            <div><dt>HEX</dt><dd>#0F766E</dd></div>
+                            <div><dt>RGB</dt><dd>15&nbsp;118&nbsp;110</dd></div>
+                            <div><dt>HSL</dt><dd>175°&nbsp;77%&nbsp;26%</dd></div>
+                            <div><dt>CMYK*</dt><dd>87&nbsp;0&nbsp;7&nbsp;54</dd></div>
+                        </dl>
+                        <p class="swatch-use">Primary brand color. Logo tile, primary buttons, links, focus rings, eyebrow chips.</p>
+                    </article>
+                    <article class="swatch" data-color="brand-ink">
+                        <div class="swatch-chip" style="background:#0b5955"></div>
+                        <p class="swatch-name">Vault Ink</p>
+                        <p class="swatch-token"><code>--color-brand-ink</code></p>
+                        <dl>
+                            <div><dt>HEX</dt><dd>#0B5955</dd></div>
+                            <div><dt>RGB</dt><dd>11&nbsp;89&nbsp;85</dd></div>
+                            <div><dt>HSL</dt><dd>177°&nbsp;78%&nbsp;20%</dd></div>
+                            <div><dt>CMYK*</dt><dd>88&nbsp;0&nbsp;4&nbsp;65</dd></div>
+                        </dl>
+                        <p class="swatch-use">Hover/active for primary surfaces, deep accent on light backgrounds.</p>
+                    </article>
+                    <article class="swatch" data-color="brand-soft">
+                        <div class="swatch-chip" style="background:#ccfbf1"></div>
+                        <p class="swatch-name">Vault Soft</p>
+                        <p class="swatch-token"><code>--color-brand-soft</code></p>
+                        <dl>
+                            <div><dt>HEX</dt><dd>#CCFBF1</dd></div>
+                            <div><dt>RGB</dt><dd>204&nbsp;251&nbsp;241</dd></div>
+                            <div><dt>HSL</dt><dd>168°&nbsp;84%&nbsp;89%</dd></div>
+                            <div><dt>CMYK*</dt><dd>19&nbsp;0&nbsp;4&nbsp;2</dd></div>
+                        </dl>
+                        <p class="swatch-use">Pill backgrounds, info alerts, eyebrow chips, avatar wells, focus halos.</p>
+                    </article>
+                    <article class="swatch" data-color="brand-tint">
+                        <div class="swatch-chip bordered" style="background:#f0fdfa"></div>
+                        <p class="swatch-name">Vault Tint</p>
+                        <p class="swatch-token"><code>--color-brand-tint</code></p>
+                        <dl>
+                            <div><dt>HEX</dt><dd>#F0FDFA</dd></div>
+                            <div><dt>RGB</dt><dd>240&nbsp;253&nbsp;250</dd></div>
+                            <div><dt>HSL</dt><dd>166°&nbsp;77%&nbsp;97%</dd></div>
+                            <div><dt>CMYK*</dt><dd>5&nbsp;0&nbsp;1&nbsp;1</dd></div>
+                        </dl>
+                        <p class="swatch-use">Hero radial accent, upload-area hover, the lightest possible brand presence.</p>
+                    </article>
+                </div>
+
+                <h3>State</h3>
+                <div class="swatch-grid">
+                    <article class="swatch">
+                        <div class="swatch-chip" style="background:#16a34a"></div>
+                        <p class="swatch-name">Compliance Green</p>
+                        <p class="swatch-token"><code>--color-success</code></p>
+                        <dl>
+                            <div><dt>HEX</dt><dd>#16A34A</dd></div>
+                            <div><dt>RGB</dt><dd>22&nbsp;163&nbsp;74</dd></div>
+                        </dl>
+                        <p class="swatch-use">The &ldquo;all clear&rdquo; signal. Completed checklist items, success banners, the right end of the compliance gradient.</p>
+                    </article>
+                    <article class="swatch">
+                        <div class="swatch-chip" style="background:#dcfce7"></div>
+                        <p class="swatch-name">Compliance Soft</p>
+                        <p class="swatch-token"><code>--color-success-soft</code></p>
+                        <dl>
+                            <div><dt>HEX</dt><dd>#DCFCE7</dd></div>
+                            <div><dt>RGB</dt><dd>220&nbsp;252&nbsp;231</dd></div>
+                        </dl>
+                        <p class="swatch-use">Background for the Compliance Complete banner and completed-row tinting.</p>
+                    </article>
+                    <article class="swatch">
+                        <div class="swatch-chip" style="background:#166534"></div>
+                        <p class="swatch-name">Compliance Ink</p>
+                        <p class="swatch-token"><code>--color-success-ink</code></p>
+                        <dl>
+                            <div><dt>HEX</dt><dd>#166534</dd></div>
+                            <div><dt>RGB</dt><dd>22&nbsp;101&nbsp;52</dd></div>
+                        </dl>
+                        <p class="swatch-use">Text on Compliance Soft. Strikethrough on completed items.</p>
+                    </article>
+                    <article class="swatch">
+                        <div class="swatch-chip" style="background:#b45309"></div>
+                        <p class="swatch-name">Caution Ochre</p>
+                        <p class="swatch-token"><code>--color-warn</code></p>
+                        <dl>
+                            <div><dt>HEX</dt><dd>#B45309</dd></div>
+                            <div><dt>RGB</dt><dd>180&nbsp;83&nbsp;9</dd></div>
+                        </dl>
+                        <p class="swatch-use">Required-but-incomplete badges, audit-blocked rows, anything that needs love.</p>
+                    </article>
+                    <article class="swatch">
+                        <div class="swatch-chip" style="background:#fef3c7"></div>
+                        <p class="swatch-name">Caution Soft</p>
+                        <p class="swatch-token"><code>--color-warn-soft</code></p>
+                        <dl>
+                            <div><dt>HEX</dt><dd>#FEF3C7</dd></div>
+                            <div><dt>RGB</dt><dd>254&nbsp;243&nbsp;199</dd></div>
+                        </dl>
+                        <p class="swatch-use">Background under Caution Ochre text.</p>
+                    </article>
+                    <article class="swatch">
+                        <div class="swatch-chip" style="background:#dc2626"></div>
+                        <p class="swatch-name">Stop Red</p>
+                        <p class="swatch-token"><code>--color-danger</code></p>
+                        <dl>
+                            <div><dt>HEX</dt><dd>#DC2626</dd></div>
+                            <div><dt>RGB</dt><dd>220&nbsp;38&nbsp;38</dd></div>
+                        </dl>
+                        <p class="swatch-use">Errors, destructive confirmations, validation failures only. Never decorative.</p>
+                    </article>
+                </div>
+
+                <h3>Neutrals</h3>
+                <div class="swatch-grid">
+                    <article class="swatch">
+                        <div class="swatch-chip" style="background:#0f172a"></div>
+                        <p class="swatch-name">Ink</p>
+                        <p class="swatch-token"><code>--color-ink</code></p>
+                        <dl><div><dt>HEX</dt><dd>#0F172A</dd></div></dl>
+                        <p class="swatch-use">Headlines, the compare strip background, the canonical &ldquo;black&rdquo; for the brand.</p>
+                    </article>
+                    <article class="swatch">
+                        <div class="swatch-chip" style="background:#1f2937"></div>
+                        <p class="swatch-name">Body</p>
+                        <p class="swatch-token"><code>--color-body</code></p>
+                        <dl><div><dt>HEX</dt><dd>#1F2937</dd></div></dl>
+                        <p class="swatch-use">Default body copy on light surfaces.</p>
+                    </article>
+                    <article class="swatch">
+                        <div class="swatch-chip" style="background:#64748b"></div>
+                        <p class="swatch-name">Muted</p>
+                        <p class="swatch-token"><code>--color-muted</code></p>
+                        <dl><div><dt>HEX</dt><dd>#64748B</dd></div></dl>
+                        <p class="swatch-use">Section ledes, secondary metadata, captions.</p>
+                    </article>
+                    <article class="swatch">
+                        <div class="swatch-chip" style="background:#94a3b8"></div>
+                        <p class="swatch-name">Muted Soft</p>
+                        <p class="swatch-token"><code>--color-mute-soft</code></p>
+                        <dl><div><dt>HEX</dt><dd>#94A3B8</dd></div></dl>
+                        <p class="swatch-use">Placeholders, low-priority labels.</p>
+                    </article>
+                    <article class="swatch">
+                        <div class="swatch-chip bordered" style="background:#e5e7eb"></div>
+                        <p class="swatch-name">Line</p>
+                        <p class="swatch-token"><code>--color-line</code></p>
+                        <dl><div><dt>HEX</dt><dd>#E5E7EB</dd></div></dl>
+                        <p class="swatch-use">Card borders, dividers, form input borders.</p>
+                    </article>
+                    <article class="swatch">
+                        <div class="swatch-chip bordered" style="background:#f1f5f9"></div>
+                        <p class="swatch-name">Line Soft</p>
+                        <p class="swatch-token"><code>--color-line-soft</code></p>
+                        <dl><div><dt>HEX</dt><dd>#F1F5F9</dd></div></dl>
+                        <p class="swatch-use">Subtle row separators, ghost-button hover.</p>
+                    </article>
+                    <article class="swatch">
+                        <div class="swatch-chip bordered" style="background:#ffffff"></div>
+                        <p class="swatch-name">Surface</p>
+                        <p class="swatch-token"><code>--color-surface</code></p>
+                        <dl><div><dt>HEX</dt><dd>#FFFFFF</dd></div></dl>
+                        <p class="swatch-use">Cards, panels, the auth shell.</p>
+                    </article>
+                    <article class="swatch">
+                        <div class="swatch-chip bordered" style="background:#f8fafc"></div>
+                        <p class="swatch-name">Surface Alt</p>
+                        <p class="swatch-token"><code>--color-surface-alt</code></p>
+                        <dl><div><dt>HEX</dt><dd>#F8FAFC</dd></div></dl>
+                        <p class="swatch-use">Row hover, secondary panel fills, app-nav pill background.</p>
+                    </article>
+                    <article class="swatch">
+                        <div class="swatch-chip bordered" style="background:#f6f7f9"></div>
+                        <p class="swatch-name">Background</p>
+                        <p class="swatch-token"><code>--color-bg</code></p>
+                        <dl><div><dt>HEX</dt><dd>#F6F7F9</dd></div></dl>
+                        <p class="swatch-use">App background. The calm canvas everything sits on.</p>
+                    </article>
+                </div>
+
+                <h3>Usage rules</h3>
+                <div class="usage-grid">
+                    <div class="usage">
+                        <h4>The 60 / 30 / 10 rule</h4>
+                        <p><strong>60%</strong> neutrals (Background + Surface). <strong>30%</strong> Ink and Body for type. <strong>10%</strong> Vault Teal for emphasis. Compliance Green appears only in completed/success states &mdash; never decoratively.</p>
+                    </div>
+                    <div class="usage">
+                        <h4>Accessible pairings</h4>
+                        <p>Body on Surface, Ink on Surface, Vault Teal on Vault Soft, Compliance Ink on Compliance Soft, white on Vault Teal. Always check WCAG AA at the smallest size you&rsquo;ll ship.</p>
+                    </div>
+                    <div class="usage">
+                        <h4>Don&rsquo;t mix state colors</h4>
+                        <p>Compliance Green is reserved for &ldquo;done.&rdquo; Don&rsquo;t use it as a brand color, illustration accent, or button. Same for Caution Ochre and Stop Red &mdash; semantic, never decorative.</p>
+                    </div>
+                </div>
+
+                <p class="footnote">* CMYK values are recommended Pantone+ uncoated conversions. For critical print, run a Pantone match on Vault Teal (closest: Pantone 2237 C / 7484 U) and approve a contract proof.</p>
+            </section>
+
+            <!-- =========================================================
+                 8. GRADIENTS
+                 ========================================================= -->
+            <section class="brand-section" id="gradients">
+                <p class="section-num">08</p>
+                <h2>Gradients</h2>
+                <p class="section-lede">Three sanctioned gradients. No others without a brand review.</p>
+
+                <div class="gradient-grid">
+                    <article class="gradient">
+                        <div class="gradient-stage hero-grad"></div>
+                        <h3>Hero glow</h3>
+                        <p class="gradient-recipe"><code>radial-gradient(ellipse at top, #f0fdfa 0%, transparent 55%), linear-gradient(180deg, #ffffff 0%, #f6f7f9 100%)</code></p>
+                        <p>The atmosphere behind every hero. Soft, vertical, never noticed &mdash; that&rsquo;s the point.</p>
+                    </article>
+                    <article class="gradient">
+                        <div class="gradient-stage cta-grad"></div>
+                        <h3>CTA banner</h3>
+                        <p class="gradient-recipe"><code>linear-gradient(135deg, #0f766e 0%, #0ea5a5 100%)</code></p>
+                        <p>The single bold gradient in the brand. Used on the main CTA panel only. White type on top.</p>
+                    </article>
+                    <article class="gradient">
+                        <div class="gradient-stage compliance-grad"></div>
+                        <h3>Compliance progress</h3>
+                        <p class="gradient-recipe"><code>linear-gradient(90deg, #0f766e 0%, #16a34a 100%)</code></p>
+                        <p>Used inside the compliance progress bar. A visual journey from &ldquo;in progress&rdquo; (Vault Teal) to &ldquo;complete&rdquo; (Compliance Green).</p>
+                    </article>
+                </div>
+            </section>
+
+            <!-- =========================================================
+                 9. TYPOGRAPHY
+                 ========================================================= -->
+            <section class="brand-section" id="typography">
+                <p class="section-num">09</p>
+                <h2>Typography</h2>
+                <p class="section-lede">One family does the whole job.</p>
+
+                <div class="type-family">
+                    <h3>Inter</h3>
+                    <p class="type-stack">Stack: <code>"Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif</code></p>
+                    <p>Inter is the only typeface in the brand. We use it for both display and body. Inter is free under the SIL Open Font License &mdash; pull it from <a href="https://rsms.me/inter/" rel="external noopener">rsms.me/inter</a> or Google Fonts. Use the variable file when possible (<code>InterVariable.woff2</code>) so flyers and slides have the full weight range.</p>
+                    <p class="type-spec-line"><span class="weight-100">100 Thin</span> <span class="weight-300">300 Light</span> <span class="weight-400">400 Regular</span> <span class="weight-500">500 Medium</span> <span class="weight-600">600 Semibold</span> <span class="weight-700">700 Bold</span> <span class="weight-800">800 Extrabold</span></p>
+                </div>
+
+                <h3>Type scale</h3>
+                <table class="type-table">
+                    <thead>
+                        <tr><th>Token</th><th>Size</th><th>Use</th><th>Specimen</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>--fs-hero</code></td><td>2.4&ndash;4.25rem</td><td>Landing hero</td><td class="spec spec-hero">Feels good.</td></tr>
+                        <tr><td><code>--fs-2xl</code></td><td>1.75&ndash;2.25rem</td><td>Page H1, section H2</td><td class="spec spec-2xl">Compliance Complete</td></tr>
+                        <tr><td><code>--fs-xl</code></td><td>1.35&ndash;1.6rem</td><td>Section H1, banners</td><td class="spec spec-xl">Three years of storage</td></tr>
+                        <tr><td><code>--fs-lg</code></td><td>1.125&ndash;1.25rem</td><td>H3, ledes</td><td class="spec spec-lg">Audit-ready, at a glance.</td></tr>
+                        <tr><td><code>--fs-md</code></td><td>1.0625rem</td><td>Important body</td><td class="spec spec-md">Every plan includes priority support.</td></tr>
+                        <tr><td><code>--fs-base</code></td><td>1rem</td><td>Body</td><td class="spec spec-base">Documents are versioned by default and the audit trail shows who did what.</td></tr>
+                        <tr><td><code>--fs-sm</code></td><td>0.875rem</td><td>Captions, table cells</td><td class="spec spec-sm">Renee Okafor &middot; Broker/Owner &middot; Lancaster</td></tr>
+                        <tr><td><code>--fs-xs</code></td><td>0.8125rem</td><td>Eyebrow, chips, footer</td><td class="spec spec-xs">BUILT FOR CALIFORNIA BROKERAGES</td></tr>
+                    </tbody>
+                </table>
+
+                <h3>Rules of thumb</h3>
+                <ul class="bullet-list">
+                    <li>Headlines (h1&ndash;h4) get <code>letter-spacing: &minus;0.015em</code>; the hero gets <code>&minus;0.03em</code>.</li>
+                    <li>Body line-height is 1.55; headline line-height is 1.15.</li>
+                    <li>Eyebrows are uppercase, 600, with <code>letter-spacing: 0.08em</code>.</li>
+                    <li>Numbers in stat cards and prices use <code>font-variant-numeric: tabular-nums</code> so columns align.</li>
+                    <li>Body copy never goes below 14&nbsp;px in print or 13&nbsp;px on screen.</li>
+                </ul>
+            </section>
+
+            <!-- =========================================================
+                 10. RADIUS
+                 ========================================================= -->
+            <section class="brand-section" id="radius">
+                <p class="section-num">10</p>
+                <h2>Radius &amp; shape</h2>
+                <p class="section-lede">Soft corners are a brand signal &mdash; they keep the product calm.</p>
+
+                <div class="radius-grid">
+                    <figure class="radius-spec">
+                        <div class="radius-shape r-sm"></div>
+                        <figcaption>
+                            <strong>SM</strong>
+                            <code>--radius-sm</code>
+                            <span>0.375rem · 6px</span>
+                            <p>File-icon tiles, inline pills, audit codes.</p>
+                        </figcaption>
+                    </figure>
+                    <figure class="radius-spec">
+                        <div class="radius-shape r-default"></div>
+                        <figcaption>
+                            <strong>Default</strong>
+                            <code>--radius</code>
+                            <span>0.625rem · 10px</span>
+                            <p>Buttons, inputs, alerts, checklist rows.</p>
+                        </figcaption>
+                    </figure>
+                    <figure class="radius-spec">
+                        <div class="radius-shape r-lg"></div>
+                        <figcaption>
+                            <strong>LG</strong>
+                            <code>--radius-lg</code>
+                            <span>1rem · 16px</span>
+                            <p>Cards, panels, plan cards, member cards.</p>
+                        </figcaption>
+                    </figure>
+                    <figure class="radius-spec">
+                        <div class="radius-shape r-xl"></div>
+                        <figcaption>
+                            <strong>XL</strong>
+                            <code>--radius-xl</code>
+                            <span>1.5rem · 24px</span>
+                            <p>The CTA banner. The one big shape.</p>
+                        </figcaption>
+                    </figure>
+                    <figure class="radius-spec">
+                        <div class="radius-shape r-full"></div>
+                        <figcaption>
+                            <strong>Pill</strong>
+                            <code>999px</code>
+                            <span>fully rounded</span>
+                            <p>Chips, status dots, billing toggle, app nav, avatars.</p>
+                        </figcaption>
+                    </figure>
+                </div>
+
+                <p>Logo tile uses its own intrinsic radius (rx&nbsp;= 7 within a 32-unit viewBox, so 22% of the side). Don&rsquo;t change it.</p>
+            </section>
+
+            <!-- =========================================================
+                 11. SPACING
+                 ========================================================= -->
+            <section class="brand-section" id="spacing">
+                <p class="section-num">11</p>
+                <h2>Spacing &amp; layout</h2>
+                <p class="section-lede">Everything snaps to a 4&nbsp;px grid. Generous whitespace is a feature.</p>
+
+                <table class="spacing-table">
+                    <thead>
+                        <tr><th>Token</th><th>rem</th><th>px</th><th>Visual</th><th>Use</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>--sp-1</code></td><td>0.25</td><td>4</td><td><span class="space-bar" style="width:4px"></span></td><td>Hairline separators inside chips.</td></tr>
+                        <tr><td><code>--sp-2</code></td><td>0.5</td><td>8</td><td><span class="space-bar" style="width:8px"></span></td><td>Between label and input.</td></tr>
+                        <tr><td><code>--sp-3</code></td><td>0.75</td><td>12</td><td><span class="space-bar" style="width:12px"></span></td><td>Between fields in a row.</td></tr>
+                        <tr><td><code>--sp-4</code></td><td>1</td><td>16</td><td><span class="space-bar" style="width:16px"></span></td><td>Between paragraphs. Default gap.</td></tr>
+                        <tr><td><code>--sp-5</code></td><td>1.5</td><td>24</td><td><span class="space-bar" style="width:24px"></span></td><td>Between cards in a grid.</td></tr>
+                        <tr><td><code>--sp-6</code></td><td>2</td><td>32</td><td><span class="space-bar" style="width:32px"></span></td><td>Padding inside a card.</td></tr>
+                        <tr><td><code>--sp-7</code></td><td>3</td><td>48</td><td><span class="space-bar" style="width:48px"></span></td><td>Around section headings.</td></tr>
+                        <tr><td><code>--sp-8</code></td><td>4</td><td>64</td><td><span class="space-bar" style="width:64px"></span></td><td>CTA banner padding.</td></tr>
+                        <tr><td><code>--sp-9</code></td><td>6</td><td>96</td><td><span class="space-bar" style="width:96px"></span></td><td>Section vertical rhythm.</td></tr>
+                    </tbody>
+                </table>
+
+                <h3>Containers</h3>
+                <ul class="bullet-list">
+                    <li><code>--container</code> &mdash; <strong>72rem (1152px)</strong>. The default content width: landing, pricing, dashboard, transactions list.</li>
+                    <li><code>--container-narrow</code> &mdash; <strong>56rem (896px)</strong>. The reading width: hero copy, CTA banner, narrow sections.</li>
+                </ul>
+
+                <h3>Section rhythm</h3>
+                <p>Every <code>.section</code> uses <code>padding: var(--sp-9) var(--sp-5)</code>. Headings sit centered with <code>.section-heading</code>: title, lede, then content with a <code>--sp-7</code> gap. This consistent rhythm is the calm.</p>
+            </section>
+
+            <!-- =========================================================
+                 12. ELEVATION
+                 ========================================================= -->
+            <section class="brand-section" id="elevation">
+                <p class="section-num">12</p>
+                <h2>Elevation &amp; shadow</h2>
+                <p class="section-lede">Three steps. Use them sparingly.</p>
+
+                <div class="shadow-grid">
+                    <figure class="shadow-spec">
+                        <div class="shadow-card s-sm"></div>
+                        <figcaption>
+                            <strong>SM</strong>
+                            <code>--shadow-sm</code>
+                            <span>0&nbsp;1px&nbsp;2px rgba(15,23,42,0.05)</span>
+                            <p>Sticky headers, subtle bottom edges.</p>
+                        </figcaption>
+                    </figure>
+                    <figure class="shadow-spec">
+                        <div class="shadow-card s-default"></div>
+                        <figcaption>
+                            <strong>Default</strong>
+                            <code>--shadow</code>
+                            <span>0&nbsp;8px&nbsp;24px&nbsp;-12px rgba(15,23,42,0.15)</span>
+                            <p>Card hover, button hover, auth card.</p>
+                        </figcaption>
+                    </figure>
+                    <figure class="shadow-spec">
+                        <div class="shadow-card s-lg"></div>
+                        <figcaption>
+                            <strong>LG</strong>
+                            <code>--shadow-lg</code>
+                            <span>0&nbsp;20px&nbsp;60px&nbsp;-24px rgba(15,23,42,0.22)</span>
+                            <p>Popular pricing card. Used once on screen, max.</p>
+                        </figcaption>
+                    </figure>
+                </div>
+            </section>
+
+            <!-- =========================================================
+                 13. MOTION
+                 ========================================================= -->
+            <section class="brand-section" id="motion">
+                <p class="section-num">13</p>
+                <h2>Motion</h2>
+                <p class="section-lede">Movement should reassure, not perform.</p>
+
+                <ul class="bullet-list">
+                    <li><strong>Default transition.</strong> <code>180ms cubic-bezier(.3, .7, .3, 1)</code>. Used for color, background, transform, box-shadow. Fast enough to feel responsive, eased enough to feel calm.</li>
+                    <li><strong>Hover lift.</strong> <code>transform: translateY(-1px)</code> on buttons, <code>translateY(-3px)</code> on cards. Pair with the default shadow.</li>
+                    <li><strong>Compliance celebration.</strong> The <code>pop-in</code> keyframe (scale 0.95 &rarr; 1, opacity 0 &rarr; 1) fires when the deal hits 100%. It&rsquo;s the only celebratory animation in the product. Don&rsquo;t add others.</li>
+                    <li><strong>Progress bar.</strong> The compliance progress value transitions over <code>400ms cubic-bezier(.3,.7,.3,1)</code>.</li>
+                    <li><strong>Reduced motion.</strong> Always respect <code>prefers-reduced-motion: reduce</code> &mdash; we kill every transition and animation when set. Brokers running long days deserve the choice.</li>
+                </ul>
+            </section>
+
+            <!-- =========================================================
+                 14. ICONOGRAPHY
+                 ========================================================= -->
+            <section class="brand-section" id="iconography">
+                <p class="section-num">14</p>
+                <h2>Iconography</h2>
+                <p class="section-lede">Where the product uses an icon, it uses a glyph.</p>
+
+                <p>TransactVault uses Unicode glyphs &mdash; not an icon library &mdash; on the marketing surface. They render at any size, ship in zero kilobytes, and never pixelate. When a vector icon is required (print, illustration), use Lucide at 1.5&nbsp;px stroke, rounded line caps, and the current text color.</p>
+
+                <div class="glyph-grid">
+                    <div class="glyph"><span aria-hidden="true">$</span><code>$</code><p>Pricing, billing</p></div>
+                    <div class="glyph"><span aria-hidden="true">⌛</span><code>U+231B</code><p>Storage, retention</p></div>
+                    <div class="glyph"><span aria-hidden="true">✦</span><code>U+2726</code><p>Beauty, polish</p></div>
+                    <div class="glyph"><span aria-hidden="true">✓</span><code>U+2713</code><p>Compliance, success</p></div>
+                    <div class="glyph"><span aria-hidden="true">★</span><code>U+2605</code><p>California focus, partner</p></div>
+                    <div class="glyph"><span aria-hidden="true">↻</span><code>U+21BB</code><p>Versioning</p></div>
+                    <div class="glyph"><span aria-hidden="true">✕</span><code>U+2715</code><p>What we&rsquo;re against, errors</p></div>
+                </div>
+
+                <p>The check (✓) is reserved for compliance and confirmation. The cross (✕) is reserved for what we&rsquo;re against on comparison strips and for errors. Don&rsquo;t mix them with brand decoration.</p>
+            </section>
+
+            <!-- =========================================================
+                 15. COMPONENTS
+                 ========================================================= -->
+            <section class="brand-section" id="components">
+                <p class="section-num">15</p>
+                <h2>Components in practice</h2>
+                <p class="section-lede">A short tour of the components a flyer or brochure should imitate.</p>
+
+                <div class="component-block">
+                    <h3>Buttons</h3>
+                    <div class="component-stage row">
+                        <button type="button" class="btn">Start free trial</button>
+                        <button type="button" class="btn secondary">See pricing</button>
+                        <button type="button" class="btn ghost">Sign in</button>
+                        <button type="button" class="btn small">Open dashboard</button>
+                    </div>
+                    <p>Primary on Vault Teal, secondary on Surface with Line border, ghost is bare. All buttons use <code>--radius</code> (10&nbsp;px) and the same hover lift.</p>
+                </div>
+
+                <div class="component-block">
+                    <h3>Eyebrow chip</h3>
+                    <div class="component-stage">
+                        <span class="brand-eyebrow">Built for California brokerages</span>
+                    </div>
+                    <p>Vault Soft pill, Vault Teal text, uppercase, tracked. Sits above an h1 in heroes.</p>
+                </div>
+
+                <div class="component-block">
+                    <h3>Status chips</h3>
+                    <div class="component-stage row">
+                        <span class="chip status-active">Open</span>
+                        <span class="chip status-pending">Under contract</span>
+                        <span class="chip status-sold">Closed</span>
+                        <span class="chip status-canceled">Cancelled</span>
+                        <span class="chip role-broker">Broker</span>
+                        <span class="chip role-agent">Agent</span>
+                        <span class="chip role-coordinator">TC</span>
+                    </div>
+                    <p>Soft background + ink text from the same family. Status colors are semantic, role colors are decorative; don&rsquo;t swap them.</p>
+                </div>
+
+                <div class="component-block">
+                    <h3>Compliance Complete banner</h3>
+                    <div class="component-stage">
+                        <div class="compliance-banner">
+                            <div>
+                                <strong>Compliance Complete</strong>
+                                <p>Every required item is checked. This deal is audit-ready.</p>
+                            </div>
+                        </div>
+                    </div>
+                    <p>The single most important component in the product &mdash; the moment the work is done. Compliance Soft background, Compliance Ink text, Compliance Green check tile. Pop-in animation on entry.</p>
+                </div>
+
+                <div class="component-block">
+                    <h3>Card</h3>
+                    <div class="component-stage">
+                        <article class="benefit-card mock-card">
+                            <span class="badge" aria-hidden="true">$</span>
+                            <h3>Transparent flat pricing</h3>
+                            <p>Pick a plan, pay monthly, cancel anytime. No per-user fees.</p>
+                        </article>
+                    </div>
+                    <p>Surface fill, Line border, <code>--radius-lg</code>, <code>--sp-6</code> padding. Hover lift + default shadow. Don&rsquo;t add a second border or a contrasting header strip.</p>
+                </div>
+            </section>
+
+            <!-- =========================================================
+                 16. URL & EMAIL STANDARDS
+                 ========================================================= -->
+            <section class="brand-section" id="standards">
+                <p class="section-num">16</p>
+                <h2>URL &amp; email standards</h2>
+                <p class="section-lede">Small details that compound across thousands of impressions.</p>
+
+                <h3>The URL</h3>
+                <p>The canonical written URL is <strong><code>transactvault.app</code></strong>. No protocol, no <code>www</code>, no trailing slash, all lowercase. This is what we print on flyers, type into emails, and read on the radio.</p>
+                <div class="rule-pair">
+                    <div class="rule yes">
+                        <p class="rule-label">Right</p>
+                        <ul>
+                            <li><code>transactvault.app</code></li>
+                            <li><code>transactvault.app/pricing</code></li>
+                            <li><code>Visit transactvault.app to start.</code></li>
+                        </ul>
+                    </div>
+                    <div class="rule no">
+                        <p class="rule-label">Wrong</p>
+                        <ul>
+                            <li><code>www.transactvault.app</code></li>
+                            <li><code>https://www.TransactVault.app/</code></li>
+                            <li><code>http://transactvault.app/Pricing</code></li>
+                        </ul>
+                    </div>
+                </div>
+                <p>Inside HTML <code>&lt;a&gt;</code> attributes the protocol is required (<code>https://transactvault.app</code>). The rule above governs the visible string only.</p>
+
+                <h3>Email addresses</h3>
+                <p>All email addresses render in lowercase, always. The canonical contact is <strong><code>hello@transactvault.app</code></strong>.</p>
+                <div class="rule-pair">
+                    <div class="rule yes">
+                        <p class="rule-label">Right</p>
+                        <ul>
+                            <li><code>hello@transactvault.app</code></li>
+                            <li><code>support@transactvault.app</code></li>
+                            <li><code>renee@lancasterrealty.com</code></li>
+                        </ul>
+                    </div>
+                    <div class="rule no">
+                        <p class="rule-label">Wrong</p>
+                        <ul>
+                            <li><code>Hello@TransactVault.App</code></li>
+                            <li><code>SUPPORT@TRANSACTVAULT.APP</code></li>
+                            <li><code>Renee@LancasterRealty.com</code></li>
+                        </ul>
+                    </div>
+                </div>
+
+                <h3>The wordmark in running copy</h3>
+                <p>When typed in body copy, the company name is always <strong>TransactVault</strong> &mdash; one word, T and V capitalized, everything else lowercase. The url is <em>different</em> from the name on purpose:</p>
+                <ul class="bullet-list">
+                    <li>Brand name in copy: <code>TransactVault</code></li>
+                    <li>URL on a flyer: <code>transactvault.app</code></li>
+                    <li>Logo wordmark: rendered, never re-typed</li>
+                </ul>
+            </section>
+
+            <!-- =========================================================
+                 17. SAMPLE APPLICATIONS
+                 ========================================================= -->
+            <section class="brand-section" id="applications">
+                <p class="section-num">17</p>
+                <h2>Sample applications</h2>
+                <p class="section-lede">Three examples of the brand applied. Use them as scaffolds.</p>
+
+                <h3>Flyer (US Letter)</h3>
+                <div class="mock mock-flyer">
+                    <header>
+                        <span class="brand-mark logo-wordmark">
+                            <img src="/static/images/logo.svg" alt="" width="32" height="32">
+                            <span><span class="brand-light">Transact</span><span class="brand-heavy">Vault</span></span>
+                        </span>
+                        <span class="mock-tag">For California brokerages</span>
+                    </header>
+                    <section class="mock-hero">
+                        <span class="brand-eyebrow">Switching from SkySlope</span>
+                        <h4>Transaction management that actually feels good to use.</h4>
+                        <p>Flat pricing. Three years of compliant storage. No sales calls.</p>
+                        <ul class="mock-bullets">
+                            <li>From <strong>$149/mo</strong> &mdash; everything included</li>
+                            <li>Live compliance score on every deal</li>
+                            <li>One-click DRE-ready export</li>
+                        </ul>
+                    </section>
+                    <footer>
+                        <span><strong>transactvault.app</strong> · 14-day free trial · no credit card</span>
+                        <span>hello@transactvault.app</span>
+                    </footer>
+                </div>
+
+                <h3>Social card (1200 × 630)</h3>
+                <div class="mock mock-social">
+                    <div class="mock-social-bg">
+                        <span class="brand-eyebrow inverse">Compliance Complete</span>
+                        <h4>Audits used to take a week. <br>Now they take a click.</h4>
+                        <p>transactvault.app</p>
+                    </div>
+                </div>
+
+                <h3>Email signature</h3>
+                <pre class="mock mock-sig"><span class="sig-name">Renee Okafor</span>
+<span class="sig-role">Broker / Owner &middot; Lancaster Realty Group</span>
+<span class="sig-line">renee@lancasterrealty.com &middot; (661) 555&ndash;0142</span>
+<span class="sig-line">Powered by TransactVault &middot; transactvault.app</span></pre>
+            </section>
+
+            <!-- =========================================================
+                 18. DOS AND DONTS
+                 ========================================================= -->
+            <section class="brand-section" id="dosdonts">
+                <p class="section-num">18</p>
+                <h2>Do&rsquo;s &amp; don&rsquo;ts</h2>
+                <p class="section-lede">A quick reference checklist.</p>
+
+                <div class="dd-grid">
+                    <div class="dd yes">
+                        <h3>Do</h3>
+                        <ul>
+                            <li>Lead with specifics: numbers, names, places.</li>
+                            <li>Keep heroes short, calm, and confident.</li>
+                            <li>Use Vault Teal as a single point of emphasis per surface.</li>
+                            <li>Reserve Compliance Green for actual completion.</li>
+                            <li>Set the wordmark in light + heavy weight contrast.</li>
+                            <li>Use Inter for everything &mdash; display and body.</li>
+                            <li>Snap spacing to the 4&nbsp;px grid.</li>
+                            <li>Write <code>transactvault.app</code> with no <code>www</code> and lowercase.</li>
+                            <li>Respect <code>prefers-reduced-motion</code>.</li>
+                            <li>Print at 14&nbsp;px / 11&nbsp;pt minimum body size.</li>
+                        </ul>
+                    </div>
+                    <div class="dd no">
+                        <h3>Don&rsquo;t</h3>
+                        <ul>
+                            <li>Use buzzwords (synergy, leverage, robust, world-class).</li>
+                            <li>Add a second typeface to a layout.</li>
+                            <li>Color the logo tile anything other than Vault Teal.</li>
+                            <li>Apply Compliance Green decoratively.</li>
+                            <li>Combine more than two of the sanctioned gradients on a single surface.</li>
+                            <li>Set the wordmark in all caps or all lowercase.</li>
+                            <li>Use stock images of paper stacks (we&rsquo;re against paper).</li>
+                            <li>Drop shadows from the logo or run it over a busy photo.</li>
+                            <li>Use exclamation marks. We&rsquo;re calm, not excited.</li>
+                            <li>Ship a hero without a clear, specific number.</li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+
+            <!-- =========================================================
+                 19. ASSETS
+                 ========================================================= -->
+            <section class="brand-section" id="assets">
+                <p class="section-num">19</p>
+                <h2>Asset downloads</h2>
+                <p class="section-lede">Everything a designer needs in one place.</p>
+
+                <ul class="asset-list">
+                    <li>
+                        <strong>Logo, SVG</strong>
+                        <p>The master file. Scales infinitely. Use this for print at any size.</p>
+                        <a class="btn small" href="/static/images/logo.svg" download>Download</a>
+                    </li>
+                    <li>
+                        <strong>Brand book, PDF</strong>
+                        <p>This page, print-ready. Hand it to outside designers and vendors.</p>
+                        <a class="btn small" href="/static/brand/transactvault-brand-book.pdf" download>Download</a>
+                    </li>
+                    <li>
+                        <strong>Color tokens, CSS</strong>
+                        <p>The full set of design tokens as CSS custom properties.</p>
+                        <a class="btn small" href="/static/css/main.css">View source</a>
+                    </li>
+                    <li>
+                        <strong>Inter font family</strong>
+                        <p>Free under the SIL Open Font License. Pull from rsms.me or Google Fonts.</p>
+                        <a class="btn small" href="https://rsms.me/inter/" rel="external noopener">rsms.me/inter</a>
+                    </li>
+                </ul>
+            </section>
+
+            <!-- =========================================================
+                 20. CHANGELOG
+                 ========================================================= -->
+            <section class="brand-section" id="changelog">
+                <p class="section-num">20</p>
+                <h2>Versioning</h2>
+                <p class="section-lede">When the brand moves, the book moves with it.</p>
+
+                <table class="changelog-table">
+                    <thead>
+                        <tr><th>Version</th><th>Date</th><th>Notes</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>1.0</td>
+                            <td>May 2026</td>
+                            <td>Initial brand book. Voice, messaging, logo, color, typography, gradients, radius, spacing, elevation, motion, iconography, components, URL/email standards, sample applications, do&rsquo;s and don&rsquo;ts, asset downloads.</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <p class="end-note">Questions, additions, or things that aren&rsquo;t covered yet? Email <a href="mailto:hello@transactvault.app">hello@transactvault.app</a> and we&rsquo;ll get them into the next revision.</p>
+            </section>
+        </article>
+    </div>
+</main>
+
+{% include "components/public_footer.html" %}
+{% endblock %}

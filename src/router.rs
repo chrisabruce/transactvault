@@ -22,6 +22,7 @@ pub fn build(state: AppState) -> Router {
     let public = Router::new()
         .route("/", get(marketing::landing))
         .route("/pricing", get(marketing::pricing))
+        .route("/brand", get(marketing::brand))
         .route("/login", get(auth::login_form).post(auth::login))
         .route("/signup", get(auth::signup_form).post(auth::signup))
         .route("/signup/check-email", get(auth::signup_check_email))

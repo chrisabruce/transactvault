@@ -39,6 +39,17 @@ pub struct PricingPage<'a> {
     pub plans: &'a [PricingPlan],
 }
 
+/// Public brand book at `/brand` — the canonical guide for designers,
+/// vendors, and the internal team. Renders the same content as the
+/// downloadable PDF kept at `/static/brand/transactvault-brand-book.pdf`.
+#[derive(Template)]
+#[template(path = "pages/brand.html")]
+pub struct BrandPage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+    pub signed_in: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct PricingPlan {
     pub slug: &'static str,
