@@ -40,6 +40,18 @@ UPDATE checklist_item SET
     required   = false
     WHERE group_slug IS NONE OR group_slug = NONE;
 
+-- Migrate legacy `completed`/`completed_at`/`completed_by` to the new
+-- approval workflow. `completed=true` rows become approved (with the same
+-- timestamp + reviewer); everything else starts as pending. We do this
+-- BEFORE the OVERWRITE+ASSERT below so existing rows don't get rejected.
+UPDATE checklist_item SET
+    approval_status = IF completed = true THEN 'approved' ELSE 'pending' END,
+    reviewed_at     = completed_at,
+    reviewed_by     = completed_by
+    WHERE approval_status IS NONE OR approval_status = NONE;
+-- Drop the old columns so SCHEMAFULL doesn't reject inserts that omit them.
+UPDATE checklist_item UNSET completed, completed_at, completed_by;
+
 -- Documents previously had a `category` field. Map it onto `form_code`,
 -- which is the new canonical name.
 UPDATE document SET form_code = string::uppercase(category)
@@ -149,13 +161,14 @@ DEFINE FIELD OVERWRITE group_slug   ON checklist_item TYPE string DEFAULT "addit
         "mls", "contracts", "mandatory", "special",
         "additional", "if_applicable", "escrow", "reports", "release"
     ];
-DEFINE FIELD OVERWRITE position     ON checklist_item TYPE int DEFAULT 0;
-DEFINE FIELD OVERWRITE required     ON checklist_item TYPE bool DEFAULT false;
-DEFINE FIELD OVERWRITE completed    ON checklist_item TYPE bool DEFAULT false;
-DEFINE FIELD OVERWRITE completed_at ON checklist_item TYPE option<datetime>;
-DEFINE FIELD OVERWRITE completed_by ON checklist_item TYPE option<record<user>>;
-DEFINE FIELD OVERWRITE created_at   ON checklist_item TYPE datetime DEFAULT time::now();
-DEFINE FIELD OVERWRITE updated_at   ON checklist_item TYPE datetime DEFAULT time::now() VALUE time::now();
+DEFINE FIELD OVERWRITE position        ON checklist_item TYPE int DEFAULT 0;
+DEFINE FIELD OVERWRITE required        ON checklist_item TYPE bool DEFAULT false;
+DEFINE FIELD OVERWRITE approval_status ON checklist_item TYPE string DEFAULT "pending"
+    ASSERT $value IN ["pending", "approved", "denied"];
+DEFINE FIELD OVERWRITE reviewed_at     ON checklist_item TYPE option<datetime>;
+DEFINE FIELD OVERWRITE reviewed_by     ON checklist_item TYPE option<record<user>>;
+DEFINE FIELD OVERWRITE created_at      ON checklist_item TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE updated_at      ON checklist_item TYPE datetime DEFAULT time::now() VALUE time::now();
 
 DEFINE TABLE OVERWRITE has_item SCHEMAFULL TYPE RELATION FROM transaction TO checklist_item;
 
@@ -176,6 +189,19 @@ DEFINE TABLE OVERWRITE has_document SCHEMAFULL TYPE RELATION FROM transaction   
 DEFINE TABLE OVERWRITE for_item     SCHEMAFULL TYPE RELATION FROM document       TO checklist_item;
 DEFINE TABLE OVERWRITE uploaded     SCHEMAFULL TYPE RELATION FROM user           TO document;
 DEFINE TABLE OVERWRITE version_of   SCHEMAFULL TYPE RELATION FROM document       TO document;
+
+-- ----------------------------------------------------------------------------
+-- Comments — free-text notes attached to either a transaction or a
+-- single checklist_item. The polymorphic `target` field carries the
+-- record link so a single thread query can hydrate either parent type.
+-- ----------------------------------------------------------------------------
+DEFINE TABLE OVERWRITE comment SCHEMAFULL;
+DEFINE FIELD OVERWRITE body       ON comment TYPE string ASSERT string::len($value) >= 1;
+DEFINE FIELD OVERWRITE target     ON comment TYPE record
+    ASSERT meta::tb($value) IN ["transaction", "checklist_item"];
+DEFINE FIELD OVERWRITE author     ON comment TYPE record<user>;
+DEFINE FIELD OVERWRITE created_at ON comment TYPE datetime DEFAULT time::now();
+DEFINE INDEX OVERWRITE idx_comment_target ON comment FIELDS target;
 
 -- ----------------------------------------------------------------------------
 -- Audit log — append-only record of security-relevant events. Every signup,

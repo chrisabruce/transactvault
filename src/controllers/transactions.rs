@@ -21,8 +21,8 @@ use crate::models::{
 };
 use crate::state::AppState;
 use crate::templates::{
-    AppHeader, ChecklistGroup, ChecklistRow, CompliancePanel, DashboardPage, SearchDocument,
-    SearchPage, TransactionNewPage, TransactionShowPage, TransactionsListPage,
+    AppHeader, ChecklistGroup, ChecklistRow, CommentView, CompliancePanel, DashboardPage,
+    SearchDocument, SearchPage, TransactionNewPage, TransactionShowPage, TransactionsListPage,
 };
 
 // ---------------------------------------------------------------------------
@@ -293,6 +293,7 @@ pub async fn show(
     let groups = build_grouped_checklist(&state, items).await?;
     let owner_name = load_transaction_owner_name(&state, &tx.id).await?;
     let available_forms = available_forms(&groups);
+    let transaction_comments = load_comments(&state, &tx.id).await?;
 
     let header = AppHeader::new(
         &user.name,
@@ -303,6 +304,7 @@ pub async fn show(
     )
     .with_super_admin(crate::controllers::is_super_admin(&state, &user));
     let tx_key = crate::record_key(&tx.id);
+    let can_review = user.role.can_review();
     render(&TransactionShowPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
@@ -314,6 +316,8 @@ pub async fn show(
         transaction: tx,
         available_forms,
         statuses: TransactionStatus::all().to_vec(),
+        transaction_comments,
+        can_review,
     })
 }
 
@@ -518,20 +522,26 @@ async fn build_grouped_checklist(
     .await?;
 
     let audit_labels = futures::future::try_join_all(items.iter().map(|item| async move {
-        match (&item.completed_by, item.completed_at) {
+        match (&item.reviewed_by, item.reviewed_at) {
             (Some(uid), Some(when)) => {
                 let profile: Option<NameOnly> =
                     state.db.select(uid.clone()).await.map_err(AppError::from)?;
                 let who = profile.map(|p| p.name).unwrap_or_else(|| "Someone".into());
-                Ok::<_, AppError>(format!(
-                    "Completed by {who} on {}",
-                    when.format("%b %-d, %Y")
-                ))
+                let verb = match item.status() {
+                    crate::models::ApprovalStatus::Approved => "Approved",
+                    crate::models::ApprovalStatus::Denied => "Denied",
+                    crate::models::ApprovalStatus::Pending => "Reviewed",
+                };
+                Ok::<_, AppError>(format!("{verb} by {who} on {}", when.format("%b %-d, %Y")))
             }
             _ => Ok::<_, AppError>(String::new()),
         }
     }))
     .await?;
+
+    let comments_per_item =
+        futures::future::try_join_all(items.iter().map(|item| load_comments(state, &item.id)))
+            .await?;
 
     // Bucket rows into groups, in the canonical render order
     // (FormGroup::ORDERED matches the section order in the printed CAR
@@ -542,7 +552,12 @@ async fn build_grouped_checklist(
         .map(|g| (*g, Vec::new()))
         .collect();
 
-    for ((item, docs), audit) in items.into_iter().zip(docs_per_item).zip(audit_labels) {
+    for (((item, docs), audit), comments) in items
+        .into_iter()
+        .zip(docs_per_item)
+        .zip(audit_labels)
+        .zip(comments_per_item)
+    {
         let group = FormGroup::parse(&item.group_slug).unwrap_or(FormGroup::AdditionalDisclosures);
         let form = item.form_code.as_deref().and_then(forms::lookup);
         let row = ChecklistRow {
@@ -550,6 +565,7 @@ async fn build_grouped_checklist(
             form,
             audit_label: audit,
             documents: docs,
+            comments,
         };
         if let Some((_, bucket)) = buckets.iter_mut().find(|(g, _)| *g == group) {
             bucket.push(row);
@@ -578,6 +594,38 @@ async fn build_grouped_checklist(
         .map(|(g, items)| ChecklistGroup::build(g, items))
         .collect();
     Ok(groups)
+}
+
+/// Load comments attached to a single target (transaction or checklist
+/// item), returning denormalised rows ready for template rendering.
+pub async fn load_comments(
+    state: &AppState,
+    target: &RecordId,
+) -> Result<Vec<CommentView>, AppError> {
+    let mut response = state
+        .db
+        .query(
+            "SELECT body, created_at, author.name AS author_name \
+             FROM comment WHERE target = $t ORDER BY created_at ASC",
+        )
+        .bind(("t", target.clone()))
+        .await?;
+    #[derive(Debug, serde::Deserialize, SurrealValue)]
+    struct Row {
+        body: String,
+        author_name: Option<String>,
+        created_at: chrono::DateTime<chrono::Utc>,
+    }
+    let rows: Vec<Row> = response.take(0).unwrap_or_default();
+    let comments = rows
+        .into_iter()
+        .map(|r| CommentView {
+            body: r.body,
+            author_name: r.author_name.unwrap_or_else(|| "Someone".into()),
+            created_at: r.created_at,
+        })
+        .collect();
+    Ok(comments)
 }
 
 /// All CAR forms not currently on this transaction's checklist — feeds the
@@ -630,7 +678,7 @@ async fn count_needs_attention(
                 .db
                 .query(
                     "SELECT count() FROM $t->has_item->checklist_item \
-                     WHERE required = true AND completed = false GROUP ALL",
+                     WHERE required = true AND approval_status != 'approved' GROUP ALL",
                 )
                 .bind(("t", t.id.clone()))
                 .await?;

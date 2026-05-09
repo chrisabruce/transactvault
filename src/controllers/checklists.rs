@@ -119,11 +119,31 @@ pub async fn create(
     Ok(Redirect::to(&format!("/app/transactions/{id}")))
 }
 
-pub async fn toggle(
+pub async fn approve(
     State(state): State<AppState>,
     user: CurrentUser,
     Path(item_id): Path<String>,
 ) -> Result<Redirect, AppError> {
+    set_approval(&state, &user, item_id, "approved").await
+}
+
+pub async fn deny(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(item_id): Path<String>,
+) -> Result<Redirect, AppError> {
+    set_approval(&state, &user, item_id, "denied").await
+}
+
+async fn set_approval(
+    state: &AppState,
+    user: &CurrentUser,
+    item_id: String,
+    new_status: &'static str,
+) -> Result<Redirect, AppError> {
+    if !user.role.can_review() {
+        return Err(AppError::Forbidden);
+    }
     let item_ref = RecordId::new("checklist_item", item_id.as_str());
 
     // Find the owning transaction via the incoming `has_item` edge so we
@@ -135,18 +155,19 @@ pub async fn toggle(
         .await?;
     let txs: Vec<RecordId> = response.take(0)?;
     let tx_id = txs.into_iter().next().ok_or(AppError::NotFound)?;
-    let _ = authorize_transaction(&state, &user, &tx_id).await?;
+    let _ = authorize_transaction(state, user, &tx_id).await?;
 
     state
         .db
         .query(
             "UPDATE $c SET
-                completed    = !completed,
-                completed_at = IF !completed THEN time::now() ELSE NONE END,
-                completed_by = IF !completed THEN $u ELSE NONE END",
+                approval_status = $s,
+                reviewed_at     = time::now(),
+                reviewed_by     = $u",
         )
         .bind(("c", item_ref))
         .bind(("u", user.user_id.clone()))
+        .bind(("s", new_status))
         .await?;
 
     let key = crate::record_key(&tx_id);

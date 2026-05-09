@@ -291,6 +291,10 @@ pub struct TransactionShowPage<'a> {
     /// "Add optional form" picker.
     pub available_forms: Vec<&'static CarForm>,
     pub statuses: Vec<TransactionStatus>,
+    /// Comments attached to the transaction itself (not to a specific item).
+    pub transaction_comments: Vec<CommentView>,
+    /// Whether the viewing user can approve/deny rows (broker / TC).
+    pub can_review: bool,
 }
 
 /// One row within a checklist group on the transaction show page. Bundles
@@ -302,6 +306,21 @@ pub struct ChecklistRow {
     pub form: Option<&'static CarForm>,
     pub audit_label: String,
     pub documents: Vec<Document>,
+    pub comments: Vec<CommentView>,
+}
+
+/// Display-friendly view of a single comment (denormalised author name).
+#[derive(Debug, Clone)]
+pub struct CommentView {
+    pub body: String,
+    pub author_name: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl CommentView {
+    pub fn date_label(&self) -> String {
+        self.created_at.format("%b %-d, %Y").to_string()
+    }
 }
 
 /// One section of the grouped checklist (e.g. Mandatory Disclosures).
@@ -321,11 +340,11 @@ pub struct ChecklistGroup {
 impl ChecklistGroup {
     pub fn build(group: FormGroup, items: Vec<ChecklistRow>) -> Self {
         let total = items.len();
-        let completed = items.iter().filter(|r| r.item.completed).count();
+        let completed = items.iter().filter(|r| r.item.is_approved()).count();
         let required_total = items.iter().filter(|r| r.item.required).count();
         let required_completed = items
             .iter()
-            .filter(|r| r.item.required && r.item.completed)
+            .filter(|r| r.item.required && r.item.is_approved())
             .count();
         let percent = if total == 0 {
             0
@@ -410,20 +429,24 @@ pub struct TeamPage<'a> {
 
 #[derive(Debug, Clone)]
 pub struct Member {
+    pub user_key: String,
     pub name: String,
     pub email: String,
     pub role: Role,
     pub initials: String,
+    pub is_self: bool,
 }
 
 impl Member {
-    pub fn new(name: String, email: String, role: Role) -> Self {
+    pub fn new(user_key: String, name: String, email: String, role: Role, is_self: bool) -> Self {
         let initials = initials(&name);
         Self {
+            user_key,
             name,
             email,
             role,
             initials,
+            is_self,
         }
     }
 }

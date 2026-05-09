@@ -65,11 +65,7 @@
 
                         <ul class="checklist" role="list">
                             {% for row in group.items %}
-                                <li class="checklist-item{% if row.item.completed %} completed{% endif %}{% if row.item.required %} is-required{% endif %}">
-                                    <form method="post" action="/app/checklist/{{ row.item.url_key() }}/toggle">
-                                        <button class="toggle" type="submit"
-                                                aria-label="{% if row.item.completed %}Mark incomplete{% else %}Mark complete{% endif %}">✓</button>
-                                    </form>
+                                <li class="checklist-item is-{{ row.item.approval_status }}{% if row.item.required %} is-required{% endif %}">
                                     <section class="checklist-text">
                                         <p class="title">
                                             {% match row.form %}{% when Some with (f) %}<strong class="form-code">{{ f.code }}</strong> · {% when None %}{% endmatch %}{{ row.item.title }}
@@ -78,7 +74,7 @@
                                         {% match row.form %}{% when Some with (f) %}
                                             <p class="meta">{{ f.description }}</p>
                                         {% when None %}{% endmatch %}
-                                        {% if row.item.completed %}
+                                        {% if row.item.is_approved() || row.item.is_denied() %}
                                             <p class="audit">{{ row.audit_label }}</p>
                                         {% endif %}
                                         {% if !row.documents.is_empty() %}
@@ -94,8 +90,44 @@
                                                 {% endfor %}
                                             </ul>
                                         {% endif %}
+
+                                        {% if !row.comments.is_empty() %}
+                                            <ul class="item-comments" role="list">
+                                                {% for c in row.comments %}
+                                                    <li>
+                                                        <p class="comment-body">{{ c.body }}</p>
+                                                        <small class="comment-meta">{{ c.author_name }} · {{ c.date_label() }}</small>
+                                                    </li>
+                                                {% endfor %}
+                                            </ul>
+                                        {% endif %}
+
+                                        <details class="item-comment-form">
+                                            <summary class="btn ghost small">Comment</summary>
+                                            <form method="post" action="/app/checklist/{{ row.item.url_key() }}/comments" class="inline-comment">
+                                                <label class="visually-hidden" for="comment-{{ row.item.url_key() }}">Comment</label>
+                                                <textarea id="comment-{{ row.item.url_key() }}" name="body" rows="2" required maxlength="4000" placeholder="Leave a note…"></textarea>
+                                                <button type="submit" class="btn small">Post</button>
+                                            </form>
+                                        </details>
                                     </section>
                                     <section class="checklist-actions">
+                                        {% if can_review %}
+                                            <form method="post" action="/app/checklist/{{ row.item.url_key() }}/approve" class="review-action">
+                                                <button class="btn small approve{% if row.item.is_approved() %} active{% endif %}" type="submit">
+                                                    {% if row.item.is_approved() %}Approved{% else %}Approve{% endif %}
+                                                </button>
+                                            </form>
+                                            <form method="post" action="/app/checklist/{{ row.item.url_key() }}/deny" class="review-action">
+                                                <button class="btn small deny{% if row.item.is_denied() %} active{% endif %}" type="submit">
+                                                    {% if row.item.is_denied() %}Denied{% else %}Deny{% endif %}
+                                                </button>
+                                            </form>
+                                        {% else %}
+                                            <span class="status-pill status-{{ row.item.approval_status }}">
+                                                {% if row.item.is_approved() %}Approved{% else if row.item.is_denied() %}Denied{% else %}Pending review{% endif %}
+                                            </span>
+                                        {% endif %}
                                         <details>
                                             <summary class="btn ghost small">Upload</summary>
                                             <form method="post" enctype="multipart/form-data"
@@ -134,6 +166,27 @@
                         <button type="submit" class="btn small">Add</button>
                     </form>
                 </section>
+            </section>
+
+            <section class="panel" id="transaction-comments" aria-labelledby="comments-heading">
+                <h2 id="comments-heading">Comments</h2>
+                {% if transaction_comments.is_empty() %}
+                    <p class="meta">No comments yet.</p>
+                {% else %}
+                    <ul class="comment-thread" role="list">
+                        {% for c in transaction_comments %}
+                            <li>
+                                <p class="comment-body">{{ c.body }}</p>
+                                <small class="comment-meta">{{ c.author_name }} · {{ c.date_label() }}</small>
+                            </li>
+                        {% endfor %}
+                    </ul>
+                {% endif %}
+                <form method="post" action="/app/transactions/{{ transaction_key }}/comments" class="comment-compose">
+                    <label class="visually-hidden" for="tx-comment">Comment</label>
+                    <textarea id="tx-comment" name="body" rows="3" required maxlength="4000" placeholder="Leave a note on this transaction…"></textarea>
+                    <button type="submit" class="btn small">Post comment</button>
+                </form>
             </section>
         </section>
 

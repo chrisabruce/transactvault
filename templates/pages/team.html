@@ -48,10 +48,22 @@
                 <li class="member-card">
                     <span class="avatar" aria-hidden="true">{{ member.initials }}</span>
                     <section>
-                        <p class="name">{{ member.name }}</p>
+                        <p class="name">{{ member.name }}{% if member.is_self %} <small class="meta">(you)</small>{% endif %}</p>
                         <p class="email">{{ member.email }}</p>
                     </section>
-                    <span class="chip role-{{ member.role.as_str() }}">{{ member.role.label() }}</span>
+                    {% if header.role.can_change_roles() && !member.is_self %}
+                        <form method="post" action="/app/team/{{ member.user_key }}/role" class="role-change">
+                            <label class="visually-hidden" for="role-{{ member.user_key }}">Role for {{ member.name }}</label>
+                            <select id="role-{{ member.user_key }}" name="role">
+                                <option value="agent"{% if member.role.as_str() == "agent" %} selected{% endif %}>Agent</option>
+                                <option value="coordinator"{% if member.role.as_str() == "coordinator" %} selected{% endif %}>Transaction Coordinator</option>
+                                <option value="broker"{% if member.role.as_str() == "broker" %} selected{% endif %}>Broker</option>
+                            </select>
+                            <button type="submit" class="btn small">Update</button>
+                        </form>
+                    {% else %}
+                        <span class="chip role-{{ member.role.as_str() }}">{{ member.role.label() }}</span>
+                    {% endif %}
                 </li>
             {% endfor %}
         </ul>

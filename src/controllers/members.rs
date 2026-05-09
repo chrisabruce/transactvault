@@ -1,9 +1,10 @@
 //! Team page — brokers view and invite members.
 
 use axum::Form;
-use axum::extract::State;
-use axum::response::Html;
+use axum::extract::{Path, State};
+use axum::response::{Html, Redirect};
 use serde::Deserialize;
+use surrealdb::types::RecordId;
 
 use crate::auth::{CurrentUser, Role};
 use crate::controllers::auth::create_invitation;
@@ -119,7 +120,7 @@ async fn load_members(state: &AppState, user: &CurrentUser) -> Result<Vec<Member
     let mut response = state
         .db
         .query(
-            "SELECT in.name AS name, in.email AS email, role
+            "SELECT in AS user_id, in.name AS name, in.email AS email, role
              FROM works_at WHERE out = $b",
         )
         .bind(("b", user.brokerage_id.clone()))
@@ -127,6 +128,7 @@ async fn load_members(state: &AppState, user: &CurrentUser) -> Result<Vec<Member
     use surrealdb::types::SurrealValue;
     #[derive(serde::Deserialize, SurrealValue)]
     struct Row {
+        user_id: RecordId,
         name: String,
         email: String,
         role: String,
@@ -135,9 +137,86 @@ async fn load_members(state: &AppState, user: &CurrentUser) -> Result<Vec<Member
 
     let members = rows
         .into_iter()
-        .filter_map(|r| Role::parse(&r.role).map(|role| Member::new(r.name, r.email, role)))
+        .filter_map(|r| {
+            Role::parse(&r.role).map(|role| {
+                let is_self = r.user_id == user.user_id;
+                let key = crate::record_key(&r.user_id);
+                Member::new(key, r.name, r.email, role, is_self)
+            })
+        })
         .collect();
     Ok(members)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChangeRoleInput {
+    pub role: String,
+}
+
+pub async fn change_role(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(target_user_key): Path<String>,
+    Form(input): Form<ChangeRoleInput>,
+) -> Result<Redirect, AppError> {
+    if !user.role.can_change_roles() {
+        return Err(AppError::Forbidden);
+    }
+
+    let new_role = Role::parse(&input.role)
+        .ok_or_else(|| AppError::invalid("Role must be broker, agent, or coordinator."))?;
+
+    let target_user_id = RecordId::new("user", target_user_key.as_str());
+
+    // Verify the target is actually a member of this brokerage. The query
+    // returns the existing role if the works_at edge is found.
+    let mut existing_q = state
+        .db
+        .query(
+            "SELECT VALUE role FROM works_at \
+             WHERE in = $u AND out = $b LIMIT 1",
+        )
+        .bind(("u", target_user_id.clone()))
+        .bind(("b", user.brokerage_id.clone()))
+        .await?;
+    let existing: Vec<String> = existing_q.take(0)?;
+    let existing_role_str = existing.into_iter().next().ok_or(AppError::NotFound)?;
+    let existing_role = Role::parse(&existing_role_str).ok_or(AppError::NotFound)?;
+
+    // Guard: prevent demoting the last broker. We count brokers in this
+    // brokerage; if the target is a broker and there's only one, reject.
+    if existing_role.is_broker() && !new_role.is_broker() {
+        let mut count_q = state
+            .db
+            .query(
+                "SELECT count() FROM works_at \
+                 WHERE out = $b AND role = 'broker' GROUP ALL",
+            )
+            .bind(("b", user.brokerage_id.clone()))
+            .await?;
+        use surrealdb::types::SurrealValue;
+        #[derive(serde::Deserialize, SurrealValue)]
+        struct CountRow {
+            count: i64,
+        }
+        let count: Option<CountRow> = count_q.take(0)?;
+        let broker_count = count.map(|c| c.count).unwrap_or(0);
+        if broker_count <= 1 {
+            return Err(AppError::invalid(
+                "There must be at least one broker on the brokerage.",
+            ));
+        }
+    }
+
+    state
+        .db
+        .query("UPDATE works_at SET role = $r WHERE in = $u AND out = $b")
+        .bind(("u", target_user_id))
+        .bind(("b", user.brokerage_id.clone()))
+        .bind(("r", new_role.as_str().to_string()))
+        .await?;
+
+    Ok(Redirect::to("/app/team"))
 }
 
 async fn load_pending_invitations(

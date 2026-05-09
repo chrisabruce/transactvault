@@ -3,6 +3,7 @@
 pub mod admin;
 pub mod auth;
 pub mod checklists;
+pub mod comments;
 pub mod documents;
 pub mod health;
 pub mod marketing;

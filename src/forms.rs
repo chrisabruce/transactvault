@@ -822,9 +822,7 @@ fn sales_side(sales: SalesType) -> SalesSide {
         // Pure listing-side deals
         SalesType::Listing | SalesType::LeaseLandlord => SalesSide::Listing,
         // Pure buyer/tenant-side deals
-        SalesType::Purchase | SalesType::LeaseTenant | SalesType::Referral => {
-            SalesSide::Purchase
-        }
+        SalesType::Purchase | SalesType::LeaseTenant | SalesType::Referral => SalesSide::Purchase,
         // Dual-representation deals
         SalesType::ListingAndPurchase | SalesType::LeaseTenantAndLandlord => SalesSide::Both,
     }
@@ -1294,8 +1292,7 @@ const REO_LISTING: &[DefaultItem] = &[
     item("REO", FormGroup::SpecialConditionsDisclosures, true),
     item("REOL", FormGroup::SpecialConditionsDisclosures, true),
 ];
-const REO_PURCHASE: &[DefaultItem] =
-    &[item("REO", FormGroup::SpecialConditionsDisclosures, true)];
+const REO_PURCHASE: &[DefaultItem] = &[item("REO", FormGroup::SpecialConditionsDisclosures, true)];
 
 fn special_condition_items(c: SpecialSalesCondition, side: SalesSide) -> Vec<DefaultItem> {
     let listing: &[DefaultItem] = match c {

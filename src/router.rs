@@ -14,7 +14,7 @@ use tower_http::trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse, Tr
 use tracing::Level;
 
 use crate::controllers::{
-    admin, auth, checklists, documents, health, marketing, members, transactions,
+    admin, auth, checklists, comments, documents, health, marketing, members, transactions,
 };
 use crate::state::AppState;
 
@@ -48,11 +48,21 @@ pub fn build(state: AppState) -> Router {
         )
         .route("/app/transactions/{id}/export", get(documents::export_zip))
         .route("/app/transactions/{id}/checklist", post(checklists::create))
-        .route("/app/checklist/{id}/toggle", post(checklists::toggle))
+        .route("/app/checklist/{id}/approve", post(checklists::approve))
+        .route("/app/checklist/{id}/deny", post(checklists::deny))
+        .route(
+            "/app/checklist/{id}/comments",
+            post(comments::create_on_item),
+        )
+        .route(
+            "/app/transactions/{id}/comments",
+            post(comments::create_on_transaction),
+        )
         .route("/app/transactions/{id}/documents", post(documents::upload))
         .route("/app/documents/{id}/download", get(documents::download))
         .route("/app/team", get(members::list))
-        .route("/app/team/invite", post(members::invite));
+        .route("/app/team/invite", post(members::invite))
+        .route("/app/team/{user_id}/role", post(members::change_role));
 
     let admin_routes = Router::new()
         .route("/admin", get(admin::users))

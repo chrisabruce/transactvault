@@ -42,6 +42,16 @@ impl Role {
         matches!(self, Role::Broker)
     }
 
+    /// Brokers and TCs can approve/deny checklist items.
+    pub fn can_review(self) -> bool {
+        matches!(self, Role::Broker | Role::Coordinator)
+    }
+
+    /// Only brokers can change other members' roles.
+    pub fn can_change_roles(self) -> bool {
+        matches!(self, Role::Broker)
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Role::Broker => "broker",
