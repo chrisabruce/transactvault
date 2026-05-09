@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block title %}{% if success %}Verified{% else %}Verification problem{% endif %} — {{ app_name }}{% endblock %}
+
+{% block body %}
+{% include "components/public_header.html" %}
+
+<main class="auth-shell">
+    <section class="auth-card" aria-labelledby="verify-heading">
+        {% if success %}
+            <h1 id="verify-heading">You're verified</h1>
+            <p>{{ message }}</p>
+            <p><a class="btn" href="/app">Open dashboard</a></p>
+        {% else %}
+            <h1 id="verify-heading">Verification didn't go through</h1>
+            <p class="alert error" role="alert">{{ message }}</p>
+            <p>You can <a href="/signup">sign up again</a> to receive a fresh verification link.</p>
+        {% endif %}
+    </section>
+</main>
+{% endblock %}

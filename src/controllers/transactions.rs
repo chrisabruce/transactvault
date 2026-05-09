@@ -39,7 +39,12 @@ pub async fn dashboard(
     let total = transactions.len();
     let open_count = transactions
         .iter()
-        .filter(|t| matches!(t.status_enum(), TransactionStatus::Active | TransactionStatus::Pending))
+        .filter(|t| {
+            matches!(
+                t.status_enum(),
+                TransactionStatus::Active | TransactionStatus::Pending
+            )
+        })
         .count();
     let complete_count = transactions
         .iter()
@@ -56,7 +61,8 @@ pub async fn dashboard(
         user.role,
         &brokerage.name,
         "dashboard",
-    );
+    )
+    .with_super_admin(crate::controllers::is_super_admin(&state, &user));
     render(&DashboardPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
@@ -118,7 +124,8 @@ pub async fn list(
         user.role,
         &brokerage.name,
         "transactions",
-    );
+    )
+    .with_super_admin(crate::controllers::is_super_admin(&state, &user));
     render(&TransactionsListPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
@@ -145,7 +152,8 @@ pub async fn new_form(
         user.role,
         &brokerage.name,
         "transactions",
-    );
+    )
+    .with_super_admin(crate::controllers::is_super_admin(&state, &user));
     render(&TransactionNewPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
@@ -224,11 +232,23 @@ pub async fn create(
     let new_tx = NewTransaction {
         property_address,
         city: input.city.unwrap_or_default().trim().to_string(),
-        apn: input.apn.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
-        postal_code: input.postal_code.map(|p| p.trim().to_string()).filter(|p| !p.is_empty()),
+        apn: input
+            .apn
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        postal_code: input
+            .postal_code
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty()),
         price_cents,
-        client_name: input.client_name.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
-        mls_number: input.mls_number.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+        client_name: input
+            .client_name
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        mls_number: input
+            .mls_number
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
         office_file_number: input
             .office_file_number
             .map(|s| s.trim().to_string())
@@ -280,7 +300,8 @@ pub async fn show(
         user.role,
         &brokerage.name,
         "transactions",
-    );
+    )
+    .with_super_admin(crate::controllers::is_super_admin(&state, &user));
     let tx_key = crate::record_key(&tx.id);
     render(&TransactionShowPage {
         app_name: &state.config.app_name,
@@ -374,7 +395,8 @@ pub async fn search(
         user.role,
         &brokerage.name,
         "search",
-    );
+    )
+    .with_super_admin(crate::controllers::is_super_admin(&state, &user));
     render(&SearchPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
@@ -484,37 +506,32 @@ async fn build_grouped_checklist(
 ) -> Result<Vec<ChecklistGroup>, AppError> {
     // Per-item documents — one query per item is fine for the volumes we
     // expect; cheaper than a single mega-query that has to be split client-side.
-    let docs_per_item =
-        futures::future::try_join_all(items.iter().map(|item| async {
-            let mut r = state
-                .db
-                .query("SELECT * FROM $i<-for_item<-document ORDER BY version DESC, created_at DESC")
-                .bind(("i", item.id.clone()))
-                .await?;
-            let docs: Vec<Document> = r.take(0).unwrap_or_default();
-            Ok::<Vec<Document>, AppError>(docs)
-        }))
-        .await?;
+    let docs_per_item = futures::future::try_join_all(items.iter().map(|item| async {
+        let mut r = state
+            .db
+            .query("SELECT * FROM $i<-for_item<-document ORDER BY version DESC, created_at DESC")
+            .bind(("i", item.id.clone()))
+            .await?;
+        let docs: Vec<Document> = r.take(0).unwrap_or_default();
+        Ok::<Vec<Document>, AppError>(docs)
+    }))
+    .await?;
 
-    let audit_labels =
-        futures::future::try_join_all(items.iter().map(|item| async move {
-            match (&item.completed_by, item.completed_at) {
-                (Some(uid), Some(when)) => {
-                    let profile: Option<NameOnly> = state
-                        .db
-                        .select(uid.clone())
-                        .await
-                        .map_err(AppError::from)?;
-                    let who = profile.map(|p| p.name).unwrap_or_else(|| "Someone".into());
-                    Ok::<_, AppError>(format!(
-                        "Completed by {who} on {}",
-                        when.format("%b %-d, %Y")
-                    ))
-                }
-                _ => Ok::<_, AppError>(String::new()),
+    let audit_labels = futures::future::try_join_all(items.iter().map(|item| async move {
+        match (&item.completed_by, item.completed_at) {
+            (Some(uid), Some(when)) => {
+                let profile: Option<NameOnly> =
+                    state.db.select(uid.clone()).await.map_err(AppError::from)?;
+                let who = profile.map(|p| p.name).unwrap_or_else(|| "Someone".into());
+                Ok::<_, AppError>(format!(
+                    "Completed by {who} on {}",
+                    when.format("%b %-d, %Y")
+                ))
             }
-        }))
-        .await?;
+            _ => Ok::<_, AppError>(String::new()),
+        }
+    }))
+    .await?;
 
     // Bucket rows into groups, in the canonical render order
     // (FormGroup::ORDERED matches the section order in the printed CAR
@@ -525,11 +542,7 @@ async fn build_grouped_checklist(
         .map(|g| (*g, Vec::new()))
         .collect();
 
-    for ((item, docs), audit) in items
-        .into_iter()
-        .zip(docs_per_item.into_iter())
-        .zip(audit_labels.into_iter())
-    {
+    for ((item, docs), audit) in items.into_iter().zip(docs_per_item).zip(audit_labels) {
         let group = FormGroup::parse(&item.group_slug).unwrap_or(FormGroup::AdditionalDisclosures);
         let form = item.form_code.as_deref().and_then(forms::lookup);
         let row = ChecklistRow {
@@ -592,7 +605,10 @@ async fn load_transaction_owner_name(
         .bind(("t", tx_id.clone()))
         .await?;
     let names: Vec<String> = response.take(0).unwrap_or_default();
-    Ok(names.into_iter().next().unwrap_or_else(|| "Unassigned".into()))
+    Ok(names
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| "Unassigned".into()))
 }
 
 async fn count_needs_attention(
@@ -601,7 +617,14 @@ async fn count_needs_attention(
 ) -> Result<usize, AppError> {
     let futures = transactions
         .iter()
-        .filter(|t| !matches!(t.status_enum(), TransactionStatus::Sold | TransactionStatus::Canceled | TransactionStatus::Withdrawn))
+        .filter(|t| {
+            !matches!(
+                t.status_enum(),
+                TransactionStatus::Sold
+                    | TransactionStatus::Canceled
+                    | TransactionStatus::Withdrawn
+            )
+        })
         .map(|t| async move {
             let mut r = state
                 .db
@@ -678,9 +701,9 @@ async fn seed_default_checklist(
                 required: di.required,
             })
             .await?;
-        let id = item
-            .map(|c| c.id)
-            .ok_or_else(|| AppError::Internal(anyhow::anyhow!("checklist insert returned nothing")))?;
+        let id = item.map(|c| c.id).ok_or_else(|| {
+            AppError::Internal(anyhow::anyhow!("checklist insert returned nothing"))
+        })?;
         Ok::<RecordId, AppError>(id)
     });
     let ids: Vec<RecordId> = futures::future::try_join_all(item_futures).await?;
@@ -702,7 +725,10 @@ async fn seed_default_checklist(
 
 /// Accept inputs like `$649,000`, `649000`, `649000.00`. Returns 0 on empty.
 fn parse_price_cents(input: &str) -> i64 {
-    let cleaned: String = input.chars().filter(|c| c.is_ascii_digit() || *c == '.').collect();
+    let cleaned: String = input
+        .chars()
+        .filter(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
     if cleaned.is_empty() {
         return 0;
     }

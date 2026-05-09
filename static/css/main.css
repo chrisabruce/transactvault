@@ -1333,6 +1333,124 @@ progress.progress.small {
 .checklist-add .checkbox input { margin: 0; }
 
 /* --------------------------------------------------------------------------
+   Auth: signup honeypot + proof-of-work indicator
+   -------------------------------------------------------------------------- */
+/* Honeypot — visually and accessibly hidden, but still rendered so bots that
+   scrape the DOM and fill every input expose themselves. We deliberately
+   avoid `display:none` so headless browsers see a real, focusable input. */
+.hp {
+    position: absolute;
+    left: -9999px;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+}
+
+.pow-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.45rem 0.75rem;
+    margin: var(--sp-3) 0 var(--sp-2);
+    border-radius: var(--radius);
+    background: var(--color-line-soft);
+    color: var(--color-muted);
+    font-size: var(--fs-xs);
+    transition: background var(--transition), color var(--transition);
+}
+.pow-status .dot {
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 50%;
+    background: var(--color-mute-soft);
+    animation: pow-pulse 1.2s ease-in-out infinite;
+}
+@keyframes pow-pulse {
+    0%, 100% { opacity: 0.4; transform: scale(0.85); }
+    50%      { opacity: 1; transform: scale(1.1); }
+}
+.pow-status.done {
+    background: var(--color-success-soft);
+    color: var(--color-success-ink);
+}
+.pow-status.done .dot {
+    background: var(--color-success);
+    animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+    .pow-status .dot { animation: none; }
+}
+
+.hint-list {
+    text-align: start;
+    color: var(--color-muted);
+    font-size: var(--fs-sm);
+    list-style: disc;
+    margin: var(--sp-3) 0 var(--sp-4);
+    padding-inline-start: 1.25rem;
+}
+.hint-list li { margin-bottom: var(--sp-1); }
+
+/* --------------------------------------------------------------------------
+   Admin tables
+   -------------------------------------------------------------------------- */
+.admin-table-wrap { padding: 0; overflow-x: auto; }
+.admin-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--fs-sm);
+}
+.admin-table th, .admin-table td {
+    padding: 0.7rem 1rem;
+    border-bottom: 1px solid var(--color-line-soft);
+    text-align: start;
+    vertical-align: top;
+}
+.admin-table thead th {
+    position: sticky;
+    top: 0;
+    background: var(--color-surface);
+    color: var(--color-muted);
+    font-weight: 600;
+    font-size: var(--fs-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border-bottom: 1px solid var(--color-line);
+}
+.admin-table code {
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 0.78rem;
+    color: var(--color-ink);
+}
+.admin-table tr:hover { background: var(--color-surface-alt); }
+.admin-table tr.row-warn { background: rgba(180, 83, 9, 0.04); }
+.admin-table tr.row-warn:hover { background: rgba(180, 83, 9, 0.08); }
+.admin-table .ua-cell {
+    max-width: 18rem;
+    color: var(--color-muted);
+    word-break: break-all;
+}
+.admin-table .empty-row {
+    text-align: center;
+    color: var(--color-mute-soft);
+    padding: var(--sp-6);
+}
+
+.audit-pill {
+    display: inline-flex;
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    background: var(--color-line-soft);
+    color: var(--color-muted);
+}
+.audit-pill.ok      { background: var(--color-success-soft); color: var(--color-success-ink); }
+.audit-pill.fail    { background: var(--color-danger-soft);  color: var(--color-danger); }
+.audit-pill.blocked { background: var(--color-warn-soft);    color: var(--color-warn); }
+.audit-pill.neutral { background: var(--color-brand-soft);   color: var(--color-brand-ink); }
+
+/* --------------------------------------------------------------------------
    Misc
    -------------------------------------------------------------------------- */
 .error-page {

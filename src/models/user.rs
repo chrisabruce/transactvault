@@ -13,6 +13,19 @@ pub struct User {
     pub name: String,
     pub password_hash: String,
     pub photo_url: Option<String>,
+
+    /// Email verification gate — accounts start unverified and can't sign in
+    /// until they click the verify link sent at signup.
+    pub email_verified: bool,
+    pub verification_token: Option<String>,
+    pub verification_expires: Option<DateTime<Utc>>,
+
+    /// Forensics — captured from the request that created or last touched
+    /// the user. `last_login_at` is updated on each successful login.
+    pub signup_ip: Option<String>,
+    pub signup_user_agent: Option<String>,
+    pub last_login_at: Option<DateTime<Utc>>,
+
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -45,4 +58,9 @@ pub struct NewUser {
     pub email: String,
     pub name: String,
     pub password_hash: String,
+    pub email_verified: bool,
+    pub verification_token: Option<String>,
+    pub verification_expires: Option<DateTime<Utc>>,
+    pub signup_ip: Option<String>,
+    pub signup_user_agent: Option<String>,
 }

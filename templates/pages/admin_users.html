@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+
+{% block title %}Users — Admin — {{ app_name }}{% endblock %}
+{% block body_class %}page-app page-admin{% endblock %}
+
+{% block body %}
+{% include "components/app_header.html" %}
+
+<main class="app-main">
+    <header class="page-title">
+        <section>
+            <h1>Admin · Users</h1>
+            <p class="subtitle">Cross-brokerage view of every account in the system.</p>
+        </section>
+        <a class="btn secondary" href="/admin/audit">View audit log</a>
+    </header>
+
+    <section class="stat-grid" aria-label="Account totals">
+        <article class="stat-card">
+            <p class="label">Total users</p>
+            <p class="value">{{ total }}</p>
+        </article>
+        <article class="stat-card">
+            <p class="label">Verified</p>
+            <p class="value success">{{ verified_count }}</p>
+        </article>
+        <article class="stat-card">
+            <p class="label">Unverified</p>
+            <p class="value warn">{{ unverified_count }}</p>
+        </article>
+    </section>
+
+    <section class="filter-bar" aria-label="Filters">
+        <form method="get" action="/admin" role="search">
+            <label class="visually-hidden" for="admin-q">Search</label>
+            <input id="admin-q" type="search" name="q" value="{{ query }}" placeholder="Email, name, brokerage, IP…">
+            <select name="status" aria-label="Verification">
+                <option value=""{% if status_filter == "" %} selected{% endif %}>All</option>
+                <option value="verified"{% if status_filter == "verified" %} selected{% endif %}>Verified</option>
+                <option value="unverified"{% if status_filter == "unverified" %} selected{% endif %}>Unverified</option>
+            </select>
+            <button class="btn small secondary" type="submit">Apply</button>
+        </form>
+    </section>
+
+    <section class="panel admin-table-wrap">
+        <table class="admin-table">
+            <thead>
+                <tr>
+                    <th scope="col">Email</th>
+                    <th scope="col">Name</th>
+                    <th scope="col">Brokerage</th>
+                    <th scope="col">Role</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Signup IP</th>
+                    <th scope="col">Created</th>
+                    <th scope="col">Last login</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for u in users %}
+                    <tr class="{% if !u.email_verified %}row-warn{% endif %}">
+                        <td><code>{{ u.email }}</code></td>
+                        <td>{{ u.name }}</td>
+                        <td>{% match u.brokerage_name %}{% when Some with (n) %}{{ n }}{% when None %}—{% endmatch %}</td>
+                        <td>{% match u.role %}{% when Some with (r) %}{{ r }}{% when None %}—{% endmatch %}</td>
+                        <td>
+                            {% if u.email_verified %}
+                                <span class="chip status-sold">Verified</span>
+                            {% else %}
+                                <span class="chip status-canceled">Unverified</span>
+                            {% endif %}
+                        </td>
+                        <td><code>{% match u.signup_ip %}{% when Some with (ip) %}{{ ip }}{% when None %}—{% endmatch %}</code></td>
+                        <td><time datetime="{{ u.created_at }}">{{ u.created_at.format("%b %-d, %Y %H:%M") }}</time></td>
+                        <td>
+                            {% match u.last_login_at %}{% when Some with (t) %}
+                                <time datetime="{{ t }}">{{ t.format("%b %-d, %Y %H:%M") }}</time>
+                            {% when None %}—{% endmatch %}
+                        </td>
+                    </tr>
+                {% endfor %}
+                {% if users.is_empty() %}
+                    <tr><td colspan="8" class="empty-row">No users match your filters.</td></tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </section>
+</main>
+{% endblock %}

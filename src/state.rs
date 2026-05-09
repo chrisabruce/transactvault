@@ -7,6 +7,7 @@ use surrealdb::engine::any::Any;
 
 use crate::config::Config;
 use crate::email::Mailer;
+use crate::security::RateLimiter;
 use crate::storage::Storage;
 
 /// Type alias for the single-engine SurrealDB connection handle.
@@ -20,6 +21,10 @@ pub struct AppState {
     pub storage: Storage,
     pub mailer: Mailer,
     pub config: Arc<Config>,
+    /// Per-IP token-bucket limiter shared across the whole app. Keyed by
+    /// `"<scope>:<ip>"` so different scopes (signup, login, …) live in
+    /// independent buckets.
+    pub rate_limiter: RateLimiter,
 }
 
 impl AppState {
@@ -29,6 +34,7 @@ impl AppState {
             storage,
             mailer,
             config: Arc::new(config),
+            rate_limiter: RateLimiter::new(),
         }
     }
 }

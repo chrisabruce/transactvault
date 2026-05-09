@@ -36,6 +36,10 @@ async-stream = "0.3"
 rust-s3 = { version = "0.37", default-features = false, features = ["tokio-rustls-tls"] }
 resend-rs = { version = "0.25", default-features = false, features = ["rustls-tls"] }
 bytes = "1"
+sha2 = "0.10"
+hmac = "0.12"
+hex = "0.4"
+rand = "0.8"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }

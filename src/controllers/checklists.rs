@@ -106,8 +106,8 @@ pub async fn create(
     };
 
     let item: Option<ChecklistItem> = state.db.create("checklist_item").content(new_item).await?;
-    let item =
-        item.ok_or_else(|| AppError::Internal(anyhow::anyhow!("checklist insert returned nothing")))?;
+    let item = item
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("checklist insert returned nothing")))?;
 
     state
         .db
@@ -161,13 +161,14 @@ pub async fn toggle(
 fn infer_group_from_code(code: &str) -> FormGroup {
     match code {
         // Listing / purchase agreements
-        "RPA" | "RIPA" | "RLA" | "CPA" | "CLA" | "VLPA" | "VLL"
-        | "BPA" | "BLA" | "MHPA" | "MHLA" | "LR" | "LL" => FormGroup::ListingPurchasingContracts,
+        "RPA" | "RIPA" | "RLA" | "CPA" | "CLA" | "VLPA" | "VLL" | "BPA" | "BLA" | "MHPA"
+        | "MHLA" | "LR" | "LL" => FormGroup::ListingPurchasingContracts,
 
         // Mandatory disclosures
-        "AVID-1" | "AVID-2" | "FHDS" | "LPD" | "RGM" | "SBSA" | "SPQ" | "TDS"
-        | "WCMD" | "WFDA" | "WHSD" | "VP" | "CSPQ" | "MHDA" | "MHTDS"
-        | "VLQ" | "BDS" => FormGroup::MandatoryDisclosures,
+        "AVID-1" | "AVID-2" | "FHDS" | "LPD" | "RGM" | "SBSA" | "SPQ" | "TDS" | "WCMD" | "WFDA"
+        | "WHSD" | "VP" | "CSPQ" | "MHDA" | "MHTDS" | "VLQ" | "BDS" => {
+            FormGroup::MandatoryDisclosures
+        }
 
         // Special-conditions
         "PLA" | "SSA" | "SSLA" | "REO" | "REOL" => FormGroup::SpecialConditionsDisclosures,
@@ -176,19 +177,21 @@ fn infer_group_from_code(code: &str) -> FormGroup {
         "ACT" | "PEND" | "SOLD" => FormGroup::MlsDataSheets,
 
         // Escrow
-        "APRL" | "CC&R" | "CLSD" | "COMM" | "EMD" | "EA" | "EI" | "HOA"
-        | "NET" | "NHD" | "NHDS" | "PREL" => FormGroup::EscrowDocuments,
+        "APRL" | "CC&R" | "CLSD" | "COMM" | "EMD" | "EA" | "EI" | "HOA" | "NET" | "NHD"
+        | "NHDS" | "PREL" => FormGroup::EscrowDocuments,
 
         // Reports & clearances
-        "BIW" | "CHIM" | "HOME" | "HPP" | "POOL" | "ROOF" | "SEPT"
-        | "SOLAR" | "TERM" | "WELL" => FormGroup::ReportsCertificatesClearances,
+        "BIW" | "CHIM" | "HOME" | "HPP" | "POOL" | "ROOF" | "SEPT" | "SOLAR" | "TERM" | "WELL" => {
+            FormGroup::ReportsCertificatesClearances
+        }
 
         // Release
         "CC" | "COL" | "WOO" => FormGroup::ReleaseDisclosures,
 
         // Additional support
-        "AVAA" | "BCA" | "BRBC" | "EQ" | "EQ-R" | "HID" | "MCA" | "QUAL"
-        | "POF" | "BP-FFE" => FormGroup::AdditionalDisclosures,
+        "AVAA" | "BCA" | "BRBC" | "EQ" | "EQ-R" | "HID" | "MCA" | "QUAL" | "POF" | "BP-FFE" => {
+            FormGroup::AdditionalDisclosures
+        }
 
         _ => FormGroup::DisclosuresIfApplicable,
     }

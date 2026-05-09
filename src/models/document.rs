@@ -44,6 +44,11 @@ impl Document {
         }
     }
 
+    /// Templates use this to render a "RPA — Residential Purchase Agreement"
+    /// label. Kept as part of the public API even when no current template
+    /// references it, so adding new views doesn't require revisiting the
+    /// model.
+    #[allow(dead_code)]
     pub fn form_label(&self) -> String {
         match crate::forms::lookup(&self.form_code) {
             Some(f) => format!("{} — {}", f.code, f.name),

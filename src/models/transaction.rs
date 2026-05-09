@@ -147,6 +147,10 @@ impl TransactionType {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+// REO ("Real Estate Owned") is the industry-standard acronym used on every
+// CAR form — keeping it uppercase matches printed checklists and broker
+// vocabulary, even though clippy's house style prefers Reo.
+#[allow(clippy::upper_case_acronyms)]
 pub enum SpecialSalesCondition {
     None,
     Probate,
@@ -333,7 +337,7 @@ impl Transaction {
         chars.iter().enumerate().for_each(|(i, c)| {
             out.push(*c);
             let remaining = len - i - 1;
-            if remaining > 0 && remaining % 3 == 0 {
+            if remaining > 0 && remaining.is_multiple_of(3) {
                 out.push(',');
             }
         });

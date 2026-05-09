@@ -65,9 +65,23 @@ DEFINE FIELD OVERWRITE email         ON user TYPE string ASSERT string::is_email
 DEFINE FIELD OVERWRITE name          ON user TYPE string ASSERT string::len($value) >= 1;
 DEFINE FIELD OVERWRITE password_hash ON user TYPE string;
 DEFINE FIELD OVERWRITE photo_url     ON user TYPE option<string>;
-DEFINE FIELD OVERWRITE created_at    ON user TYPE datetime DEFAULT time::now();
-DEFINE FIELD OVERWRITE updated_at    ON user TYPE datetime DEFAULT time::now() VALUE time::now();
-DEFINE INDEX OVERWRITE idx_user_email ON user FIELDS email UNIQUE;
+
+-- Email verification — accounts start unverified; the welcome email is only
+-- sent AFTER the user clicks the verification link, proving they own the
+-- inbox. The verify-token is cleared on success.
+DEFINE FIELD OVERWRITE email_verified       ON user TYPE bool DEFAULT false;
+DEFINE FIELD OVERWRITE verification_token   ON user TYPE option<string>;
+DEFINE FIELD OVERWRITE verification_expires ON user TYPE option<datetime>;
+
+-- Forensics: who signed up, from where. Helpful for spotting bulk abuse.
+DEFINE FIELD OVERWRITE signup_ip         ON user TYPE option<string>;
+DEFINE FIELD OVERWRITE signup_user_agent ON user TYPE option<string>;
+DEFINE FIELD OVERWRITE last_login_at     ON user TYPE option<datetime>;
+
+DEFINE FIELD OVERWRITE created_at ON user TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE updated_at ON user TYPE datetime DEFAULT time::now() VALUE time::now();
+DEFINE INDEX OVERWRITE idx_user_email             ON user FIELDS email UNIQUE;
+DEFINE INDEX OVERWRITE idx_user_verification_token ON user FIELDS verification_token;
 
 DEFINE TABLE OVERWRITE works_at SCHEMAFULL TYPE RELATION FROM user TO brokerage;
 DEFINE FIELD OVERWRITE role      ON works_at TYPE string
@@ -162,6 +176,30 @@ DEFINE TABLE OVERWRITE has_document SCHEMAFULL TYPE RELATION FROM transaction   
 DEFINE TABLE OVERWRITE for_item     SCHEMAFULL TYPE RELATION FROM document       TO checklist_item;
 DEFINE TABLE OVERWRITE uploaded     SCHEMAFULL TYPE RELATION FROM user           TO document;
 DEFINE TABLE OVERWRITE version_of   SCHEMAFULL TYPE RELATION FROM document       TO document;
+
+-- ----------------------------------------------------------------------------
+-- Audit log — append-only record of security-relevant events. Every signup,
+-- login (success/failure), invite, verification, blocked attempt, and admin
+-- action lands here for forensic review.
+-- ----------------------------------------------------------------------------
+DEFINE TABLE OVERWRITE audit_event SCHEMAFULL;
+DEFINE FIELD OVERWRITE kind ON audit_event TYPE string
+    ASSERT $value IN [
+        "signup_pending", "signup_blocked_honeypot", "signup_blocked_pow",
+        "signup_blocked_rate_limit", "signup_blocked_blacklist",
+        "signup_blocked_duplicate", "verify_success", "verify_failure",
+        "login_success", "login_failure", "login_blocked_unverified",
+        "logout", "invite_sent", "invite_accepted", "admin_view"
+    ];
+DEFINE FIELD OVERWRITE actor_email ON audit_event TYPE option<string>;
+DEFINE FIELD OVERWRITE actor       ON audit_event TYPE option<record<user>>;
+DEFINE FIELD OVERWRITE ip          ON audit_event TYPE option<string>;
+DEFINE FIELD OVERWRITE user_agent  ON audit_event TYPE option<string>;
+DEFINE FIELD OVERWRITE detail      ON audit_event TYPE option<string>;
+DEFINE FIELD OVERWRITE at          ON audit_event TYPE datetime DEFAULT time::now();
+DEFINE INDEX OVERWRITE idx_audit_at   ON audit_event FIELDS at;
+DEFINE INDEX OVERWRITE idx_audit_kind ON audit_event FIELDS kind;
+DEFINE INDEX OVERWRITE idx_audit_ip   ON audit_event FIELDS ip;
 
 -- ----------------------------------------------------------------------------
 -- Migrations log

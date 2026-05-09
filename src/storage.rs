@@ -120,17 +120,13 @@ impl Storage {
     /// transaction-sized documents we handle; swap to a streaming reader if
     /// we ever store multi-GB files.
     pub async fn get_bytes(&self, key: &str) -> anyhow::Result<Bytes> {
-        let resp = self
-            .bucket
-            .get_object(key)
-            .await
-            .map_err(|e| {
-                if is_not_found(&e) {
-                    anyhow::anyhow!("not found")
-                } else {
-                    anyhow::anyhow!("get_object: {e}")
-                }
-            })?;
+        let resp = self.bucket.get_object(key).await.map_err(|e| {
+            if is_not_found(&e) {
+                anyhow::anyhow!("not found")
+            } else {
+                anyhow::anyhow!("get_object: {e}")
+            }
+        })?;
         Ok(Bytes::from(resp.to_vec()))
     }
 }
@@ -159,9 +155,7 @@ fn is_bucket_already_exists(err: &S3Error) -> bool {
 /// Recognise "object doesn't exist" for download responses.
 fn is_not_found(err: &S3Error) -> bool {
     match err {
-        S3Error::HttpFailWithBody(code, body) => {
-            *code == 404 || body.contains("NoSuchKey")
-        }
+        S3Error::HttpFailWithBody(code, body) => *code == 404 || body.contains("NoSuchKey"),
         _ => false,
     }
 }

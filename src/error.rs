@@ -41,8 +41,14 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, message) = match &self {
             AppError::NotFound => (StatusCode::NOT_FOUND, "Page not found".to_string()),
-            AppError::Forbidden => (StatusCode::FORBIDDEN, "You don't have access to that.".to_string()),
-            AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "Please sign in to continue.".to_string()),
+            AppError::Forbidden => (
+                StatusCode::FORBIDDEN,
+                "You don't have access to that.".to_string(),
+            ),
+            AppError::Unauthorized => (
+                StatusCode::UNAUTHORIZED,
+                "Please sign in to continue.".to_string(),
+            ),
             AppError::Validation(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
             other => {

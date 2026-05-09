@@ -26,6 +26,25 @@ pub struct Config {
     pub jwt_secret: String,
     pub jwt_expiry_hours: i64,
 
+    /// Comma-separated emails (lower-cased) granted access to `/admin/*`.
+    /// Membership is checked at request time via the `admin_required`
+    /// extractor; this is independent of the per-brokerage `broker` role.
+    pub super_admin_emails: Vec<String>,
+
+    /// Verification-link expiry. After this window the user has to request
+    /// a fresh link to finish signup. 24 hours is a reasonable default.
+    pub verification_expiry_hours: i64,
+
+    /// Proof-of-work difficulty in leading-zero bits. 18 ≈ 0.5–2s of
+    /// JavaScript work for honest users; 0 disables the check entirely
+    /// (handy in tests).
+    pub pow_difficulty_bits: u32,
+
+    /// Token-bucket rate limit for `/signup`: max requests per IP per hour.
+    pub signup_rate_per_hour: u32,
+    /// Same idea for `/login`, per IP per 15 minutes.
+    pub login_rate_per_quarter_hour: u32,
+
     pub rustfs: RustFsConfig,
     pub email: EmailConfig,
 }
@@ -83,6 +102,27 @@ impl Config {
                 .parse()
                 .context("JWT_EXPIRY_HOURS must be an integer")?,
 
+            super_admin_emails: env_or("SUPERADMIN_EMAILS", "")
+                .split(',')
+                .map(|s| s.trim().to_ascii_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect(),
+
+            verification_expiry_hours: env_or("VERIFICATION_EXPIRY_HOURS", "24")
+                .parse()
+                .context("VERIFICATION_EXPIRY_HOURS must be an integer")?,
+
+            pow_difficulty_bits: env_or("POW_DIFFICULTY_BITS", "18")
+                .parse()
+                .context("POW_DIFFICULTY_BITS must be an integer")?,
+
+            signup_rate_per_hour: env_or("SIGNUP_RATE_PER_HOUR", "5")
+                .parse()
+                .context("SIGNUP_RATE_PER_HOUR must be an integer")?,
+            login_rate_per_quarter_hour: env_or("LOGIN_RATE_PER_QH", "20")
+                .parse()
+                .context("LOGIN_RATE_PER_QH must be an integer")?,
+
             rustfs: RustFsConfig {
                 endpoint: env_or("RUSTFS_ENDPOINT", "http://127.0.0.1:37421"),
                 region: env_or("RUSTFS_REGION", "us-east-1"),
@@ -92,7 +132,10 @@ impl Config {
             },
             email: EmailConfig {
                 api_key: env_or("RESEND_API_KEY", ""),
-                from: env_or("RESEND_FROM", "TransactVault <no-reply@transactvault.example>"),
+                from: env_or(
+                    "RESEND_FROM",
+                    "TransactVault <no-reply@transactvault.example>",
+                ),
                 reply_to: env::var("RESEND_REPLY_TO").ok().filter(|s| !s.is_empty()),
             },
         })

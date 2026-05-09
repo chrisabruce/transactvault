@@ -54,7 +54,46 @@ impl Mailer {
         }
     }
 
-    /// Greet a freshly-signed-up broker.
+    /// Verify-your-email — first message a new signup receives. Until they
+    /// click the link, the account is in `pending_verification` and they
+    /// can't log in. This is what stops the "users got welcome emails but
+    /// didn't sign up" abuse vector.
+    pub async fn send_verify(&self, to: &str, name: &str, link: &str) {
+        // Log the link in dev (when delivery is disabled) so testers can
+        // copy-paste from the log instead of needing real email.
+        if self.client.is_none() {
+            tracing::info!(%to, %link, "verify link (dev — email suppressed)");
+        }
+        let html = format!(
+            "<!doctype html><html><body style=\"font-family:system-ui,sans-serif;color:#0f172a\">\
+               <p>Hi {name},</p>\
+               <p>Someone — hopefully you — created a TransactVault account with this email \
+                  address. Click below within the next 24 hours to activate it.</p>\
+               <p><a href=\"{link}\" \
+                     style=\"background:#0f766e;color:#fff;padding:10px 18px;\
+                            border-radius:8px;text-decoration:none;display:inline-block\">Verify my email</a></p>\
+               <p>If the button doesn't work, copy this URL into your browser:<br>{link}</p>\
+               <p>If you didn't sign up, you can safely ignore this — the account never \
+                  activates and no further emails will be sent.</p>\
+               <p>— The TransactVault team</p>\
+             </body></html>",
+            name = html_escape(name),
+            link = link,
+        );
+        let text = format!(
+            "Hi {name},\n\n\
+             Someone — hopefully you — created a TransactVault account with this email \
+             address. Activate it within 24 hours by visiting:\n\n\
+             {link}\n\n\
+             If you didn't sign up, ignore this and the account will never activate.\n\n\
+             — The TransactVault team\n",
+        );
+        self.send(to, "Verify your TransactVault email", html, text)
+            .await;
+    }
+
+    /// Greet a freshly-signed-up broker — sent only AFTER verification, so
+    /// it's never delivered to victims of signup abuse.
     pub async fn send_welcome(&self, to: &str, name: &str, brokerage: &str, app_url: &str) {
         let html = format!(
             "<!doctype html><html><body style=\"font-family:system-ui,sans-serif;color:#0f172a\">\

@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+
+{% block title %}Audit log — Admin — {{ app_name }}{% endblock %}
+{% block body_class %}page-app page-admin{% endblock %}
+
+{% block body %}
+{% include "components/app_header.html" %}
+
+<main class="app-main">
+    <header class="page-title">
+        <section>
+            <h1>Admin · Audit Log</h1>
+            <p class="subtitle">Every signup, login, blocked attempt, and admin action across the platform.</p>
+        </section>
+        <a class="btn secondary" href="/admin">View users</a>
+    </header>
+
+    <section class="filter-bar" aria-label="Filters">
+        <form method="get" action="/admin/audit" role="search">
+            <label class="visually-hidden" for="audit-q">Search</label>
+            <input id="audit-q" type="search" name="q" value="{{ query }}" placeholder="Email, IP, detail…">
+            <label class="visually-hidden" for="audit-kind">Event type</label>
+            <select id="audit-kind" name="kind">
+                {% for k in kinds %}
+                    <option value="{{ k }}"{% if *k == kind_filter %} selected{% endif %}>{{ k }}</option>
+                {% endfor %}
+            </select>
+            <button class="btn small secondary" type="submit">Apply</button>
+        </form>
+    </section>
+
+    <section class="panel admin-table-wrap">
+        <table class="admin-table">
+            <thead>
+                <tr>
+                    <th scope="col">When</th>
+                    <th scope="col">Event</th>
+                    <th scope="col">Actor</th>
+                    <th scope="col">IP</th>
+                    <th scope="col">User agent</th>
+                    <th scope="col">Detail</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for e in events %}
+                    <tr>
+                        <td><time datetime="{{ e.at }}">{{ e.at.format("%b %-d %H:%M:%S") }}</time></td>
+                        <td><span class="audit-pill {{ e.kind_class() }}">{{ e.kind_label() }}</span></td>
+                        <td>{% match e.actor_email %}{% when Some with (em) %}<code>{{ em }}</code>{% when None %}—{% endmatch %}</td>
+                        <td><code>{% match e.ip %}{% when Some with (ip) %}{{ ip }}{% when None %}—{% endmatch %}</code></td>
+                        <td class="ua-cell">{% match e.user_agent %}{% when Some with (ua) %}<small>{{ ua }}</small>{% when None %}—{% endmatch %}</td>
+                        <td>{% match e.detail %}{% when Some with (d) %}{{ d }}{% when None %}—{% endmatch %}</td>
+                    </tr>
+                {% endfor %}
+                {% if events.is_empty() %}
+                    <tr><td colspan="6" class="empty-row">No events match your filters.</td></tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </section>
+</main>
+{% endblock %}

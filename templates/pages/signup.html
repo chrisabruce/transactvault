@@ -1,14 +1,14 @@
 {% extends "base.html" %}
 
 {% block title %}Start your free trial — {{ app_name }}{% endblock %}
-{% block description %}Create your TransactVault brokerage account in under a minute.{% endblock %}
+{% block description %}Create your TransactVault brokerage account.{% endblock %}
 {% block body %}
 {% include "components/public_header.html" %}
 
 <main class="auth-shell">
     <section class="auth-card" aria-labelledby="signup-heading">
         <h1 id="signup-heading">Create your brokerage account</h1>
-        <p>Your first user becomes the broker. You can invite agents and coordinators right after.</p>
+        <p>Your first user becomes the broker. We'll email a verification link to confirm the address before activating the account.</p>
 
         {% match error %}{% when Some with (msg) %}
             <p class="alert error" role="alert">{{ msg }}</p>
@@ -17,7 +17,7 @@
         <button type="button" class="btn google" disabled>Continue with Google <small>(coming soon)</small></button>
         <p class="auth-divider">or with email</p>
 
-        <form method="post" action="/signup">
+        <form method="post" action="/signup" id="signup-form" novalidate>
             <fieldset>
                 <legend class="visually-hidden">Your details</legend>
                 <label>
@@ -44,7 +44,28 @@
                     <input type="text" name="city" placeholder="Lancaster">
                 </label>
             </fieldset>
-            <button type="submit">Create account</button>
+
+            <!-- Honeypot: real users never see or fill this. Bots scraping
+                 for inputs to autofill will populate it; the server then
+                 silently rejects the submission. -->
+            <div class="hp" aria-hidden="true">
+                <label>Website (leave blank)
+                    <input type="text" name="website" tabindex="-1" autocomplete="off">
+                </label>
+            </div>
+
+            <!-- Proof-of-work: the JS solver below computes a SHA-256 nonce
+                 with N leading zero bits, where N is the difficulty issued
+                 by the server. The challenge is HMAC-bound to the server's
+                 secret so it can't be forged. -->
+            <input type="hidden" name="pow_challenge" value="{{ pow_challenge }}">
+            <input type="hidden" name="pow_solution" id="pow_solution" value="">
+            <p class="pow-status" id="pow-status" data-difficulty="{{ pow_difficulty }}">
+                <span class="dot" aria-hidden="true"></span>
+                <span class="label">Verifying you're human…</span>
+            </p>
+
+            <button type="submit" id="signup-submit" disabled>Create account</button>
         </form>
 
         <footer>
@@ -52,4 +73,70 @@
         </footer>
     </section>
 </main>
+
+<script>
+// Proof-of-work solver. Hashes (challenge + ":" + nonce) with SHA-256 until
+// the digest has at least `difficulty` leading zero bits. Runs in tiny
+// chunks so we never block the UI thread for more than a few ms.
+(function () {
+    var status = document.getElementById('pow-status');
+    var solInput = document.getElementById('pow_solution');
+    var submit = document.getElementById('signup-submit');
+    var challenge = document.querySelector('input[name="pow_challenge"]').value;
+    var difficulty = parseInt(status.getAttribute('data-difficulty') || '0', 10);
+
+    if (!difficulty) {
+        // PoW disabled — let the user submit immediately.
+        status.classList.add('done');
+        status.querySelector('.label').textContent = 'Ready';
+        submit.disabled = false;
+        return;
+    }
+
+    function leadingZeroBits(buf) {
+        var bits = 0;
+        for (var i = 0; i < buf.length; i++) {
+            if (buf[i] === 0) { bits += 8; continue; }
+            var b = buf[i], n = 0;
+            while ((b & 0x80) === 0) { n++; b <<= 1; if (n >= 8) break; }
+            bits += n;
+            return bits;
+        }
+        return bits;
+    }
+
+    var nonce = 0;
+    var encoder = new TextEncoder();
+    var chunkSize = 200;
+
+    function step() {
+        var i = 0;
+        function tick() {
+            var endTarget = nonce + chunkSize;
+            (function loop() {
+                if (nonce >= endTarget) {
+                    setTimeout(tick, 0);
+                    return;
+                }
+                var attempt = challenge + ':' + nonce;
+                crypto.subtle.digest('SHA-256', encoder.encode(attempt)).then(function (hashBuf) {
+                    var hash = new Uint8Array(hashBuf);
+                    if (leadingZeroBits(hash) >= difficulty) {
+                        solInput.value = String(nonce);
+                        status.classList.add('done');
+                        status.querySelector('.label').textContent = 'Ready';
+                        submit.disabled = false;
+                        return;
+                    }
+                    nonce++;
+                    loop();
+                });
+            })();
+        }
+        tick();
+    }
+    step();
+})();
+</script>
+
 {% endblock %}

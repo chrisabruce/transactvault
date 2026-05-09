@@ -8,6 +8,7 @@ use std::net::SocketAddr;
 use anyhow::Context;
 use tokio::net::TcpListener;
 
+mod audit;
 mod auth;
 mod config;
 mod controllers;
@@ -17,6 +18,7 @@ mod error;
 mod forms;
 mod models;
 mod router;
+mod security;
 mod state;
 mod storage;
 mod templates;
@@ -51,7 +53,9 @@ async fn main() -> anyhow::Result<()> {
         "starting TransactVault"
     );
 
-    let db = db::connect(&config).await.context("connecting to SurrealDB")?;
+    let db = db::connect(&config)
+        .await
+        .context("connecting to SurrealDB")?;
     db::apply_schema(&db).await.context("applying schema")?;
 
     let storage = storage::Storage::connect(&config.rustfs)
@@ -63,12 +67,21 @@ async fn main() -> anyhow::Result<()> {
     let app = router::build(state);
 
     let addr: SocketAddr = format!("{}:{}", config.host, config.port).parse()?;
-    let listener = TcpListener::bind(addr).await.context("binding TCP listener")?;
+    let listener = TcpListener::bind(addr)
+        .await
+        .context("binding TCP listener")?;
     tracing::info!(%addr, "listening");
 
-    axum::serve(listener, app.into_make_service())
-        .await
-        .context("serving HTTP")?;
+    // `into_make_service_with_connect_info` wires the per-request
+    // `ConnectInfo<SocketAddr>` extractor so handlers can read the peer
+    // address (used as a fallback in [`crate::security::client_ip`] when
+    // no reverse-proxy headers are present).
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .context("serving HTTP")?;
 
     Ok(())
 }

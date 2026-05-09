@@ -12,6 +12,9 @@
             {% if header.role.is_broker() %}
                 <li><a href="/app/team" {% if header.active_nav == "team" %}class="active" aria-current="page"{% endif %}>Team</a></li>
             {% endif %}
+            {% if header.is_super_admin %}
+                <li><a href="/admin" {% if header.active_nav == "admin" %}class="active" aria-current="page"{% endif %}>Admin</a></li>
+            {% endif %}
         </ul>
 
         <section class="user-menu" aria-label="Account">

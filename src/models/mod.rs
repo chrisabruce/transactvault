@@ -3,6 +3,7 @@
 //! have to worry about server-generated fields (IDs, timestamps) being
 //! accidentally sent from the client.
 
+pub mod audit;
 pub mod brokerage;
 pub mod checklist;
 pub mod document;
@@ -10,6 +11,7 @@ pub mod invitation;
 pub mod transaction;
 pub mod user;
 
+pub use audit::{AuditEvent, NewAuditEvent};
 pub use brokerage::{Brokerage, NewBrokerage};
 pub use checklist::{ChecklistItem, NewChecklistItem};
 pub use document::{Document, NewDocument};

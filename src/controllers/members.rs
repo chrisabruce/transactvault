@@ -23,13 +23,8 @@ pub async fn list(
     let members = load_members(&state, &user).await?;
     let pending = load_pending_invitations(&state, &user).await?;
 
-    let header = AppHeader::new(
-        &user.name,
-        &user.email,
-        user.role,
-        &brokerage.name,
-        "team",
-    );
+    let header = AppHeader::new(&user.name, &user.email, user.role, &brokerage.name, "team")
+        .with_super_admin(crate::controllers::is_super_admin(&state, &user));
     render(&TeamPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
@@ -58,13 +53,8 @@ pub async fn invite(
     }
 
     let brokerage = load_brokerage(&state, &user).await?;
-    let header = AppHeader::new(
-        &user.name,
-        &user.email,
-        user.role,
-        &brokerage.name,
-        "team",
-    );
+    let header = AppHeader::new(&user.name, &user.email, user.role, &brokerage.name, "team")
+        .with_super_admin(crate::controllers::is_super_admin(&state, &user));
 
     let email = input.email.trim().to_ascii_lowercase();
     let role = match input.role.as_str() {
@@ -145,9 +135,7 @@ async fn load_members(state: &AppState, user: &CurrentUser) -> Result<Vec<Member
 
     let members = rows
         .into_iter()
-        .filter_map(|r| {
-            Role::parse(&r.role).map(|role| Member::new(r.name, r.email, role))
-        })
+        .filter_map(|r| Role::parse(&r.role).map(|role| Member::new(r.name, r.email, role)))
         .collect();
     Ok(members)
 }

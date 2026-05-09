@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+
+{% block title %}Check your email — {{ app_name }}{% endblock %}
+{% block description %}Verify your email to activate your TransactVault account.{% endblock %}
+
+{% block body %}
+{% include "components/public_header.html" %}
+
+<main class="auth-shell">
+    <section class="auth-card" aria-labelledby="check-heading">
+        <h1 id="check-heading">Check your email</h1>
+        <p>If we recognised the address you entered, we've sent a verification link to it. Click the link within 24 hours to activate your account.</p>
+        <p class="auth-divider">No email after a minute?</p>
+        <ul role="list" class="hint-list">
+            <li>Check spam or promotions folders.</li>
+            <li>Confirm the address you typed and try <a href="/signup">signing up</a> again.</li>
+            <li>Some inboxes throttle bulk senders — give it a few minutes.</li>
+        </ul>
+        <footer>
+            Already verified? <a href="/login">Sign in</a>
+        </footer>
+    </section>
+</main>
+{% endblock %}

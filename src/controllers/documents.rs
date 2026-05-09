@@ -156,7 +156,8 @@ pub async fn upload(
             version,
         })
         .await?;
-    let doc = new_doc.ok_or_else(|| AppError::Internal(anyhow::anyhow!("insert returned nothing")))?;
+    let doc =
+        new_doc.ok_or_else(|| AppError::Internal(anyhow::anyhow!("insert returned nothing")))?;
 
     state
         .db
@@ -221,7 +222,7 @@ pub async fn download(
         })?;
     let filename = doc.filename;
 
-    Ok(Response::builder()
+    Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, doc.content_type)
         .header(
@@ -229,7 +230,7 @@ pub async fn download(
             format!("attachment; filename=\"{}\"", filename.replace('"', "_")),
         )
         .body(Body::from(bytes))
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("build response: {e}")))?)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("build response: {e}")))
 }
 
 /// Download a ZIP of every document attached to a transaction — the
@@ -256,7 +257,7 @@ pub async fn export_zip(
     let zip_bytes = build_zip(&state.storage, &tx, &documents).await?;
     let zip_name = zip_filename_for(&tx);
 
-    Ok(Response::builder()
+    Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/zip")
         .header(
@@ -264,7 +265,7 @@ pub async fn export_zip(
             format!("attachment; filename=\"{zip_name}\""),
         )
         .body(Body::from(zip_bytes))
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("build response: {e}")))?)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("build response: {e}")))
 }
 
 // ---------------------------------------------------------------------------
@@ -401,7 +402,11 @@ fn zip_filename_for(tx: &Transaction) -> String {
         .collect::<String>()
         .trim_matches('_')
         .to_string();
-    let stem = if slug.is_empty() { "transaction".into() } else { slug };
+    let stem = if slug.is_empty() {
+        "transaction".into()
+    } else {
+        slug
+    };
     format!("transactvault-{stem}.zip")
 }
 
@@ -423,7 +428,5 @@ fn sanitize_filename(name: String) -> String {
 fn looks_signed(filename: &str, content_type: &str, _bytes: &[u8]) -> bool {
     let lower = filename.to_ascii_lowercase();
     (content_type == "application/pdf" || lower.ends_with(".pdf"))
-        && (lower.contains("signed")
-            || lower.contains("executed")
-            || lower.contains("final"))
+        && (lower.contains("signed") || lower.contains("executed") || lower.contains("final"))
 }

@@ -45,8 +45,8 @@ impl FromRequestParts<AppState> for CurrentUser {
             .map(|c| c.value().to_string())
             .ok_or(AppError::Unauthorized)?;
 
-        let claims: Claims = decode_token(&state.config, &token)
-            .map_err(|_| AppError::Unauthorized)?;
+        let claims: Claims =
+            decode_token(&state.config, &token).map_err(|_| AppError::Unauthorized)?;
 
         let user_id = claims.user_id();
 
@@ -97,5 +97,30 @@ impl FromRequestParts<AppState> for MaybeCurrentUser {
         Ok(MaybeCurrentUser(
             CurrentUser::from_request_parts(parts, state).await.ok(),
         ))
+    }
+}
+
+/// Extractor that gates a route to super-admin users only.
+///
+/// Super-admin status is configured via the `SUPERADMIN_EMAILS` env var
+/// (comma-separated). Membership is checked at request time so promoting
+/// a user is a one-line config change + a redeploy — no DB migration.
+#[derive(Debug, Clone)]
+pub struct SuperAdmin(pub CurrentUser);
+
+impl FromRequestParts<AppState> for SuperAdmin {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let user = CurrentUser::from_request_parts(parts, state).await?;
+        let email = user.email.to_ascii_lowercase();
+        if state.config.super_admin_emails.iter().any(|e| e == &email) {
+            Ok(SuperAdmin(user))
+        } else {
+            Err(AppError::Forbidden)
+        }
     }
 }

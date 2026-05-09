@@ -7,11 +7,14 @@
 #![allow(dead_code)]
 
 use askama::Template;
+use chrono::{DateTime, Utc};
+use serde::Deserialize;
+use surrealdb::types::{RecordId, SurrealValue};
 
 use crate::auth::Role;
 use crate::forms::{CarForm, FormGroup};
 use crate::models::{
-    ChecklistItem, Document, Invitation, SalesType, SpecialSalesCondition, Transaction,
+    AuditEvent, ChecklistItem, Document, Invitation, SalesType, SpecialSalesCondition, Transaction,
     TransactionStatus, TransactionType,
 };
 
@@ -128,6 +131,31 @@ pub struct SignupPage<'a> {
     pub base_url: &'a str,
     pub error: Option<&'a str>,
     pub signed_in: bool,
+    /// Hex-encoded HMAC-signed PoW challenge.
+    pub pow_challenge: String,
+    /// Number of leading zero bits required in the SHA-256 solution.
+    pub pow_difficulty: u32,
+}
+
+/// "Check your inbox" landing rendered after every signup outcome — keeps
+/// the response constant so attackers can't enumerate registered emails.
+#[derive(Template)]
+#[template(path = "pages/verify_pending.html")]
+pub struct VerifyPendingPage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+    pub signed_in: bool,
+}
+
+/// Failure page for `/verify/{token}` (success path redirects to `/app`).
+#[derive(Template)]
+#[template(path = "pages/verify_result.html")]
+pub struct VerifyResultPage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+    pub signed_in: bool,
+    pub success: bool,
+    pub message: &'a str,
 }
 
 #[derive(Template)]
@@ -154,6 +182,7 @@ pub struct AppHeader<'a> {
     pub role: Role,
     pub brokerage_name: &'a str,
     pub active_nav: &'a str,
+    pub is_super_admin: bool,
 }
 
 impl<'a> AppHeader<'a> {
@@ -171,7 +200,16 @@ impl<'a> AppHeader<'a> {
             role,
             brokerage_name,
             active_nav,
+            is_super_admin: false,
         }
+    }
+
+    /// Builder-style toggle used by the admin controllers (super-admin
+    /// status is derived from config, not the row, so we set it after
+    /// construction).
+    pub fn with_super_admin(mut self, yes: bool) -> Self {
+        self.is_super_admin = yes;
+        self
     }
 }
 
@@ -328,8 +366,7 @@ impl CompliancePanel {
         } else {
             ((required_completed as f32 / required_total as f32) * 100.0).round() as u32
         };
-        let all_required_complete =
-            required_total > 0 && required_completed == required_total;
+        let all_required_complete = required_total > 0 && required_completed == required_total;
         Self {
             groups,
             transaction_key,
@@ -371,7 +408,12 @@ pub struct Member {
 impl Member {
     pub fn new(name: String, email: String, role: Role) -> Self {
         let initials = initials(&name);
-        Self { name, email, role, initials }
+        Self {
+            name,
+            email,
+            role,
+            initials,
+        }
     }
 }
 
@@ -398,3 +440,57 @@ pub struct SearchDocument {
     pub transaction_address: String,
 }
 
+// ---------------------------------------------------------------------------
+// Admin
+// ---------------------------------------------------------------------------
+
+#[derive(Template)]
+#[template(path = "pages/admin_users.html")]
+pub struct AdminUsersPage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+    pub signed_in: bool,
+    pub header: AppHeader<'a>,
+    pub users: Vec<AdminUser>,
+    pub total: usize,
+    pub verified_count: usize,
+    pub unverified_count: usize,
+    pub query: String,
+    pub status_filter: String,
+}
+
+#[derive(Template)]
+#[template(path = "pages/admin_audit.html")]
+pub struct AdminAuditPage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+    pub signed_in: bool,
+    pub header: AppHeader<'a>,
+    pub events: Vec<AuditEvent>,
+    pub kind_filter: String,
+    pub query: String,
+    pub kinds: Vec<String>,
+}
+
+/// Cross-brokerage user view used by the admin dashboard. Hydrated from a
+/// SurrealQL projection so the template doesn't have to know about graph
+/// relations.
+#[derive(Debug, Clone, Deserialize, SurrealValue)]
+pub struct AdminUser {
+    pub id: RecordId,
+    pub email: String,
+    pub name: String,
+    pub email_verified: bool,
+    pub signup_ip: Option<String>,
+    pub signup_user_agent: Option<String>,
+    pub last_login_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub brokerage_name: Option<String>,
+    pub role: Option<String>,
+}
+
+impl AdminUser {
+    pub fn url_key(&self) -> String {
+        crate::record_key(&self.id)
+    }
+}

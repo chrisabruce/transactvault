@@ -1,9 +1,9 @@
 //! Argon2id password hashing. Follows the defaults from the `argon2` crate,
 //! which map to the OWASP-recommended parameters.
 
+use argon2::Argon2;
 use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
-use argon2::Argon2;
 
 /// Hash a plaintext password, returning a PHC-encoded string ready for storage.
 pub fn hash_password(password: &str) -> anyhow::Result<String> {

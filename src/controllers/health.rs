@@ -23,7 +23,11 @@ pub async fn healthcheck(State(state): State<AppState>) -> Json<Value> {
     let mut sys = System::new_all();
     sys.refresh_all();
 
-    let overall = if db_ok && storage_ok { "ok" } else { "degraded" };
+    let overall = if db_ok && storage_ok {
+        "ok"
+    } else {
+        "degraded"
+    };
 
     Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
