@@ -309,12 +309,22 @@ pub struct ChecklistRow {
     pub comments: Vec<CommentView>,
 }
 
-/// Display-friendly view of a single comment (denormalised author name).
+/// Display-friendly view of a single comment (denormalised author name,
+/// plus an optional reference to a document the comment points back to —
+/// used by the system-generated "replaced previous version" notes).
 #[derive(Debug, Clone)]
 pub struct CommentView {
     pub body: String,
     pub author_name: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub referenced_document: Option<ReferencedDocument>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReferencedDocument {
+    pub key: String,
+    pub filename: String,
+    pub version: i64,
 }
 
 impl CommentView {
@@ -407,6 +417,13 @@ impl CompliancePanel {
             percent,
             all_required_complete,
         }
+    }
+
+    /// Every item on the transaction has been approved → the file set is
+    /// frozen. Backend enforces this in [`controllers::documents::upload`];
+    /// the template uses it to suppress upload UI.
+    pub fn is_locked(&self) -> bool {
+        self.total > 0 && self.total == self.completed
     }
 }
 

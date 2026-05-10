@@ -13,6 +13,7 @@ use bytes::Bytes;
 use s3::creds::Credentials;
 use s3::error::S3Error;
 use s3::{Bucket, BucketConfiguration, Region};
+use tokio::io::AsyncRead;
 
 use crate::config::RustFsConfig;
 
@@ -103,6 +104,7 @@ impl Storage {
     /// Upload bytes to `key`. Overwrites existing objects at the same key —
     /// versioning is handled at the application layer via the `document`
     /// table and `version_of` edges, not via S3 versioning.
+    #[allow(dead_code)]
     pub async fn put_bytes(
         &self,
         key: &str,
@@ -114,6 +116,31 @@ impl Storage {
             .await
             .context("put_object")?;
         Ok(())
+    }
+
+    /// Stream an upload straight to the object store without buffering the
+    /// whole payload in memory. `rust-s3` runs this as an S3 multipart
+    /// upload internally, so 100 MB transfers don't pin 100 MB of process
+    /// memory.
+    ///
+    /// Returns the byte count actually written, so the caller can store
+    /// the size on the `document` row without trusting the client's
+    /// `Content-Length` header.
+    pub async fn put_stream<R>(
+        &self,
+        key: &str,
+        reader: &mut R,
+        content_type: &str,
+    ) -> anyhow::Result<u64>
+    where
+        R: AsyncRead + Unpin,
+    {
+        let resp = self
+            .bucket
+            .put_object_stream_with_content_type(reader, key, content_type)
+            .await
+            .context("put_object_stream")?;
+        Ok(resp.uploaded_bytes() as u64)
     }
 
     /// Fetch the full object bytes. Streams into memory — acceptable for the

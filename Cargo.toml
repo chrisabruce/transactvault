@@ -33,6 +33,7 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 mime = "0.3"
 http = "1"
 async-stream = "0.3"
+tokio-util = { version = "0.7", features = ["io"] }
 rust-s3 = { version = "0.37", default-features = false, features = ["tokio-rustls-tls"] }
 resend-rs = { version = "0.25", default-features = false, features = ["rustls-tls"] }
 bytes = "1"

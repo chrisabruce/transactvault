@@ -1006,6 +1006,31 @@ form .form-row { display: grid; gap: var(--sp-3); grid-template-columns: 1fr 1fr
     font-size: 1.25rem;
     flex: none;
 }
+.compliance-banner.locked {
+    background: var(--color-surface-alt);
+    color: var(--color-ink);
+    border-color: var(--color-line);
+}
+.compliance-banner.locked strong { color: var(--color-ink); }
+.compliance-banner.locked::before {
+    content: "🔒";
+    background: var(--color-ink);
+    color: #fff;
+    font-size: 1rem;
+}
+.upload-locked {
+    font-style: italic;
+    margin: 0;
+}
+.comment-ref {
+    margin: var(--sp-1) 0 0 0;
+    font-size: var(--fs-xs);
+}
+.comment-ref a {
+    color: var(--color-brand-ink);
+    text-decoration: none;
+}
+.comment-ref a:hover { text-decoration: underline; }
 
 .checklist { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--sp-2); }
 .checklist-item {

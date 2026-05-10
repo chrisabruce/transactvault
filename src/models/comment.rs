@@ -14,6 +14,7 @@ pub struct Comment {
     pub body: String,
     pub target: RecordId,
     pub author: RecordId,
+    pub references_document: Option<RecordId>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -22,4 +23,5 @@ pub struct NewComment {
     pub body: String,
     pub target: RecordId,
     pub author: RecordId,
+    pub references_document: Option<RecordId>,
 }

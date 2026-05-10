@@ -41,6 +41,15 @@
                 </aside>
             {% endif %}
 
+            {% if compliance.is_locked() %}
+                <aside class="compliance-banner locked" role="status">
+                    <section>
+                        <strong>Transaction locked</strong>
+                        <p>Every checklist item is approved. Uploads are disabled until a coordinator denies an item to reopen it.</p>
+                    </section>
+                </aside>
+            {% endif %}
+
             <section class="panel" id="compliance-panel" aria-labelledby="compliance-heading">
                 <h2 id="compliance-heading">Compliance Checklist</h2>
                 <section class="compliance-summary" aria-label="Overall progress">
@@ -96,6 +105,11 @@
                                                 {% for c in row.comments %}
                                                     <li>
                                                         <p class="comment-body">{{ c.body }}</p>
+                                                        {% match c.referenced_document %}{% when Some with (doc_ref) %}
+                                                            <p class="comment-ref">
+                                                                <a href="/app/documents/{{ doc_ref.key }}/download">↳ {{ doc_ref.filename }} (v{{ doc_ref.version }})</a>
+                                                            </p>
+                                                        {% when None %}{% endmatch %}
                                                         <small class="comment-meta">{{ c.author_name }} · {{ c.date_label() }}</small>
                                                     </li>
                                                 {% endfor %}
@@ -128,17 +142,21 @@
                                                 {% if row.item.is_approved() %}Approved{% else if row.item.is_denied() %}Denied{% else %}Pending review{% endif %}
                                             </span>
                                         {% endif %}
-                                        <details>
-                                            <summary class="btn ghost small">Upload</summary>
-                                            <form method="post" enctype="multipart/form-data"
-                                                  action="/app/transactions/{{ transaction_key }}/documents"
-                                                  class="inline-upload">
-                                                <input type="hidden" name="item_id" value="{{ row.item.url_key() }}">
-                                                <input type="hidden" name="form_code" value="{% match row.form %}{% when Some with (f) %}{{ f.code }}{% when None %}MISC{% endmatch %}">
-                                                <input type="file" name="file" required>
-                                                <button type="submit" class="btn small">Attach</button>
-                                            </form>
-                                        </details>
+                                        {% if row.item.is_approved() %}
+                                            <p class="upload-locked meta" title="A coordinator has approved this item. Deny it first to replace the document.">Locked — approved</p>
+                                        {% else %}
+                                            <details>
+                                                <summary class="btn ghost small">Upload</summary>
+                                                <form method="post" enctype="multipart/form-data"
+                                                      action="/app/transactions/{{ transaction_key }}/documents"
+                                                      class="inline-upload">
+                                                    <input type="hidden" name="item_id" value="{{ row.item.url_key() }}">
+                                                    <input type="hidden" name="form_code" value="{% match row.form %}{% when Some with (f) %}{{ f.code }}{% when None %}MISC{% endmatch %}">
+                                                    <input type="file" name="file" required>
+                                                    <button type="submit" class="btn small">Attach</button>
+                                                </form>
+                                            </details>
+                                        {% endif %}
                                     </section>
                                 </li>
                             {% endfor %}
@@ -177,6 +195,11 @@
                         {% for c in transaction_comments %}
                             <li>
                                 <p class="comment-body">{{ c.body }}</p>
+                                {% match c.referenced_document %}{% when Some with (doc_ref) %}
+                                    <p class="comment-ref">
+                                        <a href="/app/documents/{{ doc_ref.key }}/download">↳ {{ doc_ref.filename }} (v{{ doc_ref.version }})</a>
+                                    </p>
+                                {% when None %}{% endmatch %}
                                 <small class="comment-meta">{{ c.author_name }} · {{ c.date_label() }}</small>
                             </li>
                         {% endfor %}

@@ -11,7 +11,9 @@ use axum::body::Body;
 use axum::extract::{Multipart, Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{Redirect, Response};
+use futures::TryStreamExt;
 use surrealdb::types::RecordId;
+use tokio_util::io::StreamReader;
 
 use crate::auth::CurrentUser;
 use crate::controllers::transactions::authorize_transaction;
@@ -38,13 +40,24 @@ pub async fn upload(
     let tx_id = RecordId::new("transaction", id.as_str());
     let tx = authorize_transaction(&state, &user, &tx_id).await?;
 
+    // Transaction-level lock: once every checklist item is approved the
+    // file set is frozen, regardless of whether the upload targets a
+    // specific item or not. (An empty checklist is *not* locked — that
+    // would block any first upload on a brand-new transaction.)
+    if all_items_approved(&state, &tx_id).await? {
+        return Err(AppError::invalid(
+            "This transaction is locked — every checklist item is approved. Have a coordinator deny an item to reopen it for changes.",
+        ));
+    }
+
     let mut form_code = String::from("MISC");
     let mut item_id: Option<String> = None;
-    let mut filename = String::new();
-    let mut content_type = String::from("application/octet-stream");
-    let mut bytes: Vec<u8> = Vec::new();
+    // Set the moment the file field arrives and we successfully stream
+    // it into S3 — kept in an Option so the loop can keep draining
+    // trailing fields after the upload completes.
+    let mut uploaded: Option<UploadedDoc> = None;
 
-    while let Some(field) = multipart
+    while let Some(mut field) = multipart
         .next_field()
         .await
         .map_err(|e| AppError::invalid(format!("upload read failed: {e}")))?
@@ -68,96 +81,113 @@ pub async fn upload(
                     item_id = Some(v);
                 }
             }
-            "file" => {
-                filename = field
+            "file" if uploaded.is_none() => {
+                let filename = field
                     .file_name()
                     .map(|n| sanitize_filename(n.to_string()))
                     .unwrap_or_else(|| "upload.bin".into());
-                content_type = field
+                let content_type = field
                     .content_type()
                     .unwrap_or("application/octet-stream")
                     .to_string();
-                bytes = field
-                    .bytes()
+
+                // Resolve the canonical form_code from the linked item
+                // and reject uploads against an already-approved item —
+                // these checks run *before* a single byte hits storage,
+                // so the worst a probe can do is open a TCP connection.
+                if let Some(ref iid) = item_id {
+                    let item_ref = RecordId::new("checklist_item", iid.as_str());
+                    use surrealdb::types::SurrealValue;
+                    #[derive(serde::Deserialize, SurrealValue)]
+                    struct ItemRow {
+                        form_code: Option<String>,
+                        approval_status: String,
+                    }
+                    let mut r = state
+                        .db
+                        .query("SELECT form_code, approval_status FROM ONLY $i")
+                        .bind(("i", item_ref))
+                        .await?;
+                    let row: Option<ItemRow> = r.take(0).ok().flatten();
+                    let row = row.ok_or(AppError::NotFound)?;
+                    if row.approval_status == "approved" {
+                        return Err(AppError::invalid(
+                            "This item has been approved and is locked. Ask a coordinator to deny it before uploading a replacement.",
+                        ));
+                    }
+                    if let Some(code) = row.form_code {
+                        form_code = code.to_ascii_uppercase();
+                    }
+                }
+
+                // Versioning: find the latest doc with the same filename +
+                // form code on this tx so we know what version number to
+                // assign and which prior row to RELATE `version_of` to.
+                let mut existing_q = state
+                    .db
+                    .query(
+                        "SELECT * FROM $t->has_document->document
+                         WHERE filename = $f AND form_code = $fc
+                         ORDER BY version DESC LIMIT 1",
+                    )
+                    .bind(("t", tx_id.clone()))
+                    .bind(("f", filename.clone()))
+                    .bind(("fc", form_code.clone()))
+                    .await?;
+                let previous: Option<Document> = existing_q.take(0)?;
+                let version = previous.as_ref().map(|p| p.version + 1).unwrap_or(1);
+
+                let storage_key =
+                    make_storage_key(&user.brokerage_id, &tx, &form_code, &filename);
+
+                // Pipe the multipart field straight into S3 multipart
+                // upload — no Vec<u8> buffering, so a 100 MB upload stays
+                // O(part_size) in process memory regardless of total size.
+                let body_stream = (&mut field).map_err(|e| {
+                    std::io::Error::other(format!("multipart read: {e}"))
+                });
+                let mut reader = StreamReader::new(body_stream);
+                let size = state
+                    .storage
+                    .put_stream(&storage_key, &mut reader, &content_type)
                     .await
-                    .map_err(|e| AppError::invalid(format!("read body: {e}")))?
-                    .to_vec();
+                    .map_err(|e| AppError::Internal(anyhow::anyhow!("store upload: {e}")))?;
+
+                tracing::info!(
+                    %filename,
+                    %form_code,
+                    bytes = size,
+                    key = %storage_key,
+                    "document streamed"
+                );
+
+                let signed = looks_signed(&filename, &content_type);
+
+                let new_doc: Option<Document> = state
+                    .db
+                    .create("document")
+                    .content(NewDocument {
+                        filename: filename.clone(),
+                        form_code: form_code.clone(),
+                        storage_key: storage_key.clone(),
+                        size_bytes: size as i64,
+                        content_type,
+                        signed,
+                        version,
+                    })
+                    .await?;
+                let doc = new_doc.ok_or_else(|| {
+                    AppError::Internal(anyhow::anyhow!("insert returned nothing"))
+                })?;
+
+                uploaded = Some(UploadedDoc { doc, previous });
             }
             _ => {}
         }
     }
 
-    if filename.is_empty() || bytes.is_empty() {
-        return Err(AppError::invalid("Please choose a file to upload."));
-    }
-
-    // If item_id was sent, look up the item's form_code to use as the
-    // canonical bucket — keeps the storage layout consistent even if the
-    // form-code field on the upload form is stale.
-    if let Some(ref iid) = item_id {
-        let item_ref = RecordId::new("checklist_item", iid.as_str());
-        use surrealdb::types::SurrealValue;
-        #[derive(serde::Deserialize, SurrealValue)]
-        struct CodeRow {
-            form_code: Option<String>,
-        }
-        let mut r = state
-            .db
-            .query("SELECT form_code FROM ONLY $i")
-            .bind(("i", item_ref))
-            .await?;
-        let row: Option<CodeRow> = r.take(0).ok().flatten();
-        if let Some(code) = row.and_then(|r| r.form_code) {
-            form_code = code.to_ascii_uppercase();
-        }
-    }
-
-    // Versioning: latest doc with the same filename + form code on this tx.
-    let mut existing_q = state
-        .db
-        .query(
-            "SELECT * FROM $t->has_document->document
-             WHERE filename = $f AND form_code = $fc
-             ORDER BY version DESC LIMIT 1",
-        )
-        .bind(("t", tx_id.clone()))
-        .bind(("f", filename.clone()))
-        .bind(("fc", form_code.clone()))
-        .await?;
-    let previous: Option<Document> = existing_q.take(0)?;
-
-    let version = previous.as_ref().map(|p| p.version + 1).unwrap_or(1);
-    let signed = looks_signed(&filename, &content_type, &bytes);
-
-    let storage_key = make_storage_key(&user.brokerage_id, &tx, &form_code, &filename);
-    state
-        .storage
-        .put_bytes(&storage_key, bytes.clone(), &content_type)
-        .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("store upload: {e}")))?;
-    tracing::info!(
-        %filename,
-        %form_code,
-        bytes = bytes.len(),
-        key = %storage_key,
-        "document stored"
-    );
-
-    let new_doc: Option<Document> = state
-        .db
-        .create("document")
-        .content(NewDocument {
-            filename: filename.clone(),
-            form_code: form_code.clone(),
-            storage_key: storage_key.clone(),
-            size_bytes: bytes.len() as i64,
-            content_type,
-            signed,
-            version,
-        })
-        .await?;
-    let doc =
-        new_doc.ok_or_else(|| AppError::Internal(anyhow::anyhow!("insert returned nothing")))?;
+    let UploadedDoc { doc, previous } = uploaded
+        .ok_or_else(|| AppError::invalid("Please choose a file to upload."))?;
 
     state
         .db
@@ -167,7 +197,7 @@ pub async fn upload(
         .bind(("u", user.user_id.clone()))
         .await?;
 
-    if let Some(iid) = item_id {
+    if let Some(ref iid) = item_id {
         let item_ref = RecordId::new("checklist_item", iid.as_str());
         state
             .db
@@ -182,11 +212,61 @@ pub async fn upload(
             .db
             .query("RELATE $new->version_of->$old")
             .bind(("new", doc.id.clone()))
-            .bind(("old", prev.id))
+            .bind(("old", prev.id.clone()))
             .await?;
+
+        // System-generated comment on the checklist item so the prior
+        // version stays one click away even after newer ones bury it in
+        // the doc list. Only posted when this upload is tied to an item
+        // — transaction-level uploads have no comment thread to land in.
+        if let Some(ref iid) = item_id {
+            let item_ref = RecordId::new("checklist_item", iid.as_str());
+            let body = format!(
+                "Uploaded v{} — replaces v{} of {}.",
+                doc.version, prev.version, prev.filename,
+            );
+            let _: Option<crate::models::Comment> = state
+                .db
+                .create("comment")
+                .content(crate::models::NewComment {
+                    body,
+                    target: item_ref,
+                    author: user.user_id.clone(),
+                    references_document: Some(prev.id),
+                })
+                .await?;
+        }
     }
 
     Ok(Redirect::to(&format!("/app/transactions/{id}")))
+}
+
+/// True when every checklist item on the transaction has been approved.
+/// An empty checklist is *not* considered locked — there's nothing to
+/// approve, and we don't want to block uploads on a fresh transaction.
+async fn all_items_approved(state: &AppState, tx_id: &RecordId) -> Result<bool, AppError> {
+    use surrealdb::types::SurrealValue;
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct Row {
+        total: i64,
+        approved: i64,
+    }
+    let mut r = state
+        .db
+        .query(
+            "SELECT
+                count() AS total,
+                count(approval_status = 'approved') AS approved
+             FROM $t->has_item->checklist_item
+             GROUP ALL",
+        )
+        .bind(("t", tx_id.clone()))
+        .await?;
+    let row: Option<Row> = r.take(0)?;
+    Ok(match row {
+        Some(r) => r.total > 0 && r.total == r.approved,
+        None => false,
+    })
 }
 
 /// Stream a single document's bytes to the browser, preserving the
@@ -425,8 +505,15 @@ fn sanitize_filename(name: String) -> String {
 /// Heuristic: treat uploads as "signed" if the filename hints at it. PDFs
 /// containing a signature dictionary would be a nicer signal but require
 /// a PDF parser we don't want to bring in for the PoC.
-fn looks_signed(filename: &str, content_type: &str, _bytes: &[u8]) -> bool {
+fn looks_signed(filename: &str, content_type: &str) -> bool {
     let lower = filename.to_ascii_lowercase();
     (content_type == "application/pdf" || lower.ends_with(".pdf"))
         && (lower.contains("signed") || lower.contains("executed") || lower.contains("final"))
+}
+
+/// Result of a successful streaming upload — kept inside an `Option` while
+/// the multipart loop runs so trailing fields can still be drained.
+struct UploadedDoc {
+    doc: Document,
+    previous: Option<Document>,
 }

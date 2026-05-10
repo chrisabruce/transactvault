@@ -256,6 +256,10 @@ DEFINE FIELD OVERWRITE body       ON comment TYPE string ASSERT string::len($val
 DEFINE FIELD OVERWRITE target     ON comment TYPE record
     ASSERT meta::tb($value) IN ["transaction", "checklist_item"];
 DEFINE FIELD OVERWRITE author     ON comment TYPE record<user>;
+-- Optional pointer to a document this comment refers back to. Set by the
+-- system when a new version is uploaded so the prior version stays
+-- one click away even after newer ones land at the top of the doc list.
+DEFINE FIELD OVERWRITE references_document ON comment TYPE option<record<document>> DEFAULT NONE;
 DEFINE FIELD OVERWRITE created_at ON comment TYPE datetime DEFAULT time::now();
 DEFINE INDEX OVERWRITE idx_comment_target ON comment FIELDS target;
 

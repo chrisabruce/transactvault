@@ -72,6 +72,7 @@ async fn insert_comment(
         body,
         target,
         author: user.user_id.clone(),
+        references_document: None,
     };
     let _: Option<crate::models::Comment> = state.db.create("comment").content(new_comment).await?;
     Ok(())

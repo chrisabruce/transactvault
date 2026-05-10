@@ -95,7 +95,7 @@ pub fn build(state: AppState) -> Router {
                 .on_failure(DefaultOnFailure::new().level(Level::ERROR)),
         )
         .with_state(state)
-        .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024))
+        .layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024))
         .layer(tower_http::timeout::TimeoutLayer::with_status_code(
             axum::http::StatusCode::GATEWAY_TIMEOUT,
             Duration::from_secs(60),

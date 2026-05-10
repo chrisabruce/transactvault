@@ -605,7 +605,10 @@ pub async fn load_comments(
     let mut response = state
         .db
         .query(
-            "SELECT body, created_at, author.name AS author_name \
+            "SELECT body, created_at, author.name AS author_name, \
+                    references_document.id AS ref_id, \
+                    references_document.filename AS ref_filename, \
+                    references_document.version AS ref_version \
              FROM comment WHERE target = $t ORDER BY created_at ASC",
         )
         .bind(("t", target.clone()))
@@ -615,14 +618,30 @@ pub async fn load_comments(
         body: String,
         author_name: Option<String>,
         created_at: chrono::DateTime<chrono::Utc>,
+        ref_id: Option<RecordId>,
+        ref_filename: Option<String>,
+        ref_version: Option<i64>,
     }
     let rows: Vec<Row> = response.take(0).unwrap_or_default();
     let comments = rows
         .into_iter()
-        .map(|r| CommentView {
-            body: r.body,
-            author_name: r.author_name.unwrap_or_else(|| "Someone".into()),
-            created_at: r.created_at,
+        .map(|r| {
+            let referenced_document = match (r.ref_id, r.ref_filename, r.ref_version) {
+                (Some(id), Some(filename), Some(version)) => {
+                    Some(crate::templates::ReferencedDocument {
+                        key: crate::record_key(&id),
+                        filename,
+                        version,
+                    })
+                }
+                _ => None,
+            };
+            CommentView {
+                body: r.body,
+                author_name: r.author_name.unwrap_or_else(|| "Someone".into()),
+                created_at: r.created_at,
+                referenced_document,
+            }
         })
         .collect();
     Ok(comments)
