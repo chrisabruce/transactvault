@@ -216,10 +216,7 @@
         </section>
 
         <aside class="panel sidebar">
-            <header class="sidebar-header">
-                <h2>Details</h2>
-                <a class="btn small ghost" href="/app/transactions/{{ transaction_key }}/edit">Edit</a>
-            </header>
+            <h2>Details</h2>
             <dl>
                 <dt>Owner</dt>
                 <dd>{{ owner_name }}</dd>
@@ -242,6 +239,9 @@
                 <dt>Created</dt>
                 <dd><time datetime="{{ transaction.created_at }}">{{ transaction.created_at.format("%b %-d, %Y") }}</time></dd>
             </dl>
+            {% if !compliance.is_locked() %}
+                <a class="btn small" href="/app/transactions/{{ transaction_key }}/edit">Edit details</a>
+            {% endif %}
         </aside>
     </section>
 </main>

@@ -367,6 +367,15 @@ pub async fn edit_form(
     let tx_id = RecordId::new("transaction", id.as_str());
     let tx = authorize_transaction(&state, &user, &tx_id).await?;
 
+    // Fully-approved transactions are read-only — the "Edit" button is
+    // hidden in this state but enforce it server-side too so the GET
+    // can't be opened by typing the URL.
+    if transaction_fully_approved(&state, &tx.id).await? {
+        return Err(AppError::invalid(
+            "This transaction is fully approved and locked. Have a coordinator deny an item if you need to edit details.",
+        ));
+    }
+
     let dropdowns_locked = any_item_reviewed(&state, &tx.id).await?;
 
     let header = AppHeader::new(
@@ -402,6 +411,12 @@ pub async fn update(
 ) -> Result<Redirect, AppError> {
     let tx_id = RecordId::new("transaction", id.as_str());
     let tx = authorize_transaction(&state, &user, &tx_id).await?;
+
+    if transaction_fully_approved(&state, &tx.id).await? {
+        return Err(AppError::invalid(
+            "This transaction is fully approved and locked.",
+        ));
+    }
 
     let property_address = input.property_address.trim().to_string();
     if property_address.is_empty() {
@@ -521,6 +536,37 @@ pub async fn update(
     }
 
     Ok(Redirect::to(&format!("/app/transactions/{id}")))
+}
+
+/// True when every checklist item on the transaction has been approved.
+/// Mirrors the in-template `compliance.is_locked()`; we recompute here
+/// because the edit endpoints don't build a `CompliancePanel`. An empty
+/// checklist is *not* locked — there's nothing to approve.
+async fn transaction_fully_approved(
+    state: &AppState,
+    tx_id: &RecordId,
+) -> Result<bool, AppError> {
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct Row {
+        total: i64,
+        approved: i64,
+    }
+    let mut r = state
+        .db
+        .query(
+            "SELECT
+                count() AS total,
+                count(approval_status = 'approved') AS approved
+             FROM $t->has_item->checklist_item
+             GROUP ALL",
+        )
+        .bind(("t", tx_id.clone()))
+        .await?;
+    let row: Option<Row> = r.take(0)?;
+    Ok(match row {
+        Some(r) => r.total > 0 && r.total == r.approved,
+        None => false,
+    })
 }
 
 /// True when any checklist item on the transaction has been approved or

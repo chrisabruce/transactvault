@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+
+{% block title %}Edit transaction — {{ app_name }}{% endblock %}
+{% block body_class %}page-app{% endblock %}
+
+{% block body %}
+{% include "components/app_header.html" %}
+
+<main class="app-main">
+    <header class="page-title">
+        <section>
+            <h1>Edit Transaction</h1>
+            <p class="subtitle">{{ transaction.property_address }}</p>
+        </section>
+        <a class="btn" href="/app/transactions/{{ transaction_key }}">Cancel</a>
+    </header>
+
+    {% match error %}{% when Some with (msg) %}
+        <p class="alert error" role="alert">{{ msg }}</p>
+    {% when None %}{% endmatch %}
+
+    {% if dropdowns_locked %}
+        <p class="alert info" role="status">
+            Special conditions are locked because at least one checklist item has been approved or denied. Reset those items to pending if you need to change the transaction type, sales type, or special condition.
+        </p>
+    {% endif %}
+
+    <section class="panel">
+        <form method="post" action="/app/transactions/{{ transaction_key }}/edit" class="tx-form">
+            <fieldset>
+                <legend>Property Information</legend>
+                <div class="form-row">
+                    <label>
+                        <span>Property Address</span>
+                        <input type="text" name="property_address" required value="{{ transaction.property_address }}">
+                    </label>
+                    <label>
+                        <span>Assessor's Parcel Number (APN)</span>
+                        <input type="text" name="apn" value="{% match transaction.apn %}{% when Some with (v) %}{{ v }}{% when None %}{% endmatch %}">
+                    </label>
+                </div>
+                <div class="form-row">
+                    <label>
+                        <span>City</span>
+                        <input type="text" name="city" value="{{ transaction.city }}">
+                    </label>
+                    <label>
+                        <span>Postal Code</span>
+                        <input type="text" name="postal_code" value="{% match transaction.postal_code %}{% when Some with (v) %}{{ v }}{% when None %}{% endmatch %}">
+                    </label>
+                </div>
+                <div class="form-row">
+                    <label>
+                        <span>Sales Price</span>
+                        <input type="text" name="sales_price" value="{{ transaction.price_display() }}">
+                    </label>
+                    <label>
+                        <span>Client Name</span>
+                        <input type="text" name="client_name" value="{% match transaction.client_name %}{% when Some with (v) %}{{ v }}{% when None %}{% endmatch %}">
+                    </label>
+                </div>
+            </fieldset>
+
+            <fieldset>
+                <legend>Transaction Information</legend>
+                <div class="form-row">
+                    <label>
+                        <span>Primary MLS Number</span>
+                        <input type="text" name="mls_number" value="{% match transaction.mls_number %}{% when Some with (v) %}{{ v }}{% when None %}{% endmatch %}">
+                    </label>
+                    <label>
+                        <span>Office File Number</span>
+                        <input type="text" name="office_file_number" value="{% match transaction.office_file_number %}{% when Some with (v) %}{{ v }}{% when None %}{% endmatch %}">
+                    </label>
+                </div>
+                <div class="form-row">
+                    <label>
+                        <span>Transaction Status</span>
+                        <select name="status">
+                            {% for s in statuses %}
+                                <option value="{{ s.as_str() }}"{% if s.as_str() == transaction.status %} selected{% endif %}>{{ s.label() }}</option>
+                            {% endfor %}
+                        </select>
+                    </label>
+                    <label>
+                        <span>Transaction Type{% if dropdowns_locked %} <small class="locked-hint">(locked)</small>{% endif %}</span>
+                        <select name="transaction_type"{% if dropdowns_locked %} disabled{% endif %}>
+                            {% for t in types %}
+                                <option value="{{ t.as_str() }}"{% if t.as_str() == transaction.transaction_type %} selected{% endif %}>{{ t.label() }}</option>
+                            {% endfor %}
+                        </select>
+                    </label>
+                </div>
+                <div class="form-row">
+                    <label>
+                        <span>Sales Type{% if dropdowns_locked %} <small class="locked-hint">(locked)</small>{% endif %}</span>
+                        <select name="sales_type"{% if dropdowns_locked %} disabled{% endif %}>
+                            {% for s in sales_types %}
+                                <option value="{{ s.as_str() }}"{% if s.as_str() == transaction.sales_type %} selected{% endif %}>{{ s.label() }}</option>
+                            {% endfor %}
+                        </select>
+                    </label>
+                    <label>
+                        <span>Special Sales Condition{% if dropdowns_locked %} <small class="locked-hint">(locked)</small>{% endif %}</span>
+                        <select name="special_sales_condition"{% if dropdowns_locked %} disabled{% endif %}>
+                            {% for c in conditions %}
+                                <option value="{{ c.as_str() }}"{% if c.as_str() == transaction.special_sales_condition %} selected{% endif %}>{{ c.label() }}</option>
+                            {% endfor %}
+                        </select>
+                    </label>
+                </div>
+            </fieldset>
+
+            <button type="submit">Save changes</button>
+        </form>
+    </section>
+</main>
+{% endblock %}
