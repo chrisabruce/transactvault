@@ -129,6 +129,39 @@ impl Storage {
         })?;
         Ok(Bytes::from(resp.to_vec()))
     }
+
+    /// **DEV-ONLY.** Delete every object in the bucket. Walks the bucket
+    /// listing (paged via S3's continuation tokens) and issues `DeleteObject`
+    /// for each key. The bucket itself is left in place so the next write
+    /// doesn't have to wait for `CreateBucket` to round-trip.
+    ///
+    /// Only invoked from the boot path when [`Config::dev_reset_on_boot`] is
+    /// true. Logs the count of deleted objects at WARN.
+    pub async fn dev_wipe_bucket(&self) -> anyhow::Result<()> {
+        tracing::warn!(
+            "DEV-ONLY: wiping every object in the storage bucket. This destroys \
+             all uploaded documents permanently."
+        );
+
+        let mut deleted: usize = 0;
+        let pages = self
+            .bucket
+            .list(String::new(), None)
+            .await
+            .context("list objects for wipe")?;
+
+        for page in pages {
+            for obj in page.contents {
+                match self.bucket.delete_object(&obj.key).await {
+                    Ok(_) => deleted += 1,
+                    Err(e) => tracing::warn!(key = %obj.key, error = %e, "delete failed"),
+                }
+            }
+        }
+
+        tracing::warn!(deleted_objects = deleted, "DEV-ONLY storage wipe complete");
+        Ok(())
+    }
 }
 
 /// Exponential-ish backoff: 500ms, 1s, 1.5s, ... up to 5.5s.

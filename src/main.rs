@@ -56,11 +56,35 @@ async fn main() -> anyhow::Result<()> {
     let db = db::connect(&config)
         .await
         .context("connecting to SurrealDB")?;
+
+    // DEV-ONLY: destructive reset. Opt-in via the literal phrase
+    // `DEV_RESET_ON_BOOT=yes-destroy-all-data`. Order:
+    //   1. Drop every domain table (so no DB rows reference orphaned
+    //      storage keys mid-wipe).
+    //   2. Re-apply the schema (re-creates the empty tables).
+    //   3. Connect to storage (creates the bucket if it doesn't exist).
+    //   4. Wipe every object in the bucket.
+    // Each step is a no-op on a fresh environment, so flipping the flag
+    // on a brand-new system is safe.
+    if config.dev_reset_on_boot {
+        db::reset_schema(&db)
+            .await
+            .context("DEV-ONLY db wipe (DEV_RESET_ON_BOOT was set)")?;
+    }
+
     db::apply_schema(&db).await.context("applying schema")?;
 
     let storage = storage::Storage::connect(&config.rustfs)
         .await
         .context("connecting to object storage")?;
+
+    if config.dev_reset_on_boot {
+        storage
+            .dev_wipe_bucket()
+            .await
+            .context("DEV-ONLY storage wipe (DEV_RESET_ON_BOOT was set)")?;
+    }
+
     let mailer = email::Mailer::new(&config.email);
 
     let state = AppState::new(db, storage, mailer, config.clone());

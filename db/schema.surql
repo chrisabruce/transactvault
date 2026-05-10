@@ -17,45 +17,101 @@
 -- Every DEFINE uses OVERWRITE so re-running this script in place updates
 -- existing definitions (ASSERT clauses, defaults, types, etc.) instead of
 -- being ignored. The boot loop in `src/db/mod.rs` runs this on every start.
+--
+-- Migration sequencing — three phases. Two earlier prod incidents made this
+-- order necessary (rows missing `approval_status`, then missing
+-- `email_verified`, both crashing reads with deserialize errors):
+--
+--   Phase 1 (RELAX):    DEFINE every new-or-newly-required field as
+--                       `option<...>` first so existing rows that lack the
+--                       field don't violate SCHEMAFULL.
+--   Phase 2 (MIGRATE):  UPDATE rows to backfill the new fields and rewrite
+--                       legacy enum values onto the new vocabulary.
+--   Phase 3 (LOCK):     re-DEFINE the same fields with their final
+--                       non-option types, defaults, and ASSERTs.
+--
+-- DEFAULT clauses apply only to NEW inserts in SurrealDB — they do not
+-- retroactively populate existing rows. Phase 2 is what makes those rows
+-- pass Phase 3's tighter ASSERTs.
 -- ============================================================================
 
--- Migrate any data still on the pre-CAR-forms schema. Old `transaction.status`
--- values get mapped onto the new enum BEFORE the new ASSERT is installed,
--- otherwise the OVERWRITE fails on rows that violate the new constraint.
+-- ============================================================================
+-- Phase 1 — relax: declare every newly-required column as `option<...>` so
+-- the bare DEFINE doesn't reject pre-existing rows that lack the field.
+-- ============================================================================
+
+DEFINE TABLE OVERWRITE transaction SCHEMAFULL;
+DEFINE FIELD OVERWRITE status                  ON transaction TYPE option<string>;
+DEFINE FIELD OVERWRITE transaction_type        ON transaction TYPE option<string>;
+DEFINE FIELD OVERWRITE special_sales_condition ON transaction TYPE option<string>;
+DEFINE FIELD OVERWRITE sales_type              ON transaction TYPE option<string>;
+
+DEFINE TABLE OVERWRITE checklist_item SCHEMAFULL;
+DEFINE FIELD OVERWRITE group_slug      ON checklist_item TYPE option<string>;
+DEFINE FIELD OVERWRITE required        ON checklist_item TYPE option<bool>;
+DEFINE FIELD OVERWRITE approval_status ON checklist_item TYPE option<string>;
+DEFINE FIELD OVERWRITE reviewed_at     ON checklist_item TYPE option<datetime>;
+DEFINE FIELD OVERWRITE reviewed_by     ON checklist_item TYPE option<record<user>>;
+-- Legacy fields kept temporarily so the MIGRATE phase can read them.
+DEFINE FIELD OVERWRITE completed       ON checklist_item TYPE option<bool>;
+DEFINE FIELD OVERWRITE completed_at    ON checklist_item TYPE option<datetime>;
+DEFINE FIELD OVERWRITE completed_by    ON checklist_item TYPE option<record<user>>;
+
+DEFINE TABLE OVERWRITE document SCHEMAFULL;
+DEFINE FIELD OVERWRITE form_code ON document TYPE option<string>;
+-- Legacy field kept temporarily for MIGRATE.
+DEFINE FIELD OVERWRITE category  ON document TYPE option<string>;
+
+DEFINE TABLE OVERWRITE user SCHEMAFULL;
+DEFINE FIELD OVERWRITE email_verified ON user TYPE option<bool>;
+
+-- ============================================================================
+-- Phase 2 — migrate: rewrite legacy values onto the new vocabulary and
+-- backfill every newly-required field for existing rows.
+-- ============================================================================
+
+-- transaction.status: old PoC enum -> new five-value enum.
 UPDATE transaction SET status = 'active'   WHERE status = 'open';
 UPDATE transaction SET status = 'pending'  WHERE status = 'under_contract';
 UPDATE transaction SET status = 'sold'     WHERE status = 'closed';
 UPDATE transaction SET status = 'canceled' WHERE status = 'cancelled';
+UPDATE transaction SET status = 'active'   WHERE status = NONE;
 
--- Pre-fill new required fields on existing rows so OVERWRITE+ASSERT doesn't
--- reject anything currently in the table.
-UPDATE transaction SET
-    transaction_type        = 'residential',
-    special_sales_condition = 'none',
-    sales_type              = 'listing'
-    WHERE transaction_type IS NONE OR transaction_type = NONE;
+-- transaction: new required dropdowns get sensible defaults.
+UPDATE transaction SET transaction_type        = 'residential' WHERE transaction_type        = NONE;
+UPDATE transaction SET special_sales_condition = 'none'        WHERE special_sales_condition = NONE;
+UPDATE transaction SET sales_type              = 'listing'     WHERE sales_type              = NONE;
 
+-- checklist_item: legacy `completed*` columns -> new `approval_status` /
+-- `reviewed_*`. Then drop the old columns so the LOCK phase can remove
+-- them from the schema.
 UPDATE checklist_item SET
-    group_slug = 'additional',
-    required   = false
-    WHERE group_slug IS NONE OR group_slug = NONE;
-
--- Migrate legacy `completed`/`completed_at`/`completed_by` to the new
--- approval workflow. `completed=true` rows become approved (with the same
--- timestamp + reviewer); everything else starts as pending. We do this
--- BEFORE the OVERWRITE+ASSERT below so existing rows don't get rejected.
-UPDATE checklist_item SET
-    approval_status = IF completed = true THEN 'approved' ELSE 'pending' END,
-    reviewed_at     = completed_at,
-    reviewed_by     = completed_by
-    WHERE approval_status IS NONE OR approval_status = NONE;
--- Drop the old columns so SCHEMAFULL doesn't reject inserts that omit them.
+    approval_status = IF completed = true THEN 'approved' ELSE 'pending' END
+    WHERE approval_status = NONE;
+UPDATE checklist_item SET reviewed_at = completed_at WHERE reviewed_at = NONE;
+UPDATE checklist_item SET reviewed_by = completed_by WHERE reviewed_by = NONE;
 UPDATE checklist_item UNSET completed, completed_at, completed_by;
 
--- Documents previously had a `category` field. Map it onto `form_code`,
--- which is the new canonical name.
+-- checklist_item: backfill grouping + required flags for legacy items.
+UPDATE checklist_item SET group_slug = 'additional' WHERE group_slug = NONE;
+UPDATE checklist_item SET required   = false        WHERE required   = NONE;
+
+-- document.form_code: derived from the old `category` field; default to
+-- `MISC` when neither is set. Then drop `category`.
 UPDATE document SET form_code = string::uppercase(category)
-    WHERE form_code IS NONE OR form_code = NONE;
+    WHERE form_code = NONE AND category != NONE;
+UPDATE document SET form_code = 'MISC' WHERE form_code = NONE;
+UPDATE document UNSET category;
+
+-- user.email_verified: legacy users predate the verification flow. We
+-- treat them as already verified — they've been using the system, so
+-- bouncing them now would be a worse experience than a small data drift.
+UPDATE user SET email_verified = true WHERE email_verified = NONE;
+
+-- ============================================================================
+-- Phase 3 — lock: re-DEFINE every relaxed field with its final type,
+-- default, and ASSERT. Then DEFINE the rest of the schema.
+-- ============================================================================
 
 -- ----------------------------------------------------------------------------
 -- Brokerage

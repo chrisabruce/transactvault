@@ -45,6 +45,16 @@ pub struct Config {
     /// Same idea for `/login`, per IP per 15 minutes.
     pub login_rate_per_quarter_hour: u32,
 
+    /// **DEV-ONLY.** When `true`, the app drops every domain table AND every
+    /// object in the storage bucket at boot before applying the schema —
+    /// destroying users, brokerages, transactions, audit events, and uploaded
+    /// documents. Triggered only when `DEV_RESET_ON_BOOT` is set to the exact
+    /// phrase `"yes-destroy-all-data"`. Anything else (including the literal
+    /// strings `"true"`, `"1"`, `"yes"`) leaves data alone. Designed so it
+    /// can't be flipped on by a typo or a copy-pasted env var. Never set in
+    /// production.
+    pub dev_reset_on_boot: bool,
+
     pub rustfs: RustFsConfig,
     pub email: EmailConfig,
 }
@@ -122,6 +132,11 @@ impl Config {
             login_rate_per_quarter_hour: env_or("LOGIN_RATE_PER_QH", "20")
                 .parse()
                 .context("LOGIN_RATE_PER_QH must be an integer")?,
+
+            // Foot-gun guard: only the literal phrase enables the wipe, and
+            // the env var name itself starts with `DEV_` so production
+            // configs are unlikely to accidentally include it.
+            dev_reset_on_boot: env_or("DEV_RESET_ON_BOOT", "") == "yes-destroy-all-data",
 
             rustfs: RustFsConfig {
                 endpoint: env_or("RUSTFS_ENDPOINT", "http://127.0.0.1:37421"),

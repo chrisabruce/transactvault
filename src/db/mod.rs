@@ -81,3 +81,51 @@ pub async fn apply_schema(db: &Surreal<Any>) -> anyhow::Result<()> {
     tracing::info!("schema applied");
     Ok(())
 }
+
+/// **DEV-ONLY.** Drop every domain table — destructively wipes all data.
+/// Only invoked when [`crate::config::Config::dev_reset_on_boot`] is true
+/// (i.e. `DEV_RESET_ON_BOOT` is set to the exact phrase
+/// `yes-destroy-all-data`). Never run this in production.
+///
+/// We `REMOVE TABLE` each table by name rather than dropping the whole
+/// namespace because:
+/// - Embedded engines don't always allow namespace-level removal mid-process.
+/// - Naming each table makes a code-review of "what gets nuked" trivial.
+/// - The list is the inverse of the `DEFINE TABLE` block in
+///   `db/schema.surql` — keep it in sync when you add a new top-level table.
+pub async fn reset_schema(db: &Surreal<Any>) -> anyhow::Result<()> {
+    tracing::warn!(
+        "DEV-ONLY: DEV_RESET_ON_BOOT=yes-destroy-all-data — wiping ALL domain tables \
+         before reapplying schema. Every user, brokerage, transaction, document \
+         metadata row, and audit event is about to be deleted."
+    );
+
+    // Order: drop relation tables before the tables they reference, then
+    // entity tables. SurrealDB doesn't enforce this ordering strictly, but
+    // it makes intent obvious and avoids relying on quirks.
+    const RESET_QUERY: &str = "
+        REMOVE TABLE IF EXISTS for_item;
+        REMOVE TABLE IF EXISTS uploaded;
+        REMOVE TABLE IF EXISTS version_of;
+        REMOVE TABLE IF EXISTS has_document;
+        REMOVE TABLE IF EXISTS has_item;
+        REMOVE TABLE IF EXISTS has_transaction;
+        REMOVE TABLE IF EXISTS owns;
+        REMOVE TABLE IF EXISTS works_at;
+        REMOVE TABLE IF EXISTS comment;
+        REMOVE TABLE IF EXISTS document;
+        REMOVE TABLE IF EXISTS checklist_item;
+        REMOVE TABLE IF EXISTS transaction;
+        REMOVE TABLE IF EXISTS invitation;
+        REMOVE TABLE IF EXISTS audit_event;
+        REMOVE TABLE IF EXISTS user;
+        REMOVE TABLE IF EXISTS brokerage;
+        REMOVE TABLE IF EXISTS _migrations;
+    ";
+
+    db.query(RESET_QUERY)
+        .await
+        .context("removing tables for reset")?;
+    tracing::warn!("all domain tables removed; schema will be re-applied next");
+    Ok(())
+}
