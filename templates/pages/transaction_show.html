@@ -126,7 +126,9 @@
                                         </details>
                                     </section>
                                     <section class="checklist-actions">
-                                        {% if can_review %}
+                                        {% if row.documents.is_empty() %}
+                                            <span class="status-pill status-awaiting">Awaiting upload</span>
+                                        {% else if can_review %}
                                             <form method="post" action="/app/checklist/{{ row.item.url_key() }}/approve" class="review-action">
                                                 <button class="btn small approve{% if row.item.is_approved() %} active{% endif %}" type="submit">
                                                     {% if row.item.is_approved() %}Approved{% else %}Approve{% endif %}
@@ -214,7 +216,10 @@
         </section>
 
         <aside class="panel sidebar">
-            <h2>Details</h2>
+            <header class="sidebar-header">
+                <h2>Details</h2>
+                <a class="btn small ghost" href="/app/transactions/{{ transaction_key }}/edit">Edit</a>
+            </header>
             <dl>
                 <dt>Owner</dt>
                 <dd>{{ owner_name }}</dd>

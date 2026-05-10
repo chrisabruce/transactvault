@@ -277,6 +277,27 @@ pub struct TransactionNewPage<'a> {
 }
 
 #[derive(Template)]
+#[template(path = "pages/transaction_edit.html")]
+pub struct TransactionEditPage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+    pub signed_in: bool,
+    pub header: AppHeader<'a>,
+    pub transaction: Transaction,
+    pub transaction_key: String,
+    pub statuses: Vec<TransactionStatus>,
+    pub types: Vec<TransactionType>,
+    pub conditions: Vec<SpecialSalesCondition>,
+    pub sales_types: Vec<SalesType>,
+    /// True when at least one checklist item has been approved or denied.
+    /// The three "special conditions" selects render as `disabled` in
+    /// this state — the backend still enforces it, this is just the UX
+    /// signal so legit users see why they can't change those fields.
+    pub dropdowns_locked: bool,
+    pub error: Option<&'a str>,
+}
+
+#[derive(Template)]
 #[template(path = "pages/transaction_show.html")]
 pub struct TransactionShowPage<'a> {
     pub app_name: &'a str,

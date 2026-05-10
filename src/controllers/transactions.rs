@@ -22,7 +22,8 @@ use crate::models::{
 use crate::state::AppState;
 use crate::templates::{
     AppHeader, ChecklistGroup, ChecklistRow, CommentView, CompliancePanel, DashboardPage,
-    SearchDocument, SearchPage, TransactionNewPage, TransactionShowPage, TransactionsListPage,
+    SearchDocument, SearchPage, TransactionEditPage, TransactionNewPage, TransactionShowPage,
+    TransactionsListPage,
 };
 
 // ---------------------------------------------------------------------------
@@ -351,6 +352,329 @@ pub async fn update_status(
         .await?;
 
     Ok(Redirect::to(&format!("/app/transactions/{id}")).into_response())
+}
+
+// ---------------------------------------------------------------------------
+// Edit / Update
+// ---------------------------------------------------------------------------
+
+pub async fn edit_form(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<String>,
+) -> Result<Html<String>, AppError> {
+    let brokerage = load_brokerage(&state, &user).await?;
+    let tx_id = RecordId::new("transaction", id.as_str());
+    let tx = authorize_transaction(&state, &user, &tx_id).await?;
+
+    let dropdowns_locked = any_item_reviewed(&state, &tx.id).await?;
+
+    let header = AppHeader::new(
+        &user.name,
+        &user.email,
+        user.role,
+        &brokerage.name,
+        "transactions",
+    )
+    .with_super_admin(crate::controllers::is_super_admin(&state, &user));
+    let tx_key = crate::record_key(&tx.id);
+    render(&TransactionEditPage {
+        app_name: &state.config.app_name,
+        base_url: &state.config.base_url,
+        signed_in: true,
+        header,
+        transaction_key: tx_key,
+        transaction: tx,
+        statuses: TransactionStatus::all().to_vec(),
+        types: TransactionType::all().to_vec(),
+        conditions: SpecialSalesCondition::all().to_vec(),
+        sales_types: SalesType::all().to_vec(),
+        dropdowns_locked,
+        error: None,
+    })
+}
+
+pub async fn update(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<String>,
+    Form(input): Form<CreateInput>,
+) -> Result<Redirect, AppError> {
+    let tx_id = RecordId::new("transaction", id.as_str());
+    let tx = authorize_transaction(&state, &user, &tx_id).await?;
+
+    let property_address = input.property_address.trim().to_string();
+    if property_address.is_empty() {
+        return Err(AppError::invalid("Property address is required."));
+    }
+
+    // Parse new dropdown values, falling back to the existing record's
+    // values when an input is missing/unknown — this keeps "disabled"
+    // selects (which don't post a value) from clobbering the row.
+    let new_type = input
+        .transaction_type
+        .as_deref()
+        .and_then(TransactionType::parse)
+        .unwrap_or_else(|| tx.type_enum());
+    let new_condition = input
+        .special_sales_condition
+        .as_deref()
+        .and_then(SpecialSalesCondition::parse)
+        .unwrap_or_else(|| tx.condition_enum());
+    let new_sales = input
+        .sales_type
+        .as_deref()
+        .and_then(SalesType::parse)
+        .unwrap_or_else(|| tx.sales_enum());
+    let new_status = input
+        .status
+        .as_deref()
+        .and_then(TransactionStatus::parse)
+        .unwrap_or_else(|| tx.status_enum());
+
+    let old_type = tx.type_enum();
+    let old_condition = tx.condition_enum();
+    let old_sales = tx.sales_enum();
+
+    let dropdowns_changed =
+        new_type != old_type || new_condition != old_condition || new_sales != old_sales;
+
+    // Lock rule: once any checklist item has been approved or denied, the
+    // three special-condition dropdowns are frozen because changing them
+    // would reshape the required-forms set under the reviewer's feet.
+    // Cosmetic fields (address, APN, price, etc.) stay editable.
+    if dropdowns_changed && any_item_reviewed(&state, &tx.id).await? {
+        return Err(AppError::invalid(
+            "Special conditions are locked because at least one checklist item has been approved or denied. Reset those items to pending before changing the transaction type, sales type, or special condition.",
+        ));
+    }
+
+    let price_cents = parse_price_cents(input.sales_price.as_deref().unwrap_or(""));
+
+    state
+        .db
+        .query(
+            "UPDATE $t SET
+                property_address       = $address,
+                city                   = $city,
+                apn                    = $apn,
+                postal_code            = $postal,
+                price_cents            = $price,
+                client_name            = $client,
+                mls_number             = $mls,
+                office_file_number     = $office,
+                status                 = $status,
+                transaction_type       = $tx_type,
+                special_sales_condition = $cond,
+                sales_type             = $sales",
+        )
+        .bind(("t", tx_id.clone()))
+        .bind(("address", property_address))
+        .bind((
+            "city",
+            input.city.unwrap_or_default().trim().to_string(),
+        ))
+        .bind((
+            "apn",
+            input
+                .apn
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+        ))
+        .bind((
+            "postal",
+            input
+                .postal_code
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+        ))
+        .bind(("price", price_cents))
+        .bind((
+            "client",
+            input
+                .client_name
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+        ))
+        .bind((
+            "mls",
+            input
+                .mls_number
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+        ))
+        .bind((
+            "office",
+            input
+                .office_file_number
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+        ))
+        .bind(("status", new_status.as_str().to_string()))
+        .bind(("tx_type", new_type.as_str().to_string()))
+        .bind(("cond", new_condition.as_str().to_string()))
+        .bind(("sales", new_sales.as_str().to_string()))
+        .await?;
+
+    if dropdowns_changed {
+        reconcile_checklist(&state, &tx_id, new_type, new_condition, new_sales).await?;
+    }
+
+    Ok(Redirect::to(&format!("/app/transactions/{id}")))
+}
+
+/// True when any checklist item on the transaction has been approved or
+/// denied — the trigger that locks the special-conditions dropdowns.
+async fn any_item_reviewed(state: &AppState, tx_id: &RecordId) -> Result<bool, AppError> {
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct CountRow {
+        count: i64,
+    }
+    let mut q = state
+        .db
+        .query(
+            "SELECT count() FROM $t->has_item->checklist_item
+             WHERE approval_status IN ['approved', 'denied']
+             GROUP ALL",
+        )
+        .bind(("t", tx_id.clone()))
+        .await?;
+    let row: Option<CountRow> = q.take(0)?;
+    Ok(row.map(|c| c.count > 0).unwrap_or(false))
+}
+
+/// Bring the checklist back in sync with the special-conditions dropdowns
+/// after they've been edited. Three cases per row:
+///
+/// 1. Item's `form_code` is still in the new required set → update its
+///    `group_slug` and `required` flag so it reflects the new layout.
+/// 2. Item's `form_code` is no longer required and has no documents
+///    attached → delete the row (and the `has_item` edge).
+/// 3. Item's `form_code` is no longer required *but* has documents
+///    attached → move it to "Additional Disclosures" and clear the
+///    required flag, so the uploaded files survive the recategorization.
+///
+/// Custom items (`form_code = None`) are left alone. Any form in the new
+/// required set that isn't already on the checklist is added.
+async fn reconcile_checklist(
+    state: &AppState,
+    tx_id: &RecordId,
+    tx_type: TransactionType,
+    cond: SpecialSalesCondition,
+    sales: SalesType,
+) -> Result<(), AppError> {
+    let defaults = forms::build_default_checklist(tx_type, cond, sales);
+    let defaults_by_code: std::collections::HashMap<&str, &forms::DefaultItem> =
+        defaults.iter().map(|d| (d.code, d)).collect();
+
+    let items = load_checklist(state, tx_id).await?;
+    let additional_slug = FormGroup::AdditionalDisclosures.slug().to_string();
+
+    // First pass: update or relocate existing items.
+    for item in &items {
+        let Some(code) = item.form_code.as_deref() else {
+            continue;
+        };
+        match defaults_by_code.get(code) {
+            Some(target) => {
+                let target_slug = target.group.slug().to_string();
+                if target_slug != item.group_slug || target.required != item.required {
+                    state
+                        .db
+                        .query("UPDATE $i SET group_slug = $g, required = $r")
+                        .bind(("i", item.id.clone()))
+                        .bind(("g", target_slug))
+                        .bind(("r", target.required))
+                        .await?;
+                }
+            }
+            None => {
+                // No longer part of the required set. Preserve any
+                // uploaded documents by relocating the item to the
+                // catch-all group; otherwise drop the row entirely.
+                let has_docs = item_has_documents(state, &item.id).await?;
+                if has_docs {
+                    if item.group_slug != additional_slug || item.required {
+                        state
+                            .db
+                            .query("UPDATE $i SET group_slug = $g, required = false")
+                            .bind(("i", item.id.clone()))
+                            .bind(("g", additional_slug.clone()))
+                            .await?;
+                    }
+                } else {
+                    state
+                        .db
+                        .query("DELETE has_item WHERE out = $i; DELETE $i;")
+                        .bind(("i", item.id.clone()))
+                        .await?;
+                }
+            }
+        }
+    }
+
+    // Second pass: add any newly-required forms that aren't on the list yet.
+    let existing_codes: std::collections::HashSet<&str> = items
+        .iter()
+        .filter_map(|i| i.form_code.as_deref())
+        .collect();
+
+    let max_position = items.iter().map(|i| i.position).max().unwrap_or(-1);
+    let to_add: Vec<&forms::DefaultItem> = defaults
+        .iter()
+        .filter(|d| !existing_codes.contains(d.code))
+        .collect();
+
+    if !to_add.is_empty() {
+        let create_futures = to_add.iter().enumerate().map(|(i, d)| {
+            let position = max_position + 1 + i as i64;
+            let title = forms::lookup(d.code)
+                .map(|f| f.name.to_string())
+                .unwrap_or_else(|| d.code.to_string());
+            async move {
+                let new_item: Option<ChecklistItem> = state
+                    .db
+                    .create("checklist_item")
+                    .content(NewChecklistItem {
+                        title,
+                        form_code: Some(d.code.to_string()),
+                        group_slug: d.group.slug().to_string(),
+                        position,
+                        required: d.required,
+                    })
+                    .await?;
+                let id = new_item.map(|c| c.id).ok_or_else(|| {
+                    AppError::Internal(anyhow::anyhow!("checklist insert returned nothing"))
+                })?;
+                Ok::<RecordId, AppError>(id)
+            }
+        });
+        let ids: Vec<RecordId> = futures::future::try_join_all(create_futures).await?;
+        if !ids.is_empty() {
+            state
+                .db
+                .query("FOR $cid IN $items { RELATE $t->has_item->$cid }")
+                .bind(("t", tx_id.clone()))
+                .bind(("items", ids))
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn item_has_documents(state: &AppState, item_id: &RecordId) -> Result<bool, AppError> {
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct CountRow {
+        count: i64,
+    }
+    let mut q = state
+        .db
+        .query("SELECT count() FROM $i<-for_item<-document GROUP ALL")
+        .bind(("i", item_id.clone()))
+        .await?;
+    let row: Option<CountRow> = q.take(0)?;
+    Ok(row.map(|c| c.count > 0).unwrap_or(false))
 }
 
 // ---------------------------------------------------------------------------

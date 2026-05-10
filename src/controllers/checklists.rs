@@ -157,6 +157,25 @@ async fn set_approval(
     let tx_id = txs.into_iter().next().ok_or(AppError::NotFound)?;
     let _ = authorize_transaction(state, user, &tx_id).await?;
 
+    // Nothing to review until something has actually been uploaded against
+    // the item — the UI hides the buttons in this state, but enforce it
+    // server-side too so a direct POST can't bypass the gate.
+    let mut count_q = state
+        .db
+        .query("SELECT count() FROM $c<-for_item<-document GROUP ALL")
+        .bind(("c", item_ref.clone()))
+        .await?;
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct CountRow {
+        count: i64,
+    }
+    let count: Option<CountRow> = count_q.take(0)?;
+    if count.map(|c| c.count).unwrap_or(0) == 0 {
+        return Err(AppError::invalid(
+            "Nothing to review — no document has been uploaded against this item yet.",
+        ));
+    }
+
     state
         .db
         .query(

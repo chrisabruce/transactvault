@@ -928,6 +928,23 @@ form .form-row { display: grid; gap: var(--sp-3); grid-template-columns: 1fr 1fr
 }
 .panel h2 { font-size: var(--fs-lg); margin-bottom: var(--sp-4); }
 .panel.sidebar h2 { font-size: var(--fs-md); }
+.sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-4);
+}
+.sidebar-header h2 { margin: 0; }
+.locked-hint {
+    color: var(--color-muted);
+    font-weight: 400;
+    font-style: italic;
+}
+select:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
 
 .property-header {
     display: flex;
@@ -1103,6 +1120,7 @@ form .form-row { display: grid; gap: var(--sp-3); grid-template-columns: 1fr 1fr
 .status-pill.status-pending  { background: var(--color-line-soft); color: var(--color-mute-soft); }
 .status-pill.status-approved { background: var(--color-success-soft); color: var(--color-success-ink); }
 .status-pill.status-denied   { background: var(--color-danger-soft);  color: var(--color-danger); }
+.status-pill.status-awaiting { background: var(--color-surface-alt); color: var(--color-muted); font-style: italic; }
 
 /* Comment threads — both per-item (compact) and per-transaction (panel). */
 .item-comments,

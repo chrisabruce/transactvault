@@ -43,6 +43,10 @@ pub fn build(state: AppState) -> Router {
         .route("/app/transactions/new", get(transactions::new_form))
         .route("/app/transactions/{id}", get(transactions::show))
         .route(
+            "/app/transactions/{id}/edit",
+            get(transactions::edit_form).post(transactions::update),
+        )
+        .route(
             "/app/transactions/{id}/status",
             post(transactions::update_status),
         )
