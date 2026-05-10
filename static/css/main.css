@@ -1226,6 +1226,48 @@ form .form-row { display: grid; gap: var(--sp-3); grid-template-columns: 1fr 1fr
 .member-card .chip { margin-inline-start: auto; }
 
 /* --------------------------------------------------------------------------
+   Pending invitations — show + copy link
+   -------------------------------------------------------------------------- */
+.pending-invite .invite-meta { flex: 1; min-width: 0; }
+.pending-invite .invite-link-row {
+    margin-top: var(--sp-2);
+    font-size: var(--fs-xs);
+}
+.pending-invite .invite-link-row > summary {
+    cursor: pointer;
+    color: var(--color-brand-ink);
+    font-weight: 500;
+    list-style: none;
+    user-select: none;
+}
+.pending-invite .invite-link-row > summary::-webkit-details-marker { display: none; }
+.pending-invite .invite-link-row[open] > summary { color: var(--color-muted); }
+.pending-invite .invite-link-copy {
+    display: flex;
+    gap: var(--sp-2);
+    margin-top: var(--sp-2);
+    align-items: center;
+}
+.pending-invite .invite-link-copy input {
+    flex: 1;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 0.78rem;
+    background: var(--color-surface-alt);
+    color: var(--color-ink);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-sm);
+    padding: 0.4rem 0.6rem;
+    min-width: 0;
+}
+.pending-invite .invite-actions {
+    display: flex;
+    gap: var(--sp-2);
+    margin-top: var(--sp-3);
+    flex-wrap: wrap;
+}
+.pending-invite .invite-actions form { margin: 0; }
+
+/* --------------------------------------------------------------------------
    New transaction form (PDF mockup parity)
    -------------------------------------------------------------------------- */
 .tx-form {

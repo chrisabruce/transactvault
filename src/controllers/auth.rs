@@ -780,6 +780,9 @@ async fn render_verify_failure(state: &AppState, message: &str) -> Result<Respon
 }
 
 /// Public helper used by the team controller after creating an invitation.
+///
+/// `inviter_email` is wired into the email's `Reply-To` so replies bypass
+/// the no-reply From address and land in the actual inviter's inbox.
 pub(crate) async fn create_invitation(
     state: &AppState,
     email: String,
@@ -788,6 +791,7 @@ pub(crate) async fn create_invitation(
     brokerage_name: &str,
     invited_by: RecordId,
     inviter_name: &str,
+    inviter_email: &str,
 ) -> Result<Invitation, AppError> {
     let token = generate_token();
     let invite: Option<Invitation> = state
@@ -808,7 +812,14 @@ pub(crate) async fn create_invitation(
     let link = format!("{}/invite/{}", state.config.base_url, token);
     state
         .mailer
-        .send_invite(&email, inviter_name, brokerage_name, &role, &link)
+        .send_invite(
+            &email,
+            inviter_name,
+            inviter_email,
+            brokerage_name,
+            &role,
+            &link,
+        )
         .await;
 
     audit::record(

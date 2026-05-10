@@ -62,6 +62,14 @@ pub fn build(state: AppState) -> Router {
         .route("/app/documents/{id}/download", get(documents::download))
         .route("/app/team", get(members::list))
         .route("/app/team/invite", post(members::invite))
+        .route(
+            "/app/team/invite/{token}/resend",
+            post(members::resend_invite),
+        )
+        .route(
+            "/app/team/invite/{token}/cancel",
+            post(members::cancel_invite),
+        )
         .route("/app/team/{user_id}/role", post(members::change_role));
 
     let admin_routes = Router::new()

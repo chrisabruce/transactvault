@@ -192,6 +192,8 @@ const AUDIT_KIND_OPTIONS: &[&str] = &[
     "login_blocked_unverified",
     "logout",
     "invite_sent",
+    "invite_resent",
+    "invite_cancelled",
     "invite_accepted",
     "admin_view",
 ];

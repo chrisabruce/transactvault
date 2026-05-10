@@ -72,13 +72,37 @@
     {% if !pending.is_empty() %}
         <section class="panel" aria-labelledby="pending-heading">
             <h2 id="pending-heading">Pending invitations</h2>
+            <p class="meta">If a teammate hasn't received the email, copy the link below and send it to them directly — emails sometimes land in spam.</p>
             <ul class="member-list" role="list">
                 {% for inv in pending %}
-                    <li class="member-card">
+                    <li class="member-card pending-invite">
                         <span class="avatar" aria-hidden="true">?</span>
-                        <section>
+                        <section class="invite-meta">
                             <p class="name">{{ inv.email }}</p>
                             <p class="email">Invited <time datetime="{{ inv.created_at }}">{{ inv.created_at.format("%b %-d, %Y") }}</time></p>
+                            <details class="invite-link-row">
+                                <summary>Show invite link</summary>
+                                <div class="invite-link-copy">
+                                    <input type="text"
+                                           readonly
+                                           value="{{ base_url }}/invite/{{ inv.token }}"
+                                           aria-label="Invite link for {{ inv.email }}"
+                                           data-copy-target>
+                                    <button type="button" class="btn small secondary" data-copy-button>Copy</button>
+                                </div>
+                            </details>
+                            {% if header.role.is_broker() %}
+                                <div class="invite-actions">
+                                    <form method="post" action="/app/team/invite/{{ inv.token }}/resend">
+                                        <button type="submit" class="btn small secondary">Resend email</button>
+                                    </form>
+                                    <form method="post"
+                                          action="/app/team/invite/{{ inv.token }}/cancel"
+                                          onsubmit="return confirm('Cancel the invitation for {{ inv.email }}? The invite link will stop working.');">
+                                        <button type="submit" class="btn small danger">Cancel invite</button>
+                                    </form>
+                                </div>
+                            {% endif %}
                         </section>
                         <span class="chip role-{{ inv.role }}">{{ inv.role }}</span>
                     </li>
@@ -87,4 +111,30 @@
         </section>
     {% endif %}
 </main>
+
+<script>
+// Tiny copy-to-clipboard helper for the invite-link rows. Stays unobtrusive
+// — falls back to selecting the text if the Clipboard API is blocked.
+(function () {
+    document.querySelectorAll('[data-copy-button]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var input = btn.parentElement.querySelector('[data-copy-target]');
+            if (!input) return;
+            var done = function () {
+                var prev = btn.textContent;
+                btn.textContent = 'Copied!';
+                btn.disabled = true;
+                setTimeout(function () { btn.textContent = prev; btn.disabled = false; }, 1500);
+            };
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(input.value).then(done, function () {
+                    input.select(); document.execCommand('copy'); done();
+                });
+            } else {
+                input.select(); document.execCommand('copy'); done();
+            }
+        });
+    });
+})();
+</script>
 {% endblock %}

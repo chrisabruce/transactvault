@@ -120,10 +120,18 @@ impl Mailer {
     }
 
     /// Notify the invitee that somebody added them to a brokerage.
+    ///
+    /// `inviter_email` is wired into the message's `Reply-To` so that
+    /// replies bypass the no-reply From address and land in the actual
+    /// inviter's inbox. This also nudges Gmail / Outlook spam filters
+    /// to treat the message as person-to-person rather than bulk —
+    /// the single biggest deliverability lever we have without touching
+    /// DNS records.
     pub async fn send_invite(
         &self,
         to: &str,
         inviter: &str,
+        inviter_email: &str,
         brokerage: &str,
         role: &str,
         link: &str,
@@ -134,27 +142,75 @@ impl Mailer {
             _ => "Agent",
         };
         let subject = format!("{inviter} invited you to {brokerage} on TransactVault");
+
+        // Conversational tone, no exclamation marks, no "Click here!",
+        // and a clear opt-out path — all of which lower spam scores.
         let html = format!(
-            "<!doctype html><html><body style=\"font-family:system-ui,sans-serif;color:#0f172a\">\
+            "<!doctype html><html><body style=\"font-family:system-ui,sans-serif;color:#0f172a;\
+                                                 max-width:560px;margin:0 auto;padding:1rem\">\
                <p>Hi,</p>\
                <p><strong>{inviter}</strong> added you to <strong>{brokerage}</strong> on \
-                  TransactVault as a <strong>{role_label}</strong>.</p>\
-               <p>Accept the invitation and create your login:</p>\
+                  TransactVault as a {role_label}.</p>\
+               <p>To finish setting up your account, open this link and create a password:</p>\
                <p><a href=\"{link}\" \
                      style=\"background:#0f766e;color:#fff;padding:10px 18px;\
                             border-radius:8px;text-decoration:none;display:inline-block\">Accept invitation</a></p>\
-               <p>If the button doesn't work, copy this link into your browser:<br>{link}</p>\
+               <p style=\"color:#475569;font-size:0.9em\">If the button doesn't work, paste this URL into your browser:<br>\
+                  <span style=\"word-break:break-all\">{link}</span></p>\
+               <p style=\"color:#475569;font-size:0.9em\">If you weren't expecting this, just ignore the email — \
+                  the invitation expires automatically. You can also reply directly to {inviter_email} \
+                  if you have questions.</p>\
              </body></html>",
             inviter = html_escape(inviter),
             brokerage = html_escape(brokerage),
+            inviter_email = html_escape(inviter_email),
             role_label = role_label,
             link = link,
         );
         let text = format!(
-            "{inviter} added you to {brokerage} on TransactVault as a {role_label}.\n\n\
-             Accept the invitation: {link}\n",
+            "Hi,\n\n\
+             {inviter} added you to {brokerage} on TransactVault as a {role_label}.\n\n\
+             To finish setting up your account, open this link and create a password:\n\n\
+             {link}\n\n\
+             If you weren't expecting this, just ignore this email — the invitation expires \
+             automatically. You can also reply directly to {inviter_email} if you have questions.\n\n\
+             — The TransactVault team\n",
         );
-        self.send(to, &subject, html, text).await;
+        self.send_with_reply(to, inviter_email, &subject, html, text).await;
+    }
+
+    /// Internal: same as `send`, but with a per-message `Reply-To` override.
+    /// Used for invites so replies route to the inviter.
+    async fn send_with_reply(
+        &self,
+        to: &str,
+        reply_to: &str,
+        subject: &str,
+        html: String,
+        text: String,
+    ) {
+        let Some(client) = self.client.as_ref() else {
+            tracing::info!(%to, %reply_to, %subject, "email (suppressed — no RESEND_API_KEY)");
+            return;
+        };
+
+        let mut opts = CreateEmailBaseOptions::new(&self.from, [to.to_string()], subject)
+            .with_html(&html)
+            .with_text(&text)
+            .with_reply(reply_to);
+        // Fall back to the configured global reply-to if the per-message
+        // value happens to be empty — keeps existing config-driven setups
+        // working even when a caller forgets to populate it.
+        if reply_to.is_empty()
+            && let Some(global) = self.reply_to.as_deref()
+        {
+            opts = opts.with_reply(global);
+        }
+
+        match client.emails.send(opts).await {
+            Ok(resp) => tracing::info!(%to, id = ?resp.id, %subject, "email sent"),
+            Err(err) => tracing::warn!(%to, %subject, error = %err, "email send failed"),
+        }
     }
 }
 

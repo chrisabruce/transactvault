@@ -43,6 +43,8 @@ impl AuditEvent {
             "login_blocked_unverified" => "Login blocked — unverified",
             "logout" => "Logout",
             "invite_sent" => "Invite sent",
+            "invite_resent" => "Invite resent",
+            "invite_cancelled" => "Invite cancelled",
             "invite_accepted" => "Invite accepted",
             "admin_view" => "Admin view",
             _ => "Event",
@@ -53,8 +55,8 @@ impl AuditEvent {
     pub fn kind_class(&self) -> &'static str {
         match self.kind.as_str() {
             "verify_success" | "login_success" | "invite_accepted" | "signup_pending" => "ok",
-            "logout" | "invite_sent" | "admin_view" => "neutral",
-            "login_failure" | "verify_failure" => "fail",
+            "logout" | "invite_sent" | "invite_resent" | "admin_view" => "neutral",
+            "login_failure" | "verify_failure" | "invite_cancelled" => "fail",
             _ => "blocked",
         }
     }
