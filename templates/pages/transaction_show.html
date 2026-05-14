@@ -75,11 +75,49 @@
                         <ul class="checklist" role="list">
                             {% for row in group.items %}
                                 <li class="checklist-item is-{{ row.item.approval_status }}{% if row.item.required %} is-required{% endif %}">
-                                    <section class="checklist-text">
-                                        <p class="title">
-                                            {% match row.form %}{% when Some with (f) %}<strong class="form-code">{{ f.code }}</strong> · {% when None %}{% endmatch %}{{ row.item.title }}
+                                    <header class="checklist-item-head">
+                                        <div class="checklist-item-tags">
+                                            {% match row.form %}{% when Some with (f) %}<strong class="form-code">{{ f.code }}</strong>{% when None %}{% endmatch %}
                                             {% if row.item.required %}<span class="badge required" title="Required for compliance">required</span>{% else %}<span class="badge optional">optional</span>{% endif %}
-                                        </p>
+                                        </div>
+                                        <div class="checklist-actions">
+                                            {% if row.documents.is_empty() %}
+                                                <span class="status-pill status-awaiting">Awaiting upload</span>
+                                            {% else if can_review %}
+                                                <form method="post" action="/app/checklist/{{ row.item.url_key() }}/approve" class="review-action">
+                                                    <button class="btn small approve{% if row.item.is_approved() %} active{% endif %}" type="submit">
+                                                        {% if row.item.is_approved() %}Approved{% else %}Approve{% endif %}
+                                                    </button>
+                                                </form>
+                                                <form method="post" action="/app/checklist/{{ row.item.url_key() }}/deny" class="review-action">
+                                                    <button class="btn small deny{% if row.item.is_denied() %} active{% endif %}" type="submit">
+                                                        {% if row.item.is_denied() %}Denied{% else %}Deny{% endif %}
+                                                    </button>
+                                                </form>
+                                            {% else %}
+                                                <span class="status-pill status-{{ row.item.approval_status }}">
+                                                    {% if row.item.is_approved() %}Approved{% else if row.item.is_denied() %}Denied{% else %}Pending review{% endif %}
+                                                </span>
+                                            {% endif %}
+                                            {% if row.item.is_approved() %}
+                                                <span class="upload-locked meta" title="A coordinator has approved this item. Deny it first to replace the document.">Locked — approved</span>
+                                            {% else %}
+                                                <details class="action-popover">
+                                                    <summary class="btn ghost small">Upload</summary>
+                                                    <form method="post" enctype="multipart/form-data"
+                                                          action="/app/transactions/{{ transaction_key }}/documents"
+                                                          class="inline-upload">
+                                                        <input type="hidden" name="item_id" value="{{ row.item.url_key() }}">
+                                                        <input type="hidden" name="form_code" value="{% match row.form %}{% when Some with (f) %}{{ f.code }}{% when None %}MISC{% endmatch %}">
+                                                        <input type="file" name="file" required>
+                                                        <button type="submit" class="btn small">Attach</button>
+                                                    </form>
+                                                </details>
+                                            {% endif %}
+                                        </div>
+                                    </header>
+                                    <section class="checklist-text">
+                                        <p class="title">{{ row.item.title }}</p>
                                         {% match row.form %}{% when Some with (f) %}
                                             <p class="meta">{{ f.description }}</p>
                                         {% when None %}{% endmatch %}
@@ -124,41 +162,6 @@
                                                 <button type="submit" class="btn small">Post</button>
                                             </form>
                                         </details>
-                                    </section>
-                                    <section class="checklist-actions">
-                                        {% if row.documents.is_empty() %}
-                                            <span class="status-pill status-awaiting">Awaiting upload</span>
-                                        {% else if can_review %}
-                                            <form method="post" action="/app/checklist/{{ row.item.url_key() }}/approve" class="review-action">
-                                                <button class="btn small approve{% if row.item.is_approved() %} active{% endif %}" type="submit">
-                                                    {% if row.item.is_approved() %}Approved{% else %}Approve{% endif %}
-                                                </button>
-                                            </form>
-                                            <form method="post" action="/app/checklist/{{ row.item.url_key() }}/deny" class="review-action">
-                                                <button class="btn small deny{% if row.item.is_denied() %} active{% endif %}" type="submit">
-                                                    {% if row.item.is_denied() %}Denied{% else %}Deny{% endif %}
-                                                </button>
-                                            </form>
-                                        {% else %}
-                                            <span class="status-pill status-{{ row.item.approval_status }}">
-                                                {% if row.item.is_approved() %}Approved{% else if row.item.is_denied() %}Denied{% else %}Pending review{% endif %}
-                                            </span>
-                                        {% endif %}
-                                        {% if row.item.is_approved() %}
-                                            <p class="upload-locked meta" title="A coordinator has approved this item. Deny it first to replace the document.">Locked — approved</p>
-                                        {% else %}
-                                            <details>
-                                                <summary class="btn ghost small">Upload</summary>
-                                                <form method="post" enctype="multipart/form-data"
-                                                      action="/app/transactions/{{ transaction_key }}/documents"
-                                                      class="inline-upload">
-                                                    <input type="hidden" name="item_id" value="{{ row.item.url_key() }}">
-                                                    <input type="hidden" name="form_code" value="{% match row.form %}{% when Some with (f) %}{{ f.code }}{% when None %}MISC{% endmatch %}">
-                                                    <input type="file" name="file" required>
-                                                    <button type="submit" class="btn small">Attach</button>
-                                                </form>
-                                            </details>
-                                        {% endif %}
                                     </section>
                                 </li>
                             {% endfor %}
