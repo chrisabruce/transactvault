@@ -127,11 +127,14 @@ impl TransactionType {
         }
     }
 
-    pub fn all() -> [Self; 8] {
+    /// Variants shown to users in the "new / edit transaction" dropdown.
+    /// `MultiFamily` is intentionally omitted — the variant is kept on the
+    /// enum (so old persisted rows still parse) but is hidden from the
+    /// picker since no per-type checklist exists for it yet.
+    pub fn all() -> [Self; 7] {
         [
             Self::Residential,
             Self::Commercial,
-            Self::MultiFamily,
             Self::VacantLotsLand,
             Self::ManufacturedHome,
             Self::BusinessOpportunity,

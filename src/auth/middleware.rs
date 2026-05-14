@@ -54,9 +54,8 @@ impl FromRequestParts<AppState> for CurrentUser {
             .db
             .query("SELECT email, name FROM ONLY $u")
             .bind(("u", user_id.clone()))
-            .await
-            .map_err(AppError::from)?;
-        let profile: Option<UserProfile> = profile_q.take(0).map_err(AppError::from)?;
+            .await?;
+        let profile: Option<UserProfile> = profile_q.take(0)?;
         let profile = profile.ok_or(AppError::Unauthorized)?;
 
         // Graph hop: user -> works_at -> brokerage. We also grab the role
@@ -65,9 +64,8 @@ impl FromRequestParts<AppState> for CurrentUser {
             .db
             .query("SELECT out AS brokerage, role FROM works_at WHERE in = $u LIMIT 1")
             .bind(("u", user_id.clone()))
-            .await
-            .map_err(AppError::from)?;
-        let membership: Option<MembershipRow> = response.take(0).map_err(AppError::from)?;
+            .await?;
+        let membership: Option<MembershipRow> = response.take(0)?;
         let membership = membership.ok_or(AppError::Forbidden)?;
 
         let role = Role::parse(&membership.role).ok_or(AppError::Forbidden)?;

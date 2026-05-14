@@ -3,6 +3,8 @@
 //! Binary entry point. Loads configuration, initialises logging, connects to
 //! SurrealDB, applies the schema, then hands control to the HTTP server.
 
+#![forbid(unsafe_code)]
+
 use std::net::SocketAddr;
 
 use anyhow::Context;

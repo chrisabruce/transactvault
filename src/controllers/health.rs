@@ -9,16 +9,9 @@ use crate::state::AppState;
 
 pub async fn healthcheck(State(state): State<AppState>) -> Json<Value> {
     let db_ok = state.db.health().await.is_ok();
-    let storage_ok = state
-        .storage
-        .get_bytes(".__healthcheck__")
-        .await
-        .map(|_| true)
-        .unwrap_or_else(|e| {
-            // A missing probe object is fine — the bucket is still reachable,
-            // which is all we care about here.
-            e.to_string().contains("not found")
-        });
+    // A reachable bucket is healthy whether the probe key exists or not —
+    // we only care that the transport round-tripped successfully.
+    let storage_ok = state.storage.get_bytes(".__healthcheck__").await.is_ok();
 
     let mut sys = System::new_all();
     sys.refresh_all();

@@ -43,7 +43,12 @@ pub struct PowChallenge {
 const POW_MAX_AGE_SECS: u64 = 300;
 
 /// Generate a fresh, signed PoW challenge.
-pub fn issue_challenge(jwt_secret: &str, difficulty: u32) -> PowChallenge {
+///
+/// Returns `Err` only if the HMAC backend rejects the secret, which the
+/// variable-key `Hmac<Sha256>` construction never does in practice —
+/// this signature exists so the call site stays panic-free even under
+/// future crate-level changes.
+pub fn issue_challenge(jwt_secret: &str, difficulty: u32) -> anyhow::Result<PowChallenge> {
     use rand::RngCore;
 
     let now = chrono::Utc::now().timestamp() as u64;
@@ -54,18 +59,18 @@ pub fn issue_challenge(jwt_secret: &str, difficulty: u32) -> PowChallenge {
     payload.extend_from_slice(&now.to_be_bytes());
     payload.extend_from_slice(&nonce);
 
-    let mut mac =
-        HmacSha256::new_from_slice(jwt_secret.as_bytes()).expect("HMAC accepts any key length");
+    let mut mac = HmacSha256::new_from_slice(jwt_secret.as_bytes())
+        .map_err(|e| anyhow::anyhow!("HMAC init: {e}"))?;
     mac.update(&payload);
     let tag = mac.finalize().into_bytes();
 
     let mut full = payload;
     full.extend_from_slice(&tag);
 
-    PowChallenge {
+    Ok(PowChallenge {
         challenge: hex::encode(&full),
         difficulty,
-    }
+    })
 }
 
 /// Verify a (challenge, nonce) pair the client submitted.
@@ -101,7 +106,13 @@ pub fn verify_challenge(
         return false;
     }
 
-    let issued = u64::from_be_bytes(payload[..8].try_into().unwrap_or([0; 8]));
+    // Payload layout is enforced by the length check above (24 = 8 + 16),
+    // so this conversion can't fail — but model that explicitly instead
+    // of swallowing the impossible Err arm.
+    let Ok(ts_bytes) = <[u8; 8]>::try_from(&payload[..8]) else {
+        return false;
+    };
+    let issued = u64::from_be_bytes(ts_bytes);
     let now = chrono::Utc::now().timestamp() as u64;
     if now.saturating_sub(issued) > POW_MAX_AGE_SECS {
         return false;
@@ -158,9 +169,17 @@ impl RateLimiter {
     /// `capacity` is the burst size; `refill_per_sec` is the sustained rate.
     /// The very first call from a key starts the bucket full so a single
     /// request never gets denied.
+    ///
+    /// Mutex poisoning is recovered from rather than propagated: the only
+    /// data behind the lock is timestamps + counts, none of which become
+    /// dangerous after a panic, and crashing every subsequent request to
+    /// signal a prior failure would be a far worse outcome.
     pub fn allow(&self, key: &str, capacity: f64, refill_per_sec: f64) -> bool {
         let now = Instant::now();
-        let mut map = self.inner.lock().expect("rate-limit mutex poisoned");
+        let mut map = match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
 
         // Cheap bookkeeping: if the map gets large, drop entries we haven't
         // touched in an hour. Keeps memory bounded under sustained traffic.

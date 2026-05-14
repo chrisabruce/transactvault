@@ -143,18 +143,20 @@ impl Storage {
         Ok(resp.uploaded_bytes() as u64)
     }
 
-    /// Fetch the full object bytes. Streams into memory — acceptable for the
-    /// transaction-sized documents we handle; swap to a streaming reader if
-    /// we ever store multi-GB files.
-    pub async fn get_bytes(&self, key: &str) -> anyhow::Result<Bytes> {
-        let resp = self.bucket.get_object(key).await.map_err(|e| {
-            if is_not_found(&e) {
-                anyhow::anyhow!("not found")
-            } else {
-                anyhow::anyhow!("get_object: {e}")
-            }
-        })?;
-        Ok(Bytes::from(resp.to_vec()))
+    /// Fetch the full object bytes. Returns `Ok(None)` when the key
+    /// doesn't exist so callers can decide between "missing" and
+    /// "transport error" without resorting to string matching on the
+    /// `anyhow` chain.
+    ///
+    /// Streams into memory — acceptable for the transaction-sized
+    /// documents we handle; swap to a streaming reader if we ever store
+    /// multi-GB files.
+    pub async fn get_bytes(&self, key: &str) -> anyhow::Result<Option<Bytes>> {
+        match self.bucket.get_object(key).await {
+            Ok(resp) => Ok(Some(Bytes::from(resp.to_vec()))),
+            Err(e) if is_not_found(&e) => Ok(None),
+            Err(e) => Err(anyhow::anyhow!("get_object: {e}")),
+        }
     }
 
     /// **DEV-ONLY.** Delete every object in the bucket. Walks the bucket

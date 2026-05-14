@@ -32,28 +32,42 @@ pub struct CarForm {
 
 /// One section in a checklist — these match the headings in CAR's printed
 /// transaction checklists exactly.
+///
+/// The contracts section splits into four variants: a singular pair
+/// (`ListingContract` / `PurchaseContract`) for checklists with a single
+/// main contract form, and a plural pair (`ListingContracts` /
+/// `PurchaseContracts`) for those that bundle two (Residential Purchase =
+/// RPA + RIPA, Manufactured Home Listing = RLA + MHLA, Manufactured Home
+/// Purchase = RPA + MHPA). Special-condition addenda (PLA, PA, SSA, SSLA,
+/// REO, REOL) now live in the same contract group rather than in a
+/// dedicated section — they become part of the contract once triggered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FormGroup {
     MlsDataSheets,
-    ListingPurchasingContracts,
+    ListingContract,
+    ListingContracts,
+    PurchaseContract,
+    PurchaseContracts,
     MandatoryDisclosures,
-    SpecialConditionsDisclosures,
     AdditionalDisclosures,
-    DisclosuresIfApplicable,
     EscrowDocuments,
     ReportsCertificatesClearances,
     ReleaseDisclosures,
 }
 
 impl FormGroup {
-    /// Render order — matches every printed CAR checklist.
-    pub const ORDERED: [FormGroup; 9] = [
+    /// Render order — matches every printed CAR checklist. The four
+    /// contract variants occupy the same slot; only the one(s) used by a
+    /// given checklist will have items, so the empties drop out of the
+    /// rendered output.
+    pub const ORDERED: [FormGroup; 10] = [
         FormGroup::MlsDataSheets,
-        FormGroup::ListingPurchasingContracts,
+        FormGroup::ListingContract,
+        FormGroup::ListingContracts,
+        FormGroup::PurchaseContract,
+        FormGroup::PurchaseContracts,
         FormGroup::MandatoryDisclosures,
-        FormGroup::SpecialConditionsDisclosures,
         FormGroup::AdditionalDisclosures,
-        FormGroup::DisclosuresIfApplicable,
         FormGroup::EscrowDocuments,
         FormGroup::ReportsCertificatesClearances,
         FormGroup::ReleaseDisclosures,
@@ -62,11 +76,12 @@ impl FormGroup {
     pub fn label(self) -> &'static str {
         match self {
             FormGroup::MlsDataSheets => "MLS Data Sheets",
-            FormGroup::ListingPurchasingContracts => "Listing / Purchasing Contracts",
+            FormGroup::ListingContract => "Listing Contract",
+            FormGroup::ListingContracts => "Listing Contracts",
+            FormGroup::PurchaseContract => "Purchase Contract",
+            FormGroup::PurchaseContracts => "Purchase Contracts",
             FormGroup::MandatoryDisclosures => "Mandatory Disclosures",
-            FormGroup::SpecialConditionsDisclosures => "Special Conditions Disclosures",
             FormGroup::AdditionalDisclosures => "Additional Disclosures",
-            FormGroup::DisclosuresIfApplicable => "Disclosures — If Applicable",
             FormGroup::EscrowDocuments => "Escrow Documents",
             FormGroup::ReportsCertificatesClearances => "Reports, Certificates & Clearances",
             FormGroup::ReleaseDisclosures => "Release Disclosures",
@@ -77,19 +92,69 @@ impl FormGroup {
     pub fn slug(self) -> &'static str {
         match self {
             FormGroup::MlsDataSheets => "mls",
-            FormGroup::ListingPurchasingContracts => "contracts",
+            FormGroup::ListingContract => "listing_contract",
+            FormGroup::ListingContracts => "listing_contracts",
+            FormGroup::PurchaseContract => "purchase_contract",
+            FormGroup::PurchaseContracts => "purchase_contracts",
             FormGroup::MandatoryDisclosures => "mandatory",
-            FormGroup::SpecialConditionsDisclosures => "special",
             FormGroup::AdditionalDisclosures => "additional",
-            FormGroup::DisclosuresIfApplicable => "if_applicable",
             FormGroup::EscrowDocuments => "escrow",
             FormGroup::ReportsCertificatesClearances => "reports",
             FormGroup::ReleaseDisclosures => "release",
         }
     }
 
+    /// Parse a slug back to a group, accepting both the current set and
+    /// the legacy slugs that pre-date this refactor so existing rows
+    /// render without a DB migration.
+    ///
+    /// Legacy mappings:
+    /// - `"contracts"` → `ListingContract` (imperfect: pre-split rows
+    ///   didn't store listing-vs-purchase. Controllers that have access
+    ///   to the row's `form_code` should call [`migrate_legacy_slug`]
+    ///   for a more accurate split.)
+    /// - `"special"`, `"if_applicable"` → `AdditionalDisclosures`.
     pub fn parse(s: &str) -> Option<Self> {
-        Self::ORDERED.into_iter().find(|g| g.slug() == s)
+        match s {
+            "mls" => Some(Self::MlsDataSheets),
+            "listing_contract" => Some(Self::ListingContract),
+            "listing_contracts" => Some(Self::ListingContracts),
+            "purchase_contract" => Some(Self::PurchaseContract),
+            "purchase_contracts" => Some(Self::PurchaseContracts),
+            "mandatory" => Some(Self::MandatoryDisclosures),
+            "additional" => Some(Self::AdditionalDisclosures),
+            "escrow" => Some(Self::EscrowDocuments),
+            "reports" => Some(Self::ReportsCertificatesClearances),
+            "release" => Some(Self::ReleaseDisclosures),
+            // Legacy fallbacks (TODO: drop after a prod migration runs).
+            "contracts" => Some(Self::ListingContract),
+            "special" | "if_applicable" => Some(Self::AdditionalDisclosures),
+            _ => None,
+        }
+    }
+}
+
+/// Resolve a legacy `group_slug` to a current canonical slug given the
+/// row's `form_code`. Use this when reading old DB rows so the
+/// listing-vs-purchase split is correct (the bare `FormGroup::parse`
+/// can't do that without context).
+///
+/// Returns the input unchanged if it's already canonical.
+#[allow(dead_code)]
+pub fn migrate_legacy_slug(slug: &str, form_code: Option<&str>) -> Option<&'static str> {
+    match slug {
+        "contracts" => {
+            let code = form_code.unwrap_or("").to_ascii_uppercase();
+            Some(match code.as_str() {
+                "RPA" | "RIPA" => "purchase_contracts",
+                "MHPA" => "purchase_contracts",
+                "VLPA" | "CPA" | "BPA" | "LR" => "purchase_contract",
+                "MHLA" => "listing_contracts",
+                _ => "listing_contract",
+            })
+        }
+        "special" | "if_applicable" => Some("additional"),
+        _ => None,
     }
 }
 
@@ -109,104 +174,108 @@ pub struct DefaultItem {
 /// Codes not in this map sort after every known code, in alphabetical
 /// order by their slug. Custom (non-CAR) items sort at the very end.
 pub fn canonical_position(code: &str) -> u32 {
-    // The order this match arm lists codes in IS the canonical PDF order.
-    // The integer returned is each code's rank — assign sequentially from
-    // 0 within each group's section so the sort is deterministic.
+    // The integer returned is the code's rank for sort order. Items
+    // sharing a group are sorted by these numbers, so within each section
+    // we assign sequential values in the order the user should see them.
+    //
+    // Per-section ordering rationale:
+    // - **Contracts (100–119, 150–159):** main contract forms occupy the
+    //   100s; special-condition addenda (PLA/SSLA/REOL/PA/SSA/REO)
+    //   occupy 150+ so they always render directly below the main
+    //   contract within the same group.
+    // - **Mandatory & Additional (200s, 400s):** strict alphabetical so
+    //   agents can scan visually. This satisfies the printed-checklist
+    //   notes "CSPQ underneath AVID-2" and "MHDA & MHTDS underneath LPD"
+    //   naturally — they fall in the right slot when alphabetized.
     match code {
         // MLS Data Sheets
         "ACT" => 0,
         "PEND" => 1,
         "SOLD" => 2,
 
-        // Listing / Purchasing Contracts (residential, commercial, lots,
-        // mobile, business). Order intentionally interleaved to match the
-        // PDFs, with residential first since it's the most common.
-        "RPA" => 100,
-        "RIPA" => 101,
-        "RLA" => 102,
-        "CPA" => 103,
-        "CLA" => 104,
-        "VLPA" => 105,
-        "VLL" => 106,
-        "MHPA" => 107,
-        "MHLA" => 108,
-        "BPA" => 109,
-        "BLA" => 110,
-        "LR" => 111,
-        "LL" => 112,
+        // Contracts (listing-side main forms — 100–109)
+        "RLA" => 100,
+        "MHLA" => 101,
+        "VLL" => 102,
+        "CLA" => 103,
+        "BLA" => 104,
+        "LL" => 105,
+        // Contracts (purchase-side main forms — 110–119)
+        "RPA" => 110,
+        "RIPA" => 111,
+        "MHPA" => 112,
+        "VLPA" => 113,
+        "CPA" => 114,
+        "BPA" => 115,
+        "LR" => 116,
+        // Special-condition addenda — always render right under the
+        // main contract form within the same group. Listing-side: 150+;
+        // Purchase-side: 155+.
+        "PLA" => 150,
+        "SSLA" => 151,
+        "REOL" => 152,
+        "PA" => 155,
+        "SSA" => 156,
+        "REO" => 157,
 
-        // Mandatory Disclosures
+        // Mandatory Disclosures — alphabetical
         "AVID-1" => 200,
         "AVID-2" => 201,
-        "FHDS" => 202,
-        "LPD" => 203,
-        "RGM" => 204,
-        "SBSA" => 205,
-        "SPQ" => 206,
-        "TDS" => 207,
-        "WCMD" => 208,
-        "WFDA" => 209,
-        "WHSD" => 210,
-        "VP" => 211,
-        "CSPQ" => 212,
-        "MHDA" => 213,
-        "MHTDS" => 214,
-        "VLQ" => 215,
-        "BDS" => 216,
+        "CSPQ" => 202,
+        "FHDS" => 203,
+        "LPD" => 204,
+        "MHDA" => 205,
+        "MHTDS" => 206,
+        "RGM" => 207,
+        "SBSA" => 208,
+        "SPQ" => 209,
+        "TDS" => 210,
+        "VLQ" => 211,
+        "VP" => 212,
+        "WCMD" => 213,
+        "WFDA" => 214,
+        "WHSD" => 215,
 
-        // Special Conditions Disclosures
-        "PLA" => 300,
-        "PA" => 301,
-        "SSA" => 302,
-        "SSLA" => 303,
-        "REO" => 304,
-        "REOL" => 305,
-
-        // Additional Disclosures
-        "AVAA" => 400,
+        // Additional Disclosures — strictly alphabetical across every
+        // code that any per-type list places in this group.
+        "ADM" => 400,
         "BCA" => 401,
-        "BRBC" => 402,
-        "EQ" => 403,
-        "EQ-R" => 404,
-        "HID" => 405,
-        "MCA" => 406,
-        "QUAL" => 407,
-        "POF" => 408,
-        "BP-FFE" => 409,
+        "BDS" => 402,
+        "BP-FFE" => 403,
+        "BRBC" => 404,
+        "CO" => 405,
+        "CR" => 406,
+        "EQ" => 407,
+        "EQ-R" => 408,
+        "ETA" => 409,
+        "FVAC" => 410,
+        "HID" => 411,
+        "MCA" => 412,
+        "MT" => 413,
+        "NTP" => 414,
+        "POF" => 415,
+        "QUAL" => 416,
+        "RCSD" => 417,
+        "RR" => 418,
+        "RRRR" => 419,
+        "SWPI" => 420,
+        "TA" => 421,
 
-        // Disclosures — If Applicable
-        "ADM" => 500,
-        "CO" => 501,
-        "COP" => 502,
-        "CR" => 503,
-        "ESD" => 504,
-        "ETA" => 505,
-        "FVAC" => 506,
-        "HOA-IR" => 507,
-        "MT" => 508,
-        "NTP" => 509,
-        "RCSD" => 510,
-        "RR" => 511,
-        "RRRR" => 512,
-        "SPRP" => 513,
-        "SWPI" => 514,
-        "TA" => 515,
-
-        // Escrow Documents
+        // Escrow Documents — alphabetical
         "APRL" => 600,
         "CC&R" => 601,
         "CLSD" => 602,
         "COMM" => 603,
-        "EMD" => 604,
-        "EA" => 605,
-        "EI" => 606,
+        "EA" => 604,
+        "EI" => 605,
+        "EMD" => 606,
         "HOA" => 607,
         "NET" => 608,
         "NHD" => 609,
         "NHDS" => 610,
         "PREL" => 611,
 
-        // Reports, Certificates & Clearances
+        // Reports, Certificates & Clearances — alphabetical
         "BIW" => 700,
         "CHIM" => 701,
         "HOME" => 702,
@@ -846,12 +915,18 @@ const fn item(code: &'static str, group: FormGroup, required: bool) -> DefaultIt
 // Lease Tenant & Landlord) merge the two lists with required = (L || P).
 // ---------------------------------------------------------------------------
 
-// Residential — Listing
+// All MLS-side fixed entries — same across every checklist.
+const MLS_ACT: DefaultItem = item("ACT", FormGroup::MlsDataSheets, true);
+const MLS_PEND: DefaultItem = item("PEND", FormGroup::MlsDataSheets, true);
+const MLS_SOLD: DefaultItem = item("SOLD", FormGroup::MlsDataSheets, true);
+
+// Residential — Listing. Contract group is singular (RLA is the only
+// listing contract on this checklist).
 const RESIDENTIAL_LISTING: &[DefaultItem] = &[
-    item("ACT", FormGroup::MlsDataSheets, true),
-    item("PEND", FormGroup::MlsDataSheets, true),
-    item("SOLD", FormGroup::MlsDataSheets, true),
-    item("RLA", FormGroup::ListingPurchasingContracts, true),
+    MLS_ACT,
+    MLS_PEND,
+    MLS_SOLD,
+    item("RLA", FormGroup::ListingContract, true),
     item("AVID-1", FormGroup::MandatoryDisclosures, true),
     item("AVID-2", FormGroup::MandatoryDisclosures, true),
     item("FHDS", FormGroup::MandatoryDisclosures, true),
@@ -862,12 +937,24 @@ const RESIDENTIAL_LISTING: &[DefaultItem] = &[
     item("WCMD", FormGroup::MandatoryDisclosures, true),
     item("WHSD", FormGroup::MandatoryDisclosures, true),
     item("VP", FormGroup::MandatoryDisclosures, true),
+    item("ADM", FormGroup::AdditionalDisclosures, false),
     item("BCA", FormGroup::AdditionalDisclosures, false),
+    item("CO", FormGroup::AdditionalDisclosures, false),
+    item("CR", FormGroup::AdditionalDisclosures, false),
     item("EQ", FormGroup::AdditionalDisclosures, false),
     item("EQ-R", FormGroup::AdditionalDisclosures, false),
+    item("ETA", FormGroup::AdditionalDisclosures, false),
+    item("FVAC", FormGroup::AdditionalDisclosures, false),
     item("MCA", FormGroup::AdditionalDisclosures, false),
-    item("QUAL", FormGroup::AdditionalDisclosures, false),
+    item("MT", FormGroup::AdditionalDisclosures, false),
+    item("NTP", FormGroup::AdditionalDisclosures, false),
     item("POF", FormGroup::AdditionalDisclosures, false),
+    item("QUAL", FormGroup::AdditionalDisclosures, false),
+    item("RCSD", FormGroup::AdditionalDisclosures, false),
+    item("RR", FormGroup::AdditionalDisclosures, false),
+    item("RRRR", FormGroup::AdditionalDisclosures, false),
+    item("SWPI", FormGroup::AdditionalDisclosures, false),
+    item("TA", FormGroup::AdditionalDisclosures, false),
     item("APRL", FormGroup::EscrowDocuments, false),
     item("CC&R", FormGroup::EscrowDocuments, false),
     item("CLSD", FormGroup::EscrowDocuments, true),
@@ -895,16 +982,16 @@ const RESIDENTIAL_LISTING: &[DefaultItem] = &[
     item("WOO", FormGroup::ReleaseDisclosures, false),
 ];
 
-// Residential — Purchase. RPA is the standard contract; RIPA is an
-// alternative for income properties (PDF heading: "ONLY ONE IS MANDATORY").
-// We mark RPA required and RIPA optional — brokers handling income deals
-// can flip RIPA's required flag in the UI.
+// Residential — Purchase. Contract group is plural (RPA + RIPA — only
+// one is mandatory but both belong in the same section). RPA is marked
+// required; brokers swap which is required from the UI if the deal uses
+// RIPA instead.
 const RESIDENTIAL_PURCHASE: &[DefaultItem] = &[
-    item("ACT", FormGroup::MlsDataSheets, true),
-    item("PEND", FormGroup::MlsDataSheets, true),
-    item("SOLD", FormGroup::MlsDataSheets, true),
-    item("RPA", FormGroup::ListingPurchasingContracts, true),
-    item("RIPA", FormGroup::ListingPurchasingContracts, false),
+    MLS_ACT,
+    MLS_PEND,
+    MLS_SOLD,
+    item("RPA", FormGroup::PurchaseContracts, true),
+    item("RIPA", FormGroup::PurchaseContracts, false),
     item("AVID-1", FormGroup::MandatoryDisclosures, true),
     item("AVID-2", FormGroup::MandatoryDisclosures, true),
     item("FHDS", FormGroup::MandatoryDisclosures, true),
@@ -917,14 +1004,26 @@ const RESIDENTIAL_PURCHASE: &[DefaultItem] = &[
     item("WFDA", FormGroup::MandatoryDisclosures, true),
     item("WHSD", FormGroup::MandatoryDisclosures, true),
     item("VP", FormGroup::MandatoryDisclosures, true),
+    item("ADM", FormGroup::AdditionalDisclosures, false),
     item("BCA", FormGroup::AdditionalDisclosures, false),
     item("BRBC", FormGroup::AdditionalDisclosures, false),
+    item("CO", FormGroup::AdditionalDisclosures, false),
+    item("CR", FormGroup::AdditionalDisclosures, false),
     item("EQ", FormGroup::AdditionalDisclosures, false),
     item("EQ-R", FormGroup::AdditionalDisclosures, false),
+    item("ETA", FormGroup::AdditionalDisclosures, false),
+    item("FVAC", FormGroup::AdditionalDisclosures, false),
     item("HID", FormGroup::AdditionalDisclosures, false),
     item("MCA", FormGroup::AdditionalDisclosures, false),
-    item("QUAL", FormGroup::AdditionalDisclosures, false),
+    item("MT", FormGroup::AdditionalDisclosures, false),
+    item("NTP", FormGroup::AdditionalDisclosures, false),
     item("POF", FormGroup::AdditionalDisclosures, false),
+    item("QUAL", FormGroup::AdditionalDisclosures, false),
+    item("RCSD", FormGroup::AdditionalDisclosures, false),
+    item("RR", FormGroup::AdditionalDisclosures, false),
+    item("RRRR", FormGroup::AdditionalDisclosures, false),
+    item("SWPI", FormGroup::AdditionalDisclosures, false),
+    item("TA", FormGroup::AdditionalDisclosures, false),
     item("APRL", FormGroup::EscrowDocuments, false),
     item("CC&R", FormGroup::EscrowDocuments, false),
     item("CLSD", FormGroup::EscrowDocuments, true),
@@ -954,18 +1053,29 @@ const RESIDENTIAL_PURCHASE: &[DefaultItem] = &[
 
 // Commercial — Listing
 const COMMERCIAL_LISTING: &[DefaultItem] = &[
-    item("ACT", FormGroup::MlsDataSheets, true),
-    item("PEND", FormGroup::MlsDataSheets, true),
-    item("SOLD", FormGroup::MlsDataSheets, true),
-    item("CLA", FormGroup::ListingPurchasingContracts, true),
+    MLS_ACT,
+    MLS_PEND,
+    MLS_SOLD,
+    item("CLA", FormGroup::ListingContract, true),
     item("AVID-1", FormGroup::MandatoryDisclosures, true),
     item("AVID-2", FormGroup::MandatoryDisclosures, true),
     item("CSPQ", FormGroup::MandatoryDisclosures, true),
     item("SBSA", FormGroup::MandatoryDisclosures, true),
     item("VP", FormGroup::MandatoryDisclosures, true),
+    item("ADM", FormGroup::AdditionalDisclosures, false),
     item("BCA", FormGroup::AdditionalDisclosures, false),
-    item("QUAL", FormGroup::AdditionalDisclosures, false),
+    item("CO", FormGroup::AdditionalDisclosures, false),
+    item("CR", FormGroup::AdditionalDisclosures, false),
+    item("ETA", FormGroup::AdditionalDisclosures, false),
+    item("MT", FormGroup::AdditionalDisclosures, false),
+    item("NTP", FormGroup::AdditionalDisclosures, false),
     item("POF", FormGroup::AdditionalDisclosures, false),
+    item("QUAL", FormGroup::AdditionalDisclosures, false),
+    item("RCSD", FormGroup::AdditionalDisclosures, false),
+    item("RR", FormGroup::AdditionalDisclosures, false),
+    item("RRRR", FormGroup::AdditionalDisclosures, false),
+    item("SWPI", FormGroup::AdditionalDisclosures, false),
+    item("TA", FormGroup::AdditionalDisclosures, false),
     item("APRL", FormGroup::EscrowDocuments, false),
     item("CC&R", FormGroup::EscrowDocuments, false),
     item("CLSD", FormGroup::EscrowDocuments, true),
@@ -989,20 +1099,31 @@ const COMMERCIAL_LISTING: &[DefaultItem] = &[
 
 // Commercial — Purchase
 const COMMERCIAL_PURCHASE: &[DefaultItem] = &[
-    item("ACT", FormGroup::MlsDataSheets, true),
-    item("PEND", FormGroup::MlsDataSheets, true),
-    item("SOLD", FormGroup::MlsDataSheets, true),
-    item("CPA", FormGroup::ListingPurchasingContracts, true),
+    MLS_ACT,
+    MLS_PEND,
+    MLS_SOLD,
+    item("CPA", FormGroup::PurchaseContract, true),
     item("AVID-1", FormGroup::MandatoryDisclosures, true),
     item("AVID-2", FormGroup::MandatoryDisclosures, true),
     item("CSPQ", FormGroup::MandatoryDisclosures, true),
     item("SBSA", FormGroup::MandatoryDisclosures, true),
     item("WFDA", FormGroup::MandatoryDisclosures, true),
     item("VP", FormGroup::MandatoryDisclosures, true),
+    item("ADM", FormGroup::AdditionalDisclosures, false),
     item("BCA", FormGroup::AdditionalDisclosures, false),
     item("BRBC", FormGroup::AdditionalDisclosures, false),
-    item("QUAL", FormGroup::AdditionalDisclosures, false),
+    item("CO", FormGroup::AdditionalDisclosures, false),
+    item("CR", FormGroup::AdditionalDisclosures, false),
+    item("ETA", FormGroup::AdditionalDisclosures, false),
+    item("MT", FormGroup::AdditionalDisclosures, false),
+    item("NTP", FormGroup::AdditionalDisclosures, false),
     item("POF", FormGroup::AdditionalDisclosures, false),
+    item("QUAL", FormGroup::AdditionalDisclosures, false),
+    item("RCSD", FormGroup::AdditionalDisclosures, false),
+    item("RR", FormGroup::AdditionalDisclosures, false),
+    item("RRRR", FormGroup::AdditionalDisclosures, false),
+    item("SWPI", FormGroup::AdditionalDisclosures, false),
+    item("TA", FormGroup::AdditionalDisclosures, false),
     item("APRL", FormGroup::EscrowDocuments, false),
     item("CC&R", FormGroup::EscrowDocuments, false),
     item("CLSD", FormGroup::EscrowDocuments, true),
@@ -1026,14 +1147,22 @@ const COMMERCIAL_PURCHASE: &[DefaultItem] = &[
 
 // Lots & Land — Listing
 const LOTS_LAND_LISTING: &[DefaultItem] = &[
-    item("ACT", FormGroup::MlsDataSheets, true),
-    item("PEND", FormGroup::MlsDataSheets, true),
-    item("SOLD", FormGroup::MlsDataSheets, true),
-    item("VLL", FormGroup::ListingPurchasingContracts, true),
+    MLS_ACT,
+    MLS_PEND,
+    MLS_SOLD,
+    item("VLL", FormGroup::ListingContract, true),
     item("SBSA", FormGroup::MandatoryDisclosures, true),
     item("VLQ", FormGroup::MandatoryDisclosures, true),
+    item("ADM", FormGroup::AdditionalDisclosures, false),
     item("BCA", FormGroup::AdditionalDisclosures, false),
+    item("CO", FormGroup::AdditionalDisclosures, false),
+    item("CR", FormGroup::AdditionalDisclosures, false),
+    item("ETA", FormGroup::AdditionalDisclosures, false),
+    item("MT", FormGroup::AdditionalDisclosures, false),
+    item("NTP", FormGroup::AdditionalDisclosures, false),
     item("POF", FormGroup::AdditionalDisclosures, false),
+    item("RCSD", FormGroup::AdditionalDisclosures, false),
+    item("TA", FormGroup::AdditionalDisclosures, false),
     item("CC&R", FormGroup::EscrowDocuments, false),
     item("CLSD", FormGroup::EscrowDocuments, true),
     item("COMM", FormGroup::EscrowDocuments, true),
@@ -1052,16 +1181,24 @@ const LOTS_LAND_LISTING: &[DefaultItem] = &[
 
 // Lots & Land — Purchase
 const LOTS_LAND_PURCHASE: &[DefaultItem] = &[
-    item("ACT", FormGroup::MlsDataSheets, true),
-    item("PEND", FormGroup::MlsDataSheets, true),
-    item("SOLD", FormGroup::MlsDataSheets, true),
-    item("VLPA", FormGroup::ListingPurchasingContracts, true),
+    MLS_ACT,
+    MLS_PEND,
+    MLS_SOLD,
+    item("VLPA", FormGroup::PurchaseContract, true),
     item("SBSA", FormGroup::MandatoryDisclosures, true),
     item("WFDA", FormGroup::MandatoryDisclosures, true),
     item("VLQ", FormGroup::MandatoryDisclosures, true),
+    item("ADM", FormGroup::AdditionalDisclosures, false),
     item("BCA", FormGroup::AdditionalDisclosures, false),
     item("BRBC", FormGroup::AdditionalDisclosures, false),
+    item("CO", FormGroup::AdditionalDisclosures, false),
+    item("CR", FormGroup::AdditionalDisclosures, false),
+    item("ETA", FormGroup::AdditionalDisclosures, false),
+    item("MT", FormGroup::AdditionalDisclosures, false),
+    item("NTP", FormGroup::AdditionalDisclosures, false),
     item("POF", FormGroup::AdditionalDisclosures, false),
+    item("RCSD", FormGroup::AdditionalDisclosures, false),
+    item("TA", FormGroup::AdditionalDisclosures, false),
     item("CC&R", FormGroup::EscrowDocuments, false),
     item("CLSD", FormGroup::EscrowDocuments, true),
     item("COMM", FormGroup::EscrowDocuments, true),
@@ -1078,31 +1215,42 @@ const LOTS_LAND_PURCHASE: &[DefaultItem] = &[
     item("WOO", FormGroup::ReleaseDisclosures, false),
 ];
 
-// Mobile/Manufactured Home — Listing. Both RLA and MHLA are required (the
-// listing addendum supplements the standard agreement).
+// Mobile/Manufactured Home — Listing. Both RLA and MHLA are required —
+// they're two separate forms, hence the plural `ListingContracts` group.
 const MOBILE_HOME_LISTING: &[DefaultItem] = &[
-    item("ACT", FormGroup::MlsDataSheets, true),
-    item("PEND", FormGroup::MlsDataSheets, true),
-    item("SOLD", FormGroup::MlsDataSheets, true),
-    item("RLA", FormGroup::ListingPurchasingContracts, true),
-    item("MHLA", FormGroup::ListingPurchasingContracts, true),
+    MLS_ACT,
+    MLS_PEND,
+    MLS_SOLD,
+    item("RLA", FormGroup::ListingContracts, true),
+    item("MHLA", FormGroup::ListingContracts, true),
     item("AVID-1", FormGroup::MandatoryDisclosures, true),
     item("AVID-2", FormGroup::MandatoryDisclosures, true),
     item("FHDS", FormGroup::MandatoryDisclosures, true),
     item("LPD", FormGroup::MandatoryDisclosures, false),
-    item("SBSA", FormGroup::MandatoryDisclosures, true),
-    item("SPQ", FormGroup::MandatoryDisclosures, true),
     item("MHDA", FormGroup::MandatoryDisclosures, false),
     item("MHTDS", FormGroup::MandatoryDisclosures, true),
+    item("SBSA", FormGroup::MandatoryDisclosures, true),
+    item("SPQ", FormGroup::MandatoryDisclosures, true),
     item("WCMD", FormGroup::MandatoryDisclosures, true),
     item("WHSD", FormGroup::MandatoryDisclosures, true),
     item("VP", FormGroup::MandatoryDisclosures, true),
+    item("ADM", FormGroup::AdditionalDisclosures, false),
     item("BCA", FormGroup::AdditionalDisclosures, false),
+    item("CO", FormGroup::AdditionalDisclosures, false),
+    item("CR", FormGroup::AdditionalDisclosures, false),
     item("EQ", FormGroup::AdditionalDisclosures, false),
     item("EQ-R", FormGroup::AdditionalDisclosures, false),
+    item("ETA", FormGroup::AdditionalDisclosures, false),
     item("MCA", FormGroup::AdditionalDisclosures, false),
-    item("QUAL", FormGroup::AdditionalDisclosures, false),
+    item("MT", FormGroup::AdditionalDisclosures, false),
+    item("NTP", FormGroup::AdditionalDisclosures, false),
     item("POF", FormGroup::AdditionalDisclosures, false),
+    item("QUAL", FormGroup::AdditionalDisclosures, false),
+    item("RCSD", FormGroup::AdditionalDisclosures, false),
+    item("RR", FormGroup::AdditionalDisclosures, false),
+    item("RRRR", FormGroup::AdditionalDisclosures, false),
+    item("SWPI", FormGroup::AdditionalDisclosures, false),
+    item("TA", FormGroup::AdditionalDisclosures, false),
     item("APRL", FormGroup::EscrowDocuments, false),
     item("CC&R", FormGroup::EscrowDocuments, false),
     item("CLSD", FormGroup::EscrowDocuments, true),
@@ -1130,34 +1278,46 @@ const MOBILE_HOME_LISTING: &[DefaultItem] = &[
     item("WOO", FormGroup::ReleaseDisclosures, false),
 ];
 
-// Mobile/Manufactured Home — Purchase. RPA + MHPA (both required as a pair).
+// Mobile/Manufactured Home — Purchase. RPA + MHPA, both required —
+// plural `PurchaseContracts` group.
 const MOBILE_HOME_PURCHASE: &[DefaultItem] = &[
-    item("ACT", FormGroup::MlsDataSheets, true),
-    item("PEND", FormGroup::MlsDataSheets, true),
-    item("SOLD", FormGroup::MlsDataSheets, true),
-    item("RPA", FormGroup::ListingPurchasingContracts, true),
-    item("MHPA", FormGroup::ListingPurchasingContracts, true),
+    MLS_ACT,
+    MLS_PEND,
+    MLS_SOLD,
+    item("RPA", FormGroup::PurchaseContracts, true),
+    item("MHPA", FormGroup::PurchaseContracts, true),
     item("AVID-1", FormGroup::MandatoryDisclosures, true),
     item("AVID-2", FormGroup::MandatoryDisclosures, true),
     item("FHDS", FormGroup::MandatoryDisclosures, true),
     item("LPD", FormGroup::MandatoryDisclosures, false),
+    item("MHDA", FormGroup::MandatoryDisclosures, false),
+    item("MHTDS", FormGroup::MandatoryDisclosures, true),
     item("RGM", FormGroup::MandatoryDisclosures, true),
     item("SBSA", FormGroup::MandatoryDisclosures, true),
     item("SPQ", FormGroup::MandatoryDisclosures, true),
-    item("MHDA", FormGroup::MandatoryDisclosures, false),
-    item("MHTDS", FormGroup::MandatoryDisclosures, true),
     item("WCMD", FormGroup::MandatoryDisclosures, true),
     item("WFDA", FormGroup::MandatoryDisclosures, true),
     item("WHSD", FormGroup::MandatoryDisclosures, true),
     item("VP", FormGroup::MandatoryDisclosures, true),
+    item("ADM", FormGroup::AdditionalDisclosures, false),
     item("BCA", FormGroup::AdditionalDisclosures, false),
     item("BRBC", FormGroup::AdditionalDisclosures, false),
+    item("CO", FormGroup::AdditionalDisclosures, false),
+    item("CR", FormGroup::AdditionalDisclosures, false),
     item("EQ", FormGroup::AdditionalDisclosures, false),
     item("EQ-R", FormGroup::AdditionalDisclosures, false),
+    item("ETA", FormGroup::AdditionalDisclosures, false),
     item("HID", FormGroup::AdditionalDisclosures, false),
     item("MCA", FormGroup::AdditionalDisclosures, false),
-    item("QUAL", FormGroup::AdditionalDisclosures, false),
+    item("MT", FormGroup::AdditionalDisclosures, false),
+    item("NTP", FormGroup::AdditionalDisclosures, false),
     item("POF", FormGroup::AdditionalDisclosures, false),
+    item("QUAL", FormGroup::AdditionalDisclosures, false),
+    item("RCSD", FormGroup::AdditionalDisclosures, false),
+    item("RR", FormGroup::AdditionalDisclosures, false),
+    item("RRRR", FormGroup::AdditionalDisclosures, false),
+    item("SWPI", FormGroup::AdditionalDisclosures, false),
+    item("TA", FormGroup::AdditionalDisclosures, false),
     item("APRL", FormGroup::EscrowDocuments, false),
     item("CC&R", FormGroup::EscrowDocuments, false),
     item("CLSD", FormGroup::EscrowDocuments, true),
@@ -1187,17 +1347,26 @@ const MOBILE_HOME_PURCHASE: &[DefaultItem] = &[
 
 // Business Opportunity — Listing
 const BUSINESS_OP_LISTING: &[DefaultItem] = &[
-    item("ACT", FormGroup::MlsDataSheets, true),
-    item("PEND", FormGroup::MlsDataSheets, true),
-    item("SOLD", FormGroup::MlsDataSheets, true),
-    item("BLA", FormGroup::ListingPurchasingContracts, true),
+    MLS_ACT,
+    MLS_PEND,
+    MLS_SOLD,
+    item("BLA", FormGroup::ListingContract, true),
     item("SBSA", FormGroup::MandatoryDisclosures, true),
     item("VP", FormGroup::MandatoryDisclosures, true),
+    item("ADM", FormGroup::AdditionalDisclosures, false),
     item("BCA", FormGroup::AdditionalDisclosures, false),
     item("BDS", FormGroup::AdditionalDisclosures, false),
     item("BP-FFE", FormGroup::AdditionalDisclosures, false),
-    item("QUAL", FormGroup::AdditionalDisclosures, false),
+    item("CO", FormGroup::AdditionalDisclosures, false),
+    item("CR", FormGroup::AdditionalDisclosures, false),
+    item("ETA", FormGroup::AdditionalDisclosures, false),
+    item("MT", FormGroup::AdditionalDisclosures, false),
+    item("NTP", FormGroup::AdditionalDisclosures, false),
     item("POF", FormGroup::AdditionalDisclosures, false),
+    item("QUAL", FormGroup::AdditionalDisclosures, false),
+    item("RCSD", FormGroup::AdditionalDisclosures, false),
+    item("RR", FormGroup::AdditionalDisclosures, false),
+    item("RRRR", FormGroup::AdditionalDisclosures, false),
     item("CC&R", FormGroup::EscrowDocuments, false),
     item("CLSD", FormGroup::EscrowDocuments, true),
     item("COMM", FormGroup::EscrowDocuments, true),
@@ -1213,19 +1382,28 @@ const BUSINESS_OP_LISTING: &[DefaultItem] = &[
 
 // Business Opportunity — Purchase
 const BUSINESS_OP_PURCHASE: &[DefaultItem] = &[
-    item("ACT", FormGroup::MlsDataSheets, true),
-    item("PEND", FormGroup::MlsDataSheets, true),
-    item("SOLD", FormGroup::MlsDataSheets, true),
-    item("BPA", FormGroup::ListingPurchasingContracts, true),
+    MLS_ACT,
+    MLS_PEND,
+    MLS_SOLD,
+    item("BPA", FormGroup::PurchaseContract, true),
     item("SBSA", FormGroup::MandatoryDisclosures, true),
     item("WFDA", FormGroup::MandatoryDisclosures, true),
     item("VP", FormGroup::MandatoryDisclosures, true),
+    item("ADM", FormGroup::AdditionalDisclosures, false),
     item("BCA", FormGroup::AdditionalDisclosures, false),
     item("BDS", FormGroup::AdditionalDisclosures, false),
     item("BP-FFE", FormGroup::AdditionalDisclosures, false),
     item("BRBC", FormGroup::AdditionalDisclosures, false),
-    item("QUAL", FormGroup::AdditionalDisclosures, false),
+    item("CO", FormGroup::AdditionalDisclosures, false),
+    item("CR", FormGroup::AdditionalDisclosures, false),
+    item("ETA", FormGroup::AdditionalDisclosures, false),
+    item("MT", FormGroup::AdditionalDisclosures, false),
+    item("NTP", FormGroup::AdditionalDisclosures, false),
     item("POF", FormGroup::AdditionalDisclosures, false),
+    item("QUAL", FormGroup::AdditionalDisclosures, false),
+    item("RCSD", FormGroup::AdditionalDisclosures, false),
+    item("RR", FormGroup::AdditionalDisclosures, false),
+    item("RRRR", FormGroup::AdditionalDisclosures, false),
     item("CC&R", FormGroup::EscrowDocuments, false),
     item("CLSD", FormGroup::EscrowDocuments, true),
     item("COMM", FormGroup::EscrowDocuments, true),
@@ -1239,15 +1417,16 @@ const BUSINESS_OP_PURCHASE: &[DefaultItem] = &[
     item("WOO", FormGroup::ReleaseDisclosures, false),
 ];
 
-// Multi-Family — no separate Listing/Purchase PDFs yet; falls back to a
-// combined checklist similar to the original Multi-Family default. This
-// gets used regardless of sales side until per-side PDFs land.
+// Multi-Family — hidden from the new-transaction picker but kept here so
+// any old persisted rows still seed a sensible checklist. Lands in the
+// listing-contract bucket since the dual-side fallback uses listing
+// labelling.
 const MULTI_FAMILY_FALLBACK: &[DefaultItem] = &[
-    item("ACT", FormGroup::MlsDataSheets, true),
-    item("PEND", FormGroup::MlsDataSheets, true),
-    item("SOLD", FormGroup::MlsDataSheets, true),
-    item("RIPA", FormGroup::ListingPurchasingContracts, true),
-    item("CLA", FormGroup::ListingPurchasingContracts, true),
+    MLS_ACT,
+    MLS_PEND,
+    MLS_SOLD,
+    item("RIPA", FormGroup::ListingContracts, true),
+    item("CLA", FormGroup::ListingContracts, true),
     item("LPD", FormGroup::MandatoryDisclosures, false),
     item("RGM", FormGroup::MandatoryDisclosures, true),
     item("SBSA", FormGroup::MandatoryDisclosures, true),
@@ -1255,8 +1434,8 @@ const MULTI_FAMILY_FALLBACK: &[DefaultItem] = &[
     item("VP", FormGroup::MandatoryDisclosures, true),
     item("BCA", FormGroup::AdditionalDisclosures, false),
     item("BRBC", FormGroup::AdditionalDisclosures, false),
-    item("QUAL", FormGroup::AdditionalDisclosures, false),
     item("POF", FormGroup::AdditionalDisclosures, false),
+    item("QUAL", FormGroup::AdditionalDisclosures, false),
     item("APRL", FormGroup::EscrowDocuments, true),
     item("CC&R", FormGroup::EscrowDocuments, false),
     item("CLSD", FormGroup::EscrowDocuments, true),
@@ -1275,43 +1454,72 @@ const MULTI_FAMILY_FALLBACK: &[DefaultItem] = &[
     item("WOO", FormGroup::ReleaseDisclosures, false),
 ];
 
-// Special-condition extras vary by side: listing-side gets the listing-
-// specific addenda (PLA, SSLA, REOL); purchase-side gets the buyer-side
-// advisories (PA, SSA, REO). Dual-side merges both.
-const PROBATE_LISTING: &[DefaultItem] =
-    &[item("PLA", FormGroup::SpecialConditionsDisclosures, true)];
-const PROBATE_PURCHASE: &[DefaultItem] =
-    &[item("PA", FormGroup::SpecialConditionsDisclosures, true)];
-const SHORT_SALE_LISTING: &[DefaultItem] = &[
-    item("SSA", FormGroup::SpecialConditionsDisclosures, true),
-    item("SSLA", FormGroup::SpecialConditionsDisclosures, true),
-];
-const SHORT_SALE_PURCHASE: &[DefaultItem] =
-    &[item("SSA", FormGroup::SpecialConditionsDisclosures, true)];
-const REO_LISTING: &[DefaultItem] = &[
-    item("REO", FormGroup::SpecialConditionsDisclosures, true),
-    item("REOL", FormGroup::SpecialConditionsDisclosures, true),
-];
-const REO_PURCHASE: &[DefaultItem] = &[item("REO", FormGroup::SpecialConditionsDisclosures, true)];
-
-fn special_condition_items(c: SpecialSalesCondition, side: SalesSide) -> Vec<DefaultItem> {
-    let listing: &[DefaultItem] = match c {
-        SpecialSalesCondition::None => &[],
-        SpecialSalesCondition::Probate => PROBATE_LISTING,
-        SpecialSalesCondition::ShortSale => SHORT_SALE_LISTING,
-        SpecialSalesCondition::REO => REO_LISTING,
-    };
-    let purchase: &[DefaultItem] = match c {
-        SpecialSalesCondition::None => &[],
-        SpecialSalesCondition::Probate => PROBATE_PURCHASE,
-        SpecialSalesCondition::ShortSale => SHORT_SALE_PURCHASE,
-        SpecialSalesCondition::REO => REO_PURCHASE,
-    };
-    match side {
-        SalesSide::Listing => listing.to_vec(),
-        SalesSide::Purchase => purchase.to_vec(),
-        SalesSide::Both => merge_sides(listing, purchase),
+/// Pick the contract group variant that this (type, side) checklist
+/// uses for its main contract form(s). Special-condition addenda land
+/// in the same group so they render directly below the contract.
+fn contract_group_for(t: TransactionType, side: SalesSide) -> FormGroup {
+    match (t, side) {
+        // Residential Purchase bundles RPA + RIPA → plural.
+        (TransactionType::Residential | TransactionType::RentalLease, SalesSide::Purchase) => {
+            FormGroup::PurchaseContracts
+        }
+        // Manufactured Home bundles two contracts on each side → plural.
+        (TransactionType::ManufacturedHome, SalesSide::Listing) => FormGroup::ListingContracts,
+        (TransactionType::ManufacturedHome, SalesSide::Purchase) => FormGroup::PurchaseContracts,
+        // Dual-side (Listing & Purchase, Tenant & Landlord) — special
+        // items land in the listing variant. Since the merged checklist
+        // already mixes both sides' main contracts, the special-addenda
+        // location is somewhat arbitrary; listing-side is the printed
+        // convention.
+        (_, SalesSide::Both) => FormGroup::ListingContract,
+        // Multi-Family falls through to the same plural-listing slot it
+        // uses for its main contracts.
+        (TransactionType::MultiFamily, _) => FormGroup::ListingContracts,
+        // All other single-contract listings/purchases.
+        (_, SalesSide::Listing) => FormGroup::ListingContract,
+        (_, SalesSide::Purchase) => FormGroup::PurchaseContract,
     }
+}
+
+// Special-condition addenda. Listing-side gets PLA / SSLA / REOL;
+// purchase-side gets PA / SSA / REO. These now slot into the per-
+// checklist contract group rather than a dedicated section, and are
+// marked `required` because once a condition is set, the addendum
+// becomes part of the binding contract.
+fn special_condition_items(
+    c: SpecialSalesCondition,
+    side: SalesSide,
+    contract_group: FormGroup,
+) -> Vec<DefaultItem> {
+    let listing_codes: &[&str] = match c {
+        SpecialSalesCondition::None => &[],
+        SpecialSalesCondition::Probate => &["PLA"],
+        SpecialSalesCondition::ShortSale => &["SSLA"],
+        SpecialSalesCondition::REO => &["REOL"],
+    };
+    let purchase_codes: &[&str] = match c {
+        SpecialSalesCondition::None => &[],
+        SpecialSalesCondition::Probate => &["PA"],
+        SpecialSalesCondition::ShortSale => &["SSA"],
+        SpecialSalesCondition::REO => &["REO"],
+    };
+    let codes: Vec<&str> = match side {
+        SalesSide::Listing => listing_codes.to_vec(),
+        SalesSide::Purchase => purchase_codes.to_vec(),
+        SalesSide::Both => {
+            let mut v = listing_codes.to_vec();
+            for c in purchase_codes {
+                if !v.contains(c) {
+                    v.push(c);
+                }
+            }
+            v
+        }
+    };
+    codes
+        .into_iter()
+        .map(|code| item(code, contract_group, true))
+        .collect()
 }
 
 /// Pick the per-(type, side) checklist, returning a fresh `Vec` so the
@@ -1381,14 +1589,16 @@ fn merge_sides(listing: &[DefaultItem], purchase: &[DefaultItem]) -> Vec<Default
 }
 
 /// Build the full default checklist for a transaction, including the
-/// special-condition addenda layered on top.
+/// special-condition addenda which now slot into the contract group
+/// directly under the main contract form.
 pub fn build_default_checklist(
     t: TransactionType,
     cond: SpecialSalesCondition,
     sales: SalesType,
 ) -> Vec<DefaultItem> {
     let side = sales_side(sales);
+    let contract_group = contract_group_for(t, side);
     let mut out = defaults_for(t, side);
-    out.extend(special_condition_items(cond, side));
+    out.extend(special_condition_items(cond, side, contract_group));
     out
 }

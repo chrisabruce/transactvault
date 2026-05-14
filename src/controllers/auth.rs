@@ -73,7 +73,7 @@ pub async fn signup_form(
         return Ok(Redirect::to("/app").into_response());
     }
     let challenge =
-        security::issue_challenge(&state.config.jwt_secret, state.config.pow_difficulty_bits);
+        security::issue_challenge(&state.config.jwt_secret, state.config.pow_difficulty_bits)?;
     let page = SignupPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
@@ -215,8 +215,7 @@ pub async fn signup(
     // (7) Create the unverified account + brokerage and dispatch the
     // verify email. We DO NOT issue a session cookie — login is gated on
     // email_verified.
-    let hashed = hash_password(&input.password)
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("hash password: {e}")))?;
+    let hashed = hash_password(&input.password).await?;
     let token = generate_token();
     let expiry = Utc::now() + Duration::hours(state.config.verification_expiry_hours);
 
@@ -498,8 +497,7 @@ pub async fn login(
         return render_login_error(&state, "No account with those credentials.").await;
     };
 
-    let ok = verify_password(&input.password, &user.password_hash)
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("verify: {e}")))?;
+    let ok = verify_password(&input.password, &user.password_hash).await?;
     if !ok {
         audit::record(
             &state.db,
@@ -628,8 +626,7 @@ pub async fn accept_invite(
         return Err(AppError::invalid("Name is required."));
     }
 
-    let hashed = hash_password(&input.password)
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("hash: {e}")))?;
+    let hashed = hash_password(&input.password).await?;
     let ip = client_ip(&headers, Some(&peer));
     let ua = user_agent(&headers);
 
@@ -746,7 +743,7 @@ fn set_session_cookie(
 
 async fn render_signup_error(state: &AppState, message: &str) -> Result<Response, AppError> {
     let challenge =
-        security::issue_challenge(&state.config.jwt_secret, state.config.pow_difficulty_bits);
+        security::issue_challenge(&state.config.jwt_secret, state.config.pow_difficulty_bits)?;
     let page = SignupPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
@@ -783,6 +780,11 @@ async fn render_verify_failure(state: &AppState, message: &str) -> Result<Respon
 ///
 /// `inviter_email` is wired into the email's `Reply-To` so replies bypass
 /// the no-reply From address and land in the actual inviter's inbox.
+//
+// The argument list is wide because there's no smaller natural grouping —
+// every parameter is needed exactly once and a builder would be more
+// ceremony than the single internal call site is worth.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn create_invitation(
     state: &AppState,
     email: String,

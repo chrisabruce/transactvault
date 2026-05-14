@@ -293,13 +293,8 @@ pub async fn download(
         .storage
         .get_bytes(&doc.storage_key)
         .await
-        .map_err(|e| {
-            if e.to_string().contains("not found") {
-                AppError::NotFound
-            } else {
-                AppError::Internal(anyhow::anyhow!("fetch bytes: {e}"))
-            }
-        })?;
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("fetch bytes: {e}")))?
+        .ok_or(AppError::NotFound)?;
     let filename = doc.filename;
 
     Response::builder()
@@ -401,11 +396,20 @@ async fn build_zip(
 ) -> Result<Vec<u8>, AppError> {
     use zip::write::SimpleFileOptions;
 
+    // Missing-from-storage and transport-failure are both surfaced as a
+    // visible placeholder file in the ZIP so the export still completes;
+    // a busted single document shouldn't sink the whole compliance
+    // archive.
+    const MISSING: &[u8] = b"[file missing from storage]";
     let payloads = futures::future::join_all(docs.iter().map(|doc| async move {
-        let bytes = storage
-            .get_bytes(&doc.storage_key)
-            .await
-            .unwrap_or_else(|_| bytes::Bytes::from_static(b"[file missing from storage]"));
+        let bytes = match storage.get_bytes(&doc.storage_key).await {
+            Ok(Some(b)) => b,
+            Ok(None) => bytes::Bytes::from_static(MISSING),
+            Err(e) => {
+                tracing::warn!(error = %e, key = %doc.storage_key, "zip: get_bytes failed");
+                bytes::Bytes::from_static(MISSING)
+            }
+        };
         (doc, bytes)
     }))
     .await;

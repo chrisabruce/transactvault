@@ -194,24 +194,29 @@ async fn set_approval(
 }
 
 /// Best-guess of which checklist group a freshly-added form should live in.
-/// We can't know for sure without the original transaction-type context,
-/// so use the printed CAR taxonomy: contracts go to Contracts, reports to
-/// Reports, escrow forms to Escrow, mandatory disclosures to Mandatory,
-/// everything else falls into "Disclosures — If Applicable".
+/// Since this is called from the manual-add path we don't know the
+/// transaction's sales side; listing-side codes go to `ListingContract`
+/// and purchase-side codes to `PurchaseContract`. A broker who needs the
+/// item in the plural group can manually move it after the fact.
+/// Anything that doesn't match a known bucket falls into Additional
+/// Disclosures — the catch-all for optional supporting forms.
 fn infer_group_from_code(code: &str) -> FormGroup {
     match code {
-        // Listing / purchase agreements
-        "RPA" | "RIPA" | "RLA" | "CPA" | "CLA" | "VLPA" | "VLL" | "BPA" | "BLA" | "MHPA"
-        | "MHLA" | "LR" | "LL" => FormGroup::ListingPurchasingContracts,
+        // Listing-side contracts
+        "RLA" | "MHLA" | "VLL" | "CLA" | "BLA" | "LL" => FormGroup::ListingContract,
+
+        // Purchase-side contracts
+        "RPA" | "RIPA" | "MHPA" | "VLPA" | "CPA" | "BPA" | "LR" => FormGroup::PurchaseContract,
 
         // Mandatory disclosures
         "AVID-1" | "AVID-2" | "FHDS" | "LPD" | "RGM" | "SBSA" | "SPQ" | "TDS" | "WCMD" | "WFDA"
-        | "WHSD" | "VP" | "CSPQ" | "MHDA" | "MHTDS" | "VLQ" | "BDS" => {
-            FormGroup::MandatoryDisclosures
-        }
+        | "WHSD" | "VP" | "CSPQ" | "MHDA" | "MHTDS" | "VLQ" => FormGroup::MandatoryDisclosures,
 
-        // Special-conditions
-        "PLA" | "PA" | "SSA" | "SSLA" | "REO" | "REOL" => FormGroup::SpecialConditionsDisclosures,
+        // Special-condition addenda — now part of the contract section.
+        // Listing-side: under the listing contract. Purchase-side: under
+        // the purchase contract.
+        "PLA" | "SSLA" | "REOL" => FormGroup::ListingContract,
+        "PA" | "SSA" | "REO" => FormGroup::PurchaseContract,
 
         // MLS sheets
         "ACT" | "PEND" | "SOLD" => FormGroup::MlsDataSheets,
@@ -228,11 +233,10 @@ fn infer_group_from_code(code: &str) -> FormGroup {
         // Release
         "CC" | "COL" | "WOO" => FormGroup::ReleaseDisclosures,
 
-        // Additional support
-        "AVAA" | "BCA" | "BRBC" | "EQ" | "EQ-R" | "HID" | "MCA" | "QUAL" | "POF" | "BP-FFE" => {
-            FormGroup::AdditionalDisclosures
-        }
-
-        _ => FormGroup::DisclosuresIfApplicable,
+        // Everything else lands in Additional Disclosures (the catch-all
+        // for optional supporting forms — ADM, BCA, BDS, BP-FFE, BRBC,
+        // CO, CR, EQ, EQ-R, ETA, FVAC, HID, MCA, MT, NTP, POF, QUAL,
+        // RCSD, RR, RRRR, SWPI, TA, plus any custom code).
+        _ => FormGroup::AdditionalDisclosures,
     }
 }
