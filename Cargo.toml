@@ -21,7 +21,7 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "trace", "compression-gzip", "fs", "timeout"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "compression-gzip", "fs", "timeout", "catch-panic"] }
 tower-cookies = "0.11"
 uuid = { version = "1", features = ["v7", "serde"] }
 futures = "0.3"

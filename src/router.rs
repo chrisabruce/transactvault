@@ -98,10 +98,40 @@ pub fn build(state: AppState) -> Router {
                 .on_response(DefaultOnResponse::new().level(Level::INFO))
                 .on_failure(DefaultOnFailure::new().level(Level::ERROR)),
         )
+        // Catch panics inside handlers so they surface in the logs as
+        // tracing errors instead of disappearing into Axum's default
+        // empty-500 fallback. Without this layer, a panic in any
+        // handler returns 500 with zero log output — exactly the
+        // symptom that turned a checklist render bug into a guessing
+        // game.
+        .layer(tower_http::catch_panic::CatchPanicLayer::custom(
+            handle_panic,
+        ))
         .with_state(state)
         .layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024))
         .layer(tower_http::timeout::TimeoutLayer::with_status_code(
             axum::http::StatusCode::GATEWAY_TIMEOUT,
             Duration::from_secs(60),
         ))
+}
+
+/// Panic handler for `CatchPanicLayer`. Logs the panic payload + the
+/// backtrace if `RUST_BACKTRACE` is set, then returns a generic 500.
+fn handle_panic(err: Box<dyn std::any::Any + Send + 'static>) -> axum::response::Response {
+    let msg = if let Some(s) = err.downcast_ref::<String>() {
+        s.clone()
+    } else if let Some(s) = err.downcast_ref::<&'static str>() {
+        (*s).to_string()
+    } else {
+        "<non-string panic payload>".into()
+    };
+    tracing::error!(panic = %msg, "handler panic — returning 500");
+    let body = axum::body::Body::from(
+        "<!doctype html><title>500</title><h1>500</h1><p>Something went wrong. Please try again.</p>",
+    );
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
+        .header(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")
+        .body(body)
+        .unwrap_or_else(|_| axum::response::Response::new(axum::body::Body::empty()))
 }

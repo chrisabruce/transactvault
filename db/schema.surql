@@ -214,8 +214,21 @@ DEFINE FIELD OVERWRITE title        ON checklist_item TYPE string
 DEFINE FIELD OVERWRITE form_code    ON checklist_item TYPE option<string>;
 DEFINE FIELD OVERWRITE group_slug   ON checklist_item TYPE string DEFAULT "additional"
     ASSERT $value IN [
-        "mls", "contracts", "mandatory", "special",
-        "additional", "if_applicable", "escrow", "reports", "release"
+        "mls",
+        -- New (May 2026) contract groups, split from the legacy
+        -- "contracts" bucket. Singular vs plural carries semantics:
+        -- plural variants are used by checklists that bundle two main
+        -- contracts (Residential Purchase = RPA + RIPA, Manufactured
+        -- Home = RLA + MHLA and RPA + MHPA).
+        "listing_contract", "listing_contracts",
+        "purchase_contract", "purchase_contracts",
+        "mandatory",
+        "additional",
+        "escrow", "reports", "release",
+        -- Legacy slugs from before the May-2026 refactor — kept in the
+        -- ASSERT so old persisted rows still satisfy the schema until a
+        -- prod migration sweeps them. New writes must not use these.
+        "contracts", "special", "if_applicable"
     ];
 DEFINE FIELD OVERWRITE position        ON checklist_item TYPE int DEFAULT 0;
 DEFINE FIELD OVERWRITE required        ON checklist_item TYPE bool DEFAULT false;
