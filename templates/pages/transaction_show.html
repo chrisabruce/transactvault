@@ -74,7 +74,7 @@
 
                         <ul class="checklist" role="list">
                             {% for row in group.items %}
-                                <li class="checklist-item is-{{ row.item.approval_status }}{% if row.item.required %} is-required{% endif %}">
+                                <li class="checklist-item is-{{ row.item.approval_status }}{% if row.item.required %} is-required{% endif %}"{% if !row.item.is_approved() %} data-upload-url="/app/transactions/{{ transaction_key }}/documents" data-item-id="{{ row.item.url_key() }}" data-form-code="{% match row.form %}{% when Some with (f) %}{{ f.code }}{% when None %}MISC{% endmatch %}"{% endif %}>
                                     <header class="checklist-item-head">
                                         <div class="checklist-item-tags">
                                             {% match row.form %}{% when Some with (f) %}<strong class="form-code">{{ f.code }}</strong>{% when None %}{% endmatch %}
@@ -248,4 +248,116 @@
         </aside>
     </section>
 </main>
+
+<script>
+// Drag-and-drop upload onto a checklist row. Activates only on items
+// flagged droppable by the template — i.e. not yet approved (the same
+// gate that hides the Upload button). Uses XHR rather than fetch() so
+// we can show upload progress for the 100 MB cap. On success we reload
+// the page; on failure we surface the error and clear the overlay.
+(function () {
+    const items = document.querySelectorAll('.checklist-item[data-upload-url]');
+    if (!items.length) return;
+
+    function hasFiles(e) {
+        return e.dataTransfer
+            && Array.from(e.dataTransfer.types || []).includes('Files');
+    }
+
+    function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, c => (
+            {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]
+        ));
+    }
+
+    function startUpload(item, file) {
+        const url = item.dataset.uploadUrl;
+        const itemId = item.dataset.itemId;
+        const formCode = item.dataset.formCode;
+
+        const overlay = document.createElement('div');
+        overlay.className = 'upload-overlay';
+        overlay.innerHTML =
+            '<p class="upload-status">Uploading ' + escapeHtml(file.name) +
+            ' <span class="upload-pct">0%</span></p>' +
+            '<progress class="upload-progress" max="100" value="0"></progress>';
+        item.appendChild(overlay);
+
+        const fd = new FormData();
+        fd.append('item_id', itemId);
+        fd.append('form_code', formCode);
+        fd.append('file', file);
+
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', url);
+        xhr.upload.addEventListener('progress', e => {
+            if (!e.lengthComputable) return;
+            const pct = Math.round((e.loaded / e.total) * 100);
+            const bar = overlay.querySelector('.upload-progress');
+            const txt = overlay.querySelector('.upload-pct');
+            if (bar) bar.value = pct;
+            if (txt) txt.textContent = pct + '%';
+        });
+        xhr.addEventListener('load', () => {
+            if (xhr.status >= 200 && xhr.status < 400) {
+                window.location.reload();
+            } else {
+                overlay.remove();
+                alert('Upload failed (' + xhr.status + '). Please try again.');
+            }
+        });
+        xhr.addEventListener('error', () => {
+            overlay.remove();
+            alert('Upload failed: network error.');
+        });
+        xhr.send(fd);
+    }
+
+    items.forEach(item => {
+        // Counter pattern dodges the classic dragleave-on-child bug:
+        // entering a nested element fires dragleave on the parent, so we
+        // only drop the highlight when the counter reaches zero.
+        let counter = 0;
+
+        item.addEventListener('dragenter', e => {
+            if (!hasFiles(e)) return;
+            e.preventDefault();
+            counter++;
+            item.classList.add('is-drag-over');
+        });
+        item.addEventListener('dragover', e => {
+            if (!hasFiles(e)) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+        });
+        item.addEventListener('dragleave', e => {
+            if (!hasFiles(e)) return;
+            counter--;
+            if (counter <= 0) {
+                counter = 0;
+                item.classList.remove('is-drag-over');
+            }
+        });
+        item.addEventListener('drop', e => {
+            if (!hasFiles(e)) return;
+            e.preventDefault();
+            counter = 0;
+            item.classList.remove('is-drag-over');
+            const file = e.dataTransfer.files && e.dataTransfer.files[0];
+            if (file) startUpload(item, file);
+        });
+    });
+
+    // Suppress the browser's default "open file" behaviour when a drop
+    // misses a checklist row — otherwise dropping just below a row
+    // navigates away from the transaction.
+    ['dragover', 'drop'].forEach(evt => {
+        window.addEventListener(evt, e => {
+            if (hasFiles(e) && !e.target.closest('[data-upload-url]')) {
+                e.preventDefault();
+            }
+        });
+    });
+})();
+</script>
 {% endblock %}
