@@ -451,11 +451,14 @@ a.btn {
 .plan-card.popular {
     border-color: var(--color-brand);
     box-shadow: 0 0 0 3px var(--color-brand-soft), var(--shadow-lg);
+    /* Reserve space at the top so the "Most popular" pill sits inside
+       the card without overlapping the header copy. */
+    padding-top: calc(var(--sp-6) + 1.75rem);
 }
 .plan-card.popular::before {
     content: "Most popular";
     position: absolute;
-    top: -0.75rem;
+    top: var(--sp-4);
     left: 50%;
     transform: translateX(-50%);
     background: var(--color-brand);
@@ -1167,7 +1170,7 @@ select:disabled {
     letter-spacing: 0.04em;
     border: 1px solid transparent;
 }
-.status-pill.status-pending  { background: var(--color-line-soft); color: var(--color-mute-soft); }
+.status-pill.status-pending  { background: var(--color-warn-soft); color: var(--color-warn); }
 .status-pill.status-approved { background: var(--color-success-soft); color: var(--color-success-ink); }
 .status-pill.status-denied   { background: var(--color-danger-soft);  color: var(--color-danger); }
 .status-pill.status-awaiting { background: var(--color-surface-alt); color: var(--color-muted); font-style: italic; }
@@ -1485,6 +1488,16 @@ progress.progress.small {
     gap: 0.5rem;
     font-size: var(--fs-xs);
 }
+.item-docs .doc-preview { padding: 0.1rem 0.45rem; }
+.item-docs .doc-delete { margin: 0 0 0 auto; }
+.item-docs .doc-delete .btn.small.danger {
+    color: var(--color-danger);
+    padding: 0.1rem 0.45rem;
+    font-size: var(--fs-xs);
+}
+.item-docs .doc-delete .btn.small.danger:hover {
+    background: var(--color-danger-soft);
+}
 .item-docs a { display: inline-flex; align-items: center; gap: 0.4rem; color: var(--color-brand-ink); }
 .item-docs a:hover { color: var(--color-ink); }
 .item-docs .ext {
@@ -1497,6 +1510,70 @@ progress.progress.small {
     color: var(--color-muted);
 }
 .item-docs small { color: var(--color-mute-soft); }
+
+/* --------------------------------------------------------------------------
+   Document preview lightbox (<dialog> element)
+   -------------------------------------------------------------------------- */
+.lightbox {
+    width: min(96vw, 1100px);
+    max-width: 96vw;
+    height: min(92vh, 900px);
+    max-height: 92vh;
+    border: none;
+    border-radius: var(--radius-lg);
+    padding: 0;
+    background: var(--color-surface);
+    color: var(--color-ink);
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.35);
+    overflow: hidden;
+}
+.lightbox::backdrop {
+    background: rgba(15, 23, 42, 0.72);
+    backdrop-filter: blur(2px);
+}
+.lightbox-head {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    padding: var(--sp-3) var(--sp-4);
+    border-bottom: 1px solid var(--color-line);
+    background: var(--color-surface-alt);
+}
+.lightbox-title {
+    flex: 1;
+    margin: 0;
+    font-weight: 500;
+    color: var(--color-ink);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.lightbox-body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: calc(100% - 3.5rem);
+    background: var(--color-surface-alt);
+    overflow: auto;
+}
+.lightbox-body > img,
+.lightbox-body > video,
+.lightbox-body > audio {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    background: #000;
+}
+.lightbox-body > iframe {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    background: #fff;
+}
+.lightbox-fallback {
+    padding: var(--sp-6);
+    color: var(--color-muted);
+}
 
 .checklist-actions details {
     position: relative;

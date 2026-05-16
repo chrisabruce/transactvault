@@ -440,6 +440,15 @@ impl CompliancePanel {
         }
     }
 
+    /// True if any checklist item on the transaction is approved. The
+    /// template uses this to hide per-document delete buttons — once a
+    /// reviewer has approved anything we treat the transaction as past
+    /// the "fix-it-myself" phase. Backend enforces the same gate in
+    /// [`controllers::documents::delete`].
+    pub fn has_any_approval(&self) -> bool {
+        self.completed > 0
+    }
+
     /// Every item on the transaction has been approved → the file set is
     /// frozen. Backend enforces this in [`controllers::documents::upload`];
     /// the template uses it to suppress upload UI.

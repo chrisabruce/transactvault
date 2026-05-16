@@ -143,6 +143,18 @@ impl Storage {
         Ok(resp.uploaded_bytes() as u64)
     }
 
+    /// Delete a single object. Missing keys are treated as success —
+    /// callers only invoke this after looking the key up via DB state,
+    /// so racing a concurrent delete or finding storage already-purged
+    /// shouldn't be an error condition.
+    pub async fn delete(&self, key: &str) -> anyhow::Result<()> {
+        match self.bucket.delete_object(key).await {
+            Ok(_) => Ok(()),
+            Err(e) if is_not_found(&e) => Ok(()),
+            Err(e) => Err(anyhow::anyhow!("delete_object: {e}")),
+        }
+    }
+
     /// Fetch the full object bytes. Returns `Ok(None)` when the key
     /// doesn't exist so callers can decide between "missing" and
     /// "transport error" without resorting to string matching on the

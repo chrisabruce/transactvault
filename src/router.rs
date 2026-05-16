@@ -64,6 +64,8 @@ pub fn build(state: AppState) -> Router {
         )
         .route("/app/transactions/{id}/documents", post(documents::upload))
         .route("/app/documents/{id}/download", get(documents::download))
+        .route("/app/documents/{id}/preview", get(documents::preview))
+        .route("/app/documents/{id}/delete", post(documents::delete))
         .route("/app/team", get(members::list))
         .route("/app/team/invite", post(members::invite))
         .route(

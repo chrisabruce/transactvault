@@ -196,6 +196,7 @@ const AUDIT_KIND_OPTIONS: &[&str] = &[
     "invite_cancelled",
     "invite_accepted",
     "admin_view",
+    "document_deleted",
 ];
 
 async fn lookup_brokerage_name(state: &AppState, user: &crate::auth::CurrentUser) -> String {

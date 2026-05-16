@@ -133,6 +133,22 @@
                                                             {{ doc.filename }}
                                                         </a>
                                                         <small>v{{ doc.version }} · {{ doc.size_display() }}</small>
+                                                        {% match doc.preview_kind() %}{% when Some with (kind) %}
+                                                            <button type="button"
+                                                                    class="btn ghost small doc-preview"
+                                                                    data-preview-url="/app/documents/{{ doc.url_key() }}/preview"
+                                                                    data-preview-kind="{{ kind }}"
+                                                                    data-preview-name="{{ doc.filename }}"
+                                                                    data-preview-type="{{ doc.content_type }}">Preview</button>
+                                                        {% when None %}{% endmatch %}
+                                                        {% if !compliance.has_any_approval() %}
+                                                            <form method="post"
+                                                                  action="/app/documents/{{ doc.url_key() }}/delete"
+                                                                  class="doc-delete"
+                                                                  onsubmit="return confirm('Delete {{ doc.filename }} (v{{ doc.version }})? This cannot be undone.');">
+                                                                <button type="submit" class="btn ghost small danger" title="Remove this upload">Delete</button>
+                                                            </form>
+                                                        {% endif %}
                                                     </li>
                                                 {% endfor %}
                                             </ul>
@@ -248,6 +264,84 @@
         </aside>
     </section>
 </main>
+
+<dialog id="doc-preview" class="lightbox" aria-label="Document preview">
+    <header class="lightbox-head">
+        <p class="lightbox-title" id="doc-preview-title"></p>
+        <a id="doc-preview-download" class="btn ghost small" href="#" target="_blank" rel="noopener">Download</a>
+        <button type="button" class="btn ghost small" data-preview-close aria-label="Close preview">Close</button>
+    </header>
+    <section class="lightbox-body" id="doc-preview-body"></section>
+</dialog>
+
+<script>
+// Document preview lightbox. Hits the cookie-authed preview endpoint
+// for the doc and slots the response into an <img> / <iframe> / <video>
+// / <audio> based on the data-preview-kind attribute. The preview URL
+// only resolves for users with a live session in the doc's brokerage,
+// so a shared link is useless on its own.
+(function () {
+    const dialog = document.getElementById('doc-preview');
+    if (!dialog || typeof dialog.showModal !== 'function') return;
+    const body = document.getElementById('doc-preview-body');
+    const title = document.getElementById('doc-preview-title');
+    const dlLink = document.getElementById('doc-preview-download');
+
+    function escapeAttr(s) {
+        return String(s).replace(/[&<>"']/g, c => (
+            {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]
+        ));
+    }
+
+    function open(btn) {
+        const url = btn.dataset.previewUrl;
+        const kind = btn.dataset.previewKind;
+        const name = btn.dataset.previewName || 'Preview';
+        const mime = btn.dataset.previewType || '';
+        title.textContent = name;
+        // Download link points at the canonical /download endpoint so
+        // "Download" inside the lightbox saves with attachment headers,
+        // unlike the inline-disposition preview URL.
+        dlLink.href = url.replace(/\/preview$/, '/download');
+
+        let html = '';
+        if (kind === 'image') {
+            html = '<img alt="" src="' + escapeAttr(url) + '">';
+        } else if (kind === 'pdf') {
+            html = '<iframe title="PDF preview" src="' + escapeAttr(url) + '"></iframe>';
+        } else if (kind === 'video') {
+            html = '<video controls preload="metadata" src="' + escapeAttr(url)
+                + '" type="' + escapeAttr(mime) + '"></video>';
+        } else if (kind === 'audio') {
+            html = '<audio controls preload="metadata" src="' + escapeAttr(url)
+                + '" type="' + escapeAttr(mime) + '"></audio>';
+        } else {
+            html = '<p class="lightbox-fallback">Preview not available for this file type. Use Download instead.</p>';
+        }
+        body.innerHTML = html;
+        dialog.showModal();
+    }
+
+    function close() {
+        if (dialog.open) dialog.close();
+        // Drop the src so a paused video/audio stops downloading bytes.
+        body.innerHTML = '';
+    }
+
+    document.querySelectorAll('.doc-preview').forEach(btn => {
+        btn.addEventListener('click', () => open(btn));
+    });
+    dialog.querySelectorAll('[data-preview-close]').forEach(b => {
+        b.addEventListener('click', close);
+    });
+    // Click on the backdrop (outside the inner content) closes too.
+    dialog.addEventListener('click', e => {
+        if (e.target === dialog) close();
+    });
+    // Native ESC fires `close` on the dialog element — clear the body.
+    dialog.addEventListener('close', () => { body.innerHTML = ''; });
+})();
+</script>
 
 <script>
 // Drag-and-drop upload onto a checklist row. Activates only on items

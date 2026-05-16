@@ -55,6 +55,30 @@ impl Document {
             None => self.form_code.clone(),
         }
     }
+
+    /// Coarse MIME family used by the in-browser preview lightbox to pick
+    /// an `<img>` / `<iframe>` / `<video>` / `<audio>` element. Returns
+    /// `None` for types we deliberately won't preview — Office docs,
+    /// archives, etc. — so the UI suppresses the button instead of
+    /// dumping raw bytes into an iframe.
+    pub fn preview_kind(&self) -> Option<&'static str> {
+        let ct = self.content_type.to_ascii_lowercase();
+        if ct.starts_with("image/") {
+            Some("image")
+        } else if ct == "application/pdf" {
+            Some("pdf")
+        } else if ct.starts_with("video/") {
+            Some("video")
+        } else if ct.starts_with("audio/") {
+            Some("audio")
+        } else {
+            None
+        }
+    }
+
+    pub fn can_preview(&self) -> bool {
+        self.preview_kind().is_some()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, SurrealValue)]

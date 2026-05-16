@@ -269,14 +269,177 @@ async fn all_items_approved(state: &AppState, tx_id: &RecordId) -> Result<bool, 
     })
 }
 
-/// Stream a single document's bytes to the browser, preserving the
-/// original filename via `Content-Disposition`.
+/// True when at least one checklist item on the transaction is
+/// approved. Once that's the case we treat the transaction as past the
+/// "fix-it-myself" phase and forbid document deletions — the agent has
+/// to ask a coordinator to deny the affected item and re-upload.
+async fn any_item_approved(state: &AppState, tx_id: &RecordId) -> Result<bool, AppError> {
+    use surrealdb::types::SurrealValue;
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct Row {
+        count: i64,
+    }
+    let mut r = state
+        .db
+        .query(
+            "SELECT count() FROM $t->has_item->checklist_item
+             WHERE approval_status = 'approved'
+             GROUP ALL",
+        )
+        .bind(("t", tx_id.clone()))
+        .await?;
+    let row: Option<Row> = r.take(0)?;
+    Ok(row.map(|c| c.count > 0).unwrap_or(false))
+}
+
+/// Delete a single uploaded document. Available to any authorized
+/// brokerage member as long as no checklist item on the transaction
+/// has been approved yet — once a reviewer has signed off on anything,
+/// removing files would muddy the audit trail.
+///
+/// Order of operations is "DB row first, then storage": if the storage
+/// purge fails we end up with an orphan object (cheap, recoverable),
+/// not an orphan DB row pointing at a missing key (which would 500 on
+/// download). Edges defined `ON DELETE CASCADE` in the schema clean
+/// themselves up.
+pub async fn delete(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(doc_id): Path<String>,
+) -> Result<Redirect, AppError> {
+    let doc_ref = RecordId::new("document", doc_id.as_str());
+    let doc: Option<Document> = state.db.select(doc_ref.clone()).await?;
+    let doc = doc.ok_or(AppError::NotFound)?;
+
+    // Find the owning transaction so we can authorize the caller.
+    let mut r = state
+        .db
+        .query("SELECT VALUE in FROM has_document WHERE out = $d LIMIT 1")
+        .bind(("d", doc_ref.clone()))
+        .await?;
+    let txs: Vec<RecordId> = r.take(0)?;
+    let tx_id = txs.into_iter().next().ok_or(AppError::NotFound)?;
+    let _ = authorize_transaction(&state, &user, &tx_id).await?;
+
+    if any_item_approved(&state, &tx_id).await? {
+        return Err(AppError::invalid(
+            "Documents are locked once a coordinator has approved any checklist item. Have them deny the affected item to reopen the transaction for edits.",
+        ));
+    }
+
+    // Drop edges first so the doc record can't be left dangling under a
+    // half-completed delete. SurrealDB's `DELETE` on a record cleans up
+    // its incoming/outgoing edges automatically, but being explicit here
+    // makes intent and ordering obvious in a review.
+    state
+        .db
+        .query(
+            "DELETE has_document WHERE out = $d;
+             DELETE for_item     WHERE in  = $d;
+             DELETE uploaded     WHERE out = $d;
+             DELETE version_of   WHERE in  = $d OR out = $d;
+             DELETE $d;",
+        )
+        .bind(("d", doc_ref))
+        .await?;
+
+    // Best-effort storage purge — if RustFS hiccups we still want the
+    // DB state consistent. The object becomes a small recoverable orphan
+    // that the next `dev_wipe_bucket` or a periodic sweep would clean.
+    if let Err(e) = state.storage.delete(&doc.storage_key).await {
+        tracing::warn!(error = %e, key = %doc.storage_key, "storage delete failed; DB row already removed");
+    }
+
+    crate::audit::record(
+        &state.db,
+        "document_deleted",
+        Some(user.user_id.clone()),
+        Some(user.email.clone()),
+        None,
+        None,
+        Some(format!(
+            "filename={} version={} form={}",
+            doc.filename, doc.version, doc.form_code
+        )),
+    )
+    .await;
+
+    let tx_key = crate::record_key(&tx_id);
+    Ok(Redirect::to(&format!("/app/transactions/{tx_key}")))
+}
+
+/// Stream a single document's bytes to the browser as a download
+/// (`Content-Disposition: attachment`). Same auth as preview.
 pub async fn download(
     State(state): State<AppState>,
     user: CurrentUser,
     Path(doc_id): Path<String>,
 ) -> Result<Response, AppError> {
-    let doc_ref = RecordId::new("document", doc_id.as_str());
+    let (doc, bytes) = authorize_and_fetch(&state, &user, &doc_id).await?;
+    let safe_name = doc.filename.replace('"', "_");
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, doc.content_type)
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{safe_name}\""),
+        )
+        .body(Body::from(bytes))
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("build response: {e}")))
+}
+
+/// Stream a document's bytes inline so the browser renders it in place
+/// (PDF viewer, `<img>`, `<video>`, `<audio>`). Auth is identical to
+/// download — same JWT cookie, same `authorize_transaction` brokerage
+/// gate — so a copied URL is useless without a valid session. We only
+/// serve preview-safe MIME families; anything else returns 404 so the
+/// caller falls back to Download.
+///
+/// Headers worth calling out:
+/// - `Cache-Control: private, no-store` keeps a shared device's cache
+///   from holding sensitive contracts.
+/// - `X-Content-Type-Options: nosniff` prevents the browser from
+///   reinterpreting a misnamed payload as HTML/JS.
+/// - `Content-Security-Policy: sandbox` neutralises scripts in any
+///   embedded SVG/PDF the browser might otherwise execute.
+pub async fn preview(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(doc_id): Path<String>,
+) -> Result<Response, AppError> {
+    let (doc, bytes) = authorize_and_fetch(&state, &user, &doc_id).await?;
+    if !doc.can_preview() {
+        return Err(AppError::NotFound);
+    }
+    let safe_name = doc.filename.replace('"', "_");
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, doc.content_type)
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("inline; filename=\"{safe_name}\""),
+        )
+        .header(header::CACHE_CONTROL, "private, no-store")
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Content-Security-Policy", "sandbox")
+        .body(Body::from(bytes))
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("build response: {e}")))
+}
+
+/// Shared prologue for [`download`] and [`preview`]: look up the
+/// document row, find its owning transaction via the `has_document`
+/// edge, run the standard brokerage authorisation, then fetch bytes.
+///
+/// Returns 404 (`AppError::NotFound`) for: missing doc, doc with no
+/// owning transaction, cross-brokerage requests, or missing storage
+/// object. We deliberately don't distinguish "missing" from "forbidden"
+/// here so a probe can't enumerate document IDs.
+async fn authorize_and_fetch(
+    state: &AppState,
+    user: &CurrentUser,
+    doc_id: &str,
+) -> Result<(Document, bytes::Bytes), AppError> {
+    let doc_ref = RecordId::new("document", doc_id);
     let doc: Option<Document> = state.db.select(doc_ref.clone()).await?;
     let doc = doc.ok_or(AppError::NotFound)?;
 
@@ -287,7 +450,7 @@ pub async fn download(
         .await?;
     let txs: Vec<RecordId> = r.take(0)?;
     let tx_id = txs.into_iter().next().ok_or(AppError::NotFound)?;
-    let _ = authorize_transaction(&state, &user, &tx_id).await?;
+    let _ = authorize_transaction(state, user, &tx_id).await?;
 
     let bytes = state
         .storage
@@ -295,17 +458,7 @@ pub async fn download(
         .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("fetch bytes: {e}")))?
         .ok_or(AppError::NotFound)?;
-    let filename = doc.filename;
-
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, doc.content_type)
-        .header(
-            header::CONTENT_DISPOSITION,
-            format!("attachment; filename=\"{}\"", filename.replace('"', "_")),
-        )
-        .body(Body::from(bytes))
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("build response: {e}")))
+    Ok((doc, bytes))
 }
 
 /// Download a ZIP of every document attached to a transaction — the

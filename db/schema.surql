@@ -289,7 +289,8 @@ DEFINE FIELD OVERWRITE kind ON audit_event TYPE string
         "signup_blocked_duplicate", "verify_success", "verify_failure",
         "login_success", "login_failure", "login_blocked_unverified",
         "logout", "invite_sent", "invite_resent", "invite_cancelled",
-        "invite_accepted", "admin_view"
+        "invite_accepted", "admin_view",
+        "document_deleted"
     ];
 DEFINE FIELD OVERWRITE actor_email ON audit_event TYPE option<string>;
 DEFINE FIELD OVERWRITE actor       ON audit_event TYPE option<record<user>>;

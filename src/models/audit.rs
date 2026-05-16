@@ -47,6 +47,7 @@ impl AuditEvent {
             "invite_cancelled" => "Invite cancelled",
             "invite_accepted" => "Invite accepted",
             "admin_view" => "Admin view",
+            "document_deleted" => "Document deleted",
             _ => "Event",
         }
     }
@@ -56,7 +57,7 @@ impl AuditEvent {
         match self.kind.as_str() {
             "verify_success" | "login_success" | "invite_accepted" | "signup_pending" => "ok",
             "logout" | "invite_sent" | "invite_resent" | "admin_view" => "neutral",
-            "login_failure" | "verify_failure" | "invite_cancelled" => "fail",
+            "login_failure" | "verify_failure" | "invite_cancelled" | "document_deleted" => "fail",
             _ => "blocked",
         }
     }
