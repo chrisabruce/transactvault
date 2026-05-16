@@ -1020,16 +1020,25 @@ pub async fn load_comments(
 /// All CAR forms not currently on this transaction's checklist — feeds the
 /// "Add optional form" picker. Forms marked `allows_multiple` always stay
 /// available even if already attached.
+///
+/// Sorted case-insensitively by code so the picker reads alphabetically.
+/// We can't return a `Vec<&'static CarForm>` from a sorted reference into
+/// the static `LIBRARY` because the library itself isn't pre-sorted (it
+/// groups forms thematically), so we sort the filtered references at
+/// request time. With ~300 entries this is a few microseconds and not
+/// worth caching.
 fn available_forms(groups: &[ChecklistGroup]) -> Vec<&'static crate::forms::CarForm> {
     let used: std::collections::HashSet<&str> = groups
         .iter()
         .flat_map(|g| g.items.iter())
         .filter_map(|r| r.form.map(|f| f.code))
         .collect();
-    forms::LIBRARY
+    let mut out: Vec<&'static crate::forms::CarForm> = forms::LIBRARY
         .iter()
         .filter(|f| f.allows_multiple || !used.contains(f.code))
-        .collect()
+        .collect();
+    out.sort_by(|a, b| a.code.to_ascii_lowercase().cmp(&b.code.to_ascii_lowercase()));
+    out
 }
 
 async fn load_transaction_owner_name(

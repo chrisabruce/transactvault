@@ -189,12 +189,24 @@
                     <h3>Add an item</h3>
                     <form method="post" action="/app/transactions/{{ transaction_key }}/checklist" class="filter-bar">
                         <label class="visually-hidden" for="add-form-code">CAR form</label>
-                        <select id="add-form-code" name="form_code">
-                            <option value="">— Pick a CAR form —</option>
+                        {# Native <datalist> typeahead. Browsers filter the
+                           list as the user types and match against both the
+                           code (value) and the form name (visible label),
+                           so agents can search "RPA" or "Residential" and
+                           land on the same row. Submitted value is just
+                           the code — `checklists::create` validates it
+                           against `forms::lookup` and falls back to a
+                           custom item if the code is unknown. #}
+                        <input id="add-form-code"
+                               name="form_code"
+                               list="car-form-options"
+                               autocomplete="off"
+                               placeholder="Type a code or name (e.g. RPA, Residential)…">
+                        <datalist id="car-form-options">
                             {% for f in available_forms %}
-                                <option value="{{ f.code }}">{{ f.code }} — {{ f.name }}</option>
+                                <option value="{{ f.code }}">{{ f.name }}</option>
                             {% endfor %}
-                        </select>
+                        </datalist>
                         <span class="or-divider">or</span>
                         <label class="visually-hidden" for="add-custom-title">Custom title</label>
                         <input id="add-custom-title" type="text" name="title" placeholder="Custom item title…">

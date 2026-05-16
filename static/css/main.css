@@ -468,7 +468,13 @@ a.btn {
     padding: 0.25rem 0.75rem;
     border-radius: 999px;
     letter-spacing: 0.04em;
+    /* Letter-spacing adds trailing space after the last glyph, which
+       shifts the visible text left inside symmetric padding. A matching
+       text-indent moves it back to true centre. */
+    text-indent: 0.04em;
     text-transform: uppercase;
+    text-align: center;
+    line-height: 1;
 }
 .plan-card h3 { margin: 0; font-size: var(--fs-lg); }
 .plan-card .price {
@@ -1490,13 +1496,19 @@ progress.progress.small {
 }
 .item-docs .doc-preview { padding: 0.1rem 0.45rem; }
 .item-docs .doc-delete { margin: 0 0 0 auto; }
+/* The button carries `.btn.ghost.small.danger`. `.btn.danger` declares
+   a solid-red background later in the cascade than `.btn.ghost`, which
+   would paint red-on-red here. Re-assert the ghost background so the
+   pill reads as "destructive-ghost", not "destructive-filled". */
 .item-docs .doc-delete .btn.small.danger {
+    background: transparent;
     color: var(--color-danger);
     padding: 0.1rem 0.45rem;
     font-size: var(--fs-xs);
 }
 .item-docs .doc-delete .btn.small.danger:hover {
     background: var(--color-danger-soft);
+    color: var(--color-danger);
 }
 .item-docs a { display: inline-flex; align-items: center; gap: 0.4rem; color: var(--color-brand-ink); }
 .item-docs a:hover { color: var(--color-ink); }
