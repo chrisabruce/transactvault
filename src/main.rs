@@ -28,19 +28,6 @@ mod templates;
 use crate::config::Config;
 use crate::state::AppState;
 
-/// Extract the string key portion of a SurrealDB `RecordId` as a URL-safe
-/// string. Server-generated IDs are always `RecordIdKey::String` (20-char
-/// base-36); numeric and UUID keys are rendered as their `Display` form.
-pub fn record_key(id: &surrealdb::types::RecordId) -> String {
-    use surrealdb::types::RecordIdKey;
-    match &id.key {
-        RecordIdKey::String(s) => s.clone(),
-        RecordIdKey::Number(n) => n.to_string(),
-        RecordIdKey::Uuid(u) => u.to_string(),
-        _ => String::new(),
-    }
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // `.env` is developer-friendly; production can inject the same variables

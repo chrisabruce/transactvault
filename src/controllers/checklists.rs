@@ -189,7 +189,7 @@ async fn set_approval(
         .bind(("s", new_status))
         .await?;
 
-    let key = crate::record_key(&tx_id);
+    let key = crate::db::record_key(&tx_id);
     Ok(Redirect::to(&format!("/app/transactions/{key}")))
 }
 

@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use surrealdb::types::{RecordId, SurrealValue};
 
-use crate::record_key;
+use crate::db::record_key;
 
 #[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
 pub struct Document {

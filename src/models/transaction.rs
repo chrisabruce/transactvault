@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use surrealdb::types::{RecordId, SurrealValue};
 
-use crate::record_key;
+use crate::db::record_key;
 
 // ---------------------------------------------------------------------------
 // Status (renamed from the old Open/Under Contract/... set to match the spec)

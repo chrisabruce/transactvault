@@ -572,6 +572,6 @@ pub struct AdminUser {
 
 impl AdminUser {
     pub fn url_key(&self) -> String {
-        crate::record_key(&self.id)
+        crate::db::record_key(&self.id)
     }
 }

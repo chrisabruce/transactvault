@@ -726,7 +726,7 @@ fn set_session_cookie(
     cookies: &Cookies,
     user_id: &RecordId,
 ) -> Result<(), AppError> {
-    let key = crate::record_key(user_id);
+    let key = crate::db::record_key(user_id);
     let token = issue_token(&state.config, &key)
         .map_err(|e| AppError::Internal(anyhow::anyhow!("issue token: {e}")))?;
 

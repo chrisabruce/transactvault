@@ -273,7 +273,7 @@ pub async fn create(
 
     seed_default_checklist(&state, &tx.id, tx_type, condition, sales).await?;
 
-    let key = crate::record_key(&tx.id);
+    let key = crate::db::record_key(&tx.id);
     Ok(Redirect::to(&format!("/app/transactions/{key}")))
 }
 
@@ -304,7 +304,7 @@ pub async fn show(
         "transactions",
     )
     .with_super_admin(crate::controllers::is_super_admin(&state, &user));
-    let tx_key = crate::record_key(&tx.id);
+    let tx_key = crate::db::record_key(&tx.id);
     let can_review = user.role.can_review();
     render(&TransactionShowPage {
         app_name: &state.config.app_name,
@@ -386,7 +386,7 @@ pub async fn edit_form(
         "transactions",
     )
     .with_super_admin(crate::controllers::is_super_admin(&state, &user));
-    let tx_key = crate::record_key(&tx.id);
+    let tx_key = crate::db::record_key(&tx.id);
     render(&TransactionEditPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
@@ -999,7 +999,7 @@ pub async fn load_comments(
             let referenced_document = match (r.ref_id, r.ref_filename, r.ref_version) {
                 (Some(id), Some(filename), Some(version)) => {
                     Some(crate::templates::ReferencedDocument {
-                        key: crate::record_key(&id),
+                        key: crate::db::record_key(&id),
                         filename,
                         version,
                     })
@@ -1037,7 +1037,7 @@ fn available_forms(groups: &[ChecklistGroup]) -> Vec<&'static crate::forms::CarF
         .iter()
         .filter(|f| f.allows_multiple || !used.contains(f.code))
         .collect();
-    out.sort_by(|a, b| a.code.to_ascii_lowercase().cmp(&b.code.to_ascii_lowercase()));
+    out.sort_by_key(|f| f.code.to_ascii_lowercase());
     out
 }
 
@@ -1113,7 +1113,7 @@ async fn search_documents(
                 })
                 .map(move |d| SearchDocument {
                     document: d,
-                    transaction_key: crate::record_key(&tx.id),
+                    transaction_key: crate::db::record_key(&tx.id),
                     transaction_address: tx.property_address.clone(),
                 })
                 .collect::<Vec<_>>()

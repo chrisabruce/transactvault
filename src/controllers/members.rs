@@ -141,7 +141,7 @@ async fn load_members(state: &AppState, user: &CurrentUser) -> Result<Vec<Member
         .filter_map(|r| {
             Role::parse(&r.role).map(|role| {
                 let is_self = r.user_id == user.user_id;
-                let key = crate::record_key(&r.user_id);
+                let key = crate::db::record_key(&r.user_id);
                 Member::new(key, r.name, r.email, role, is_self)
             })
         })

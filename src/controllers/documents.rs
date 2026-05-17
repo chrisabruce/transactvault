@@ -364,7 +364,7 @@ pub async fn delete(
     )
     .await;
 
-    let tx_key = crate::record_key(&tx_id);
+    let tx_key = crate::db::record_key(&tx_id);
     Ok(Redirect::to(&format!("/app/transactions/{tx_key}")))
 }
 
@@ -511,7 +511,7 @@ fn make_storage_key(
     let property = property_folder(tx);
     format!(
         "{brokerage_key}/{property}/{form}/{uuid}-{name}",
-        brokerage_key = crate::record_key(brokerage),
+        brokerage_key = crate::db::record_key(brokerage),
         property = property,
         form = sanitize_path_segment(form_code),
         uuid = uuid::Uuid::now_v7(),
@@ -526,7 +526,7 @@ fn property_folder(tx: &Transaction) -> String {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
-        .unwrap_or_else(|| crate::record_key(&tx.id));
+        .unwrap_or_else(|| crate::db::record_key(&tx.id));
     sanitize_path_segment(&raw)
 }
 

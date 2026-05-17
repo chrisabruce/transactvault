@@ -12,8 +12,38 @@ use anyhow::Context;
 use surrealdb::Surreal;
 use surrealdb::engine::any::{self, Any};
 use surrealdb::opt::auth::Root;
+use surrealdb::types::{RecordId, RecordIdKey};
 
 use crate::config::Config;
+
+/// Extract the key portion of a SurrealDB [`RecordId`] as a URL-safe
+/// string.
+///
+/// SurrealDB doesn't expose a `Display` for the key alone — `ToSql`
+/// produces backtick-escaped SQL syntax (`` `abc-123` ``) which is wrong
+/// for URL paths. This helper fills that gap.
+///
+/// The app uses SurrealDB's default ulid generator, so in practice every
+/// record id we ever build is `RecordIdKey::String`. The other arms
+/// exist defensively — `Array`/`Object`/`Range` keys are valid in
+/// SurrealDB but we never construct them here. If one ever appears it's
+/// a bug; we log loudly and return an empty string rather than panic so
+/// a stray edge case can't crash a request.
+pub fn record_key(id: &RecordId) -> String {
+    match &id.key {
+        RecordIdKey::String(s) => s.clone(),
+        RecordIdKey::Number(n) => n.to_string(),
+        RecordIdKey::Uuid(u) => u.to_string(),
+        other => {
+            tracing::error!(
+                table = %id.table.as_str(),
+                key = ?other,
+                "record_key: unexpected non-scalar RecordIdKey — returning empty string"
+            );
+            String::new()
+        }
+    }
+}
 
 /// Bundled schema — always reflects the current state of the data model.
 const SCHEMA: &str = include_str!("../../db/schema.surql");

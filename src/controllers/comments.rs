@@ -51,7 +51,7 @@ pub async fn create_on_item(
     let _ = authorize_transaction(&state, &user, &tx_id).await?;
 
     insert_comment(&state, &user, item_id, input.body).await?;
-    let key = crate::record_key(&tx_id);
+    let key = crate::db::record_key(&tx_id);
     Ok(Redirect::to(&format!("/app/transactions/{key}")))
 }
 
