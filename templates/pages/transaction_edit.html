@@ -52,7 +52,9 @@
                 <div class="form-row">
                     <label>
                         <span>Sales Price</span>
-                        <input type="text" name="sales_price" value="{{ transaction.price_display() }}">
+                        <input type="text" name="sales_price"
+                               value="{{ transaction.price_display() }}"
+                               inputmode="decimal" data-format="money">
                     </label>
                     <label>
                         <span>Client Name</span>
@@ -115,4 +117,5 @@
         </form>
     </section>
 </main>
+<script src="/static/js/format-money.js" defer></script>
 {% endblock %}

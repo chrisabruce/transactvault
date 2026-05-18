@@ -46,7 +46,8 @@
                 <div class="form-row">
                     <label>
                         <span>Sales Price</span>
-                        <input type="text" name="sales_price" placeholder="$7,999,985.00">
+                        <input type="text" name="sales_price" placeholder="$7,999,985.00"
+                               inputmode="decimal" data-format="money">
                     </label>
                     <label>
                         <span>Client Name</span>
@@ -109,4 +110,5 @@
         </form>
     </section>
 </main>
+<script src="/static/js/format-money.js" defer></script>
 {% endblock %}
