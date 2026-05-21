@@ -978,6 +978,133 @@ form .form-row { display: grid; gap: var(--sp-3); grid-template-columns: 1fr 1fr
 .filter-bar form { display: flex; gap: var(--sp-2); }
 .filter-bar input[type="search"] { min-width: 18rem; }
 
+/* --------------------------------------------------------------------------
+   Transactions list toolbar — single-row pill that holds icon search,
+   status select, and the "Needs attention" toggle. Auto-submits on
+   change (see inline script), so there's no separate Apply button
+   eating horizontal or vertical space.
+   -------------------------------------------------------------------------- */
+.tx-toolbar {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    padding: 0.3rem 0.4rem 0.3rem 0.5rem;
+    background: var(--color-surface);
+    border: 1px solid var(--color-line);
+    border-radius: 999px;
+    margin-bottom: var(--sp-5);
+    box-shadow: 0 1px 0 rgba(15, 23, 42, 0.02);
+    transition: border-color var(--transition), box-shadow var(--transition);
+}
+.tx-toolbar:focus-within {
+    border-color: var(--color-brand);
+    box-shadow: 0 0 0 3px var(--color-brand-soft);
+}
+.tx-toolbar-search {
+    position: relative;
+    flex: 1 1 auto;
+    min-width: 10rem;
+    display: flex;
+    align-items: center;
+}
+.tx-toolbar-icon {
+    position: absolute;
+    left: 0.7rem;
+    width: 1.05rem;
+    height: 1.05rem;
+    color: var(--color-muted);
+    pointer-events: none;
+}
+.tx-toolbar-search input[type="search"] {
+    width: 100%;
+    padding: 0.55rem 0.75rem 0.55rem 2.2rem;
+    border: 0;
+    background: transparent;
+    font-size: var(--fs-sm);
+    color: var(--color-ink);
+    outline: 0;
+    appearance: none;
+    -webkit-appearance: none;
+}
+.tx-toolbar-search input[type="search"]::placeholder {
+    color: var(--color-mute-soft);
+}
+.tx-toolbar-search input[type="search"]::-webkit-search-cancel-button {
+    appearance: none;
+    -webkit-appearance: none;
+}
+.tx-toolbar-select {
+    background: var(--color-surface-alt);
+    border: 1px solid var(--color-line);
+    border-radius: 999px;
+    padding: 0.4rem 1.75rem 0.4rem 0.8rem;
+    font-size: var(--fs-sm);
+    color: var(--color-ink);
+    cursor: pointer;
+    /* Tiny SVG caret rendered inline so we don't ship a separate asset. */
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none'><path d='M1 1.5L6 6.5L11 1.5' stroke='%2364748b' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 0.7rem center;
+    background-size: 0.65rem auto;
+    appearance: none;
+    -webkit-appearance: none;
+}
+.tx-toolbar-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0.75rem;
+    border-radius: 999px;
+    background: var(--color-surface-alt);
+    border: 1px solid var(--color-line);
+    font-size: var(--fs-xs);
+    font-weight: 500;
+    color: var(--color-ink);
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    transition: background var(--transition), border-color var(--transition), color var(--transition);
+}
+.tx-toolbar-toggle:hover { border-color: var(--color-brand); }
+.tx-toolbar-toggle input[type="checkbox"] {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 0.95rem;
+    height: 0.95rem;
+    border: 1.5px solid var(--color-mute-soft);
+    border-radius: 0.25rem;
+    background: var(--color-surface);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: background var(--transition), border-color var(--transition);
+}
+.tx-toolbar-toggle input[type="checkbox"]:checked {
+    background: var(--color-brand);
+    border-color: var(--color-brand);
+}
+.tx-toolbar-toggle input[type="checkbox"]:checked::after {
+    content: "";
+    width: 0.45rem;
+    height: 0.25rem;
+    border-left: 1.5px solid #fff;
+    border-bottom: 1.5px solid #fff;
+    transform: translateY(-1px) rotate(-45deg);
+}
+.tx-toolbar-toggle:has(input[type="checkbox"]:checked) {
+    background: var(--color-brand-soft);
+    border-color: var(--color-brand);
+    color: var(--color-brand-ink);
+}
+
+@media (max-width: 36rem) {
+    .tx-toolbar {
+        border-radius: var(--radius-lg);
+        flex-wrap: wrap;
+    }
+    .tx-toolbar-search { flex: 1 1 100%; }
+}
+
 .transaction-list {
     background: var(--color-surface);
     border: 1px solid var(--color-line);
