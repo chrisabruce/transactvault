@@ -1112,17 +1112,82 @@ form .form-row { display: grid; gap: var(--sp-3); grid-template-columns: 1fr 1fr
     overflow: hidden;
 }
 .transaction-list > ul { list-style: none; margin: 0; padding: 0; }
+
+/* Header strip + row share the same grid template so columns line up
+   pixel-perfect across the header → rows → sentinel boundary. Six
+   tracks: property | price | type | age | status | open-button. */
+.tx-list-head,
 .transaction-row {
     display: grid;
-    grid-template-columns: 2fr 1fr 1fr 1fr auto;
+    grid-template-columns: 2fr 0.9fr 0.9fr 0.9fr 0.9fr auto;
     gap: var(--sp-4);
     align-items: center;
-    padding: var(--sp-4) var(--sp-5);
+    padding: var(--sp-3) var(--sp-5);
+}
+.tx-list-head {
+    background: var(--color-surface-alt);
+    border-bottom: 1px solid var(--color-line);
+    padding-block: 0.5rem;
+    font-size: var(--fs-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+    color: var(--color-muted);
+}
+.tx-list-col {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    text-decoration: none;
+    color: inherit;
+    padding: 0.25rem 0;
+    border-radius: var(--radius-sm);
+    transition: color var(--transition);
+}
+.tx-list-col:hover { color: var(--color-ink); text-decoration: none; }
+.tx-list-col.is-active { color: var(--color-brand-ink); }
+.tx-list-col .tx-list-arrow {
+    color: var(--color-mute-soft);
+    font-size: 0.7rem;
+    line-height: 1;
+}
+.tx-list-col.is-active .tx-list-arrow { color: var(--color-brand); }
+.tx-list-col.is-spacer { padding: 0; cursor: default; }
+
+.transaction-row {
+    padding-block: var(--sp-4);
     border-bottom: 1px solid var(--color-line-soft);
     transition: background var(--transition);
 }
 .transaction-row:last-child { border-bottom: 0; }
 .transaction-row:hover { background: var(--color-surface-alt); }
+.tx-cell { min-width: 0; }
+.tx-cell.tx-cell-property { display: grid; gap: 0.1rem; }
+.tx-cell.tx-cell-property .property {
+    color: var(--color-ink);
+    font-weight: 600;
+    text-decoration: none;
+}
+.tx-cell.tx-cell-property .property:hover {
+    color: var(--color-brand-ink);
+    text-decoration: none;
+}
+.tx-cell.tx-cell-property .meta {
+    color: var(--color-muted);
+    font-size: var(--fs-sm);
+    margin: 0;
+}
+.tx-cell.tx-cell-price,
+.tx-cell.tx-cell-type,
+.tx-cell.tx-cell-age {
+    color: var(--color-ink);
+    font-size: var(--fs-sm);
+}
+.tx-cell.tx-cell-age {
+    color: var(--color-muted);
+}
+.tx-cell.tx-cell-age time { white-space: nowrap; }
+
 .transaction-sentinel {
     display: flex;
     justify-content: center;
@@ -1146,13 +1211,29 @@ form .form-row { display: grid; gap: var(--sp-3); grid-template-columns: 1fr 1fr
 @keyframes tx-sentinel-spin {
     to { transform: rotate(360deg); }
 }
-.transaction-row .property { color: var(--color-ink); font-weight: 600; }
-.transaction-row .meta { color: var(--color-muted); font-size: var(--fs-sm); margin: 0; }
-.transaction-row a { color: inherit; }
-.transaction-row a:hover { text-decoration: none; color: var(--color-brand-ink); }
-@media (max-width: 52rem) {
-    .transaction-row { grid-template-columns: 1fr; }
-    .transaction-row > * + * { margin-top: 0; }
+
+@media (max-width: 60rem) {
+    /* Hide the header on narrow viewports — the rows collapse to a
+       stacked card layout where column labels don't apply. */
+    .tx-list-head { display: none; }
+    .transaction-row {
+        grid-template-columns: 1fr auto;
+        grid-template-areas:
+            "property action"
+            "meta     meta"
+            "status   status";
+        gap: var(--sp-2) var(--sp-3);
+    }
+    .tx-cell-property { grid-area: property; }
+    .tx-cell-action   { grid-area: action; }
+    .tx-cell-price,
+    .tx-cell-type,
+    .tx-cell-age      { grid-area: meta; display: inline; color: var(--color-muted); font-size: var(--fs-xs); }
+    .tx-cell-price::after,
+    .tx-cell-type::after,
+    .tx-cell-age::after { content: "  ·  "; color: var(--color-mute-soft); }
+    .tx-cell-age::after { content: ""; }
+    .tx-cell-status   { grid-area: status; }
 }
 
 .empty-state {

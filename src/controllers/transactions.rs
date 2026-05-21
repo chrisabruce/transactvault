@@ -120,9 +120,8 @@ pub struct ListFilters {
     #[serde(default)]
     pub q: Option<String>,
     /// `"1"` (or any truthy string) restricts the list to transactions
-    /// with at least one required-and-not-yet-approved checklist item —
-    /// the same predicate that drives the dashboard "Needs attention"
-    /// counter.
+    /// with at least one denied checklist item — the same predicate
+    /// that drives the dashboard "Needs attention" counter.
     #[serde(default)]
     pub attention: Option<String>,
     /// 1-indexed page number. Defaults to 1.
@@ -132,6 +131,84 @@ pub struct ListFilters {
     /// anything else (or absent) renders the full page chrome.
     #[serde(default)]
     pub fragment: Option<String>,
+    /// Column to sort by: `age` (default, newest first), `property`,
+    /// `price`, `type`, or `status`. Unknown values fall back to `age`.
+    #[serde(default)]
+    pub sort: Option<String>,
+    /// Sort direction: `asc` or `desc`. Defaults to `desc` for `age` /
+    /// `price` (newest, most expensive first), `asc` for text columns.
+    #[serde(default)]
+    pub dir: Option<String>,
+}
+
+/// Which column the list is sorted by. Kept on the page model so the
+/// header strip can render the right active-state arrow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortKey {
+    Age,
+    Property,
+    Price,
+    Type,
+    Status,
+}
+
+impl SortKey {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "age" => Some(Self::Age),
+            "property" => Some(Self::Property),
+            "price" => Some(Self::Price),
+            "type" => Some(Self::Type),
+            "status" => Some(Self::Status),
+            _ => None,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Age => "age",
+            Self::Property => "property",
+            Self::Price => "price",
+            Self::Type => "type",
+            Self::Status => "status",
+        }
+    }
+    /// Direction a fresh click on this column should land on. Numeric /
+    /// date columns default to descending (newest, biggest first); text
+    /// columns default to ascending (A → Z).
+    pub fn default_dir(self) -> SortDir {
+        match self {
+            Self::Age | Self::Price => SortDir::Desc,
+            Self::Property | Self::Type | Self::Status => SortDir::Asc,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortDir {
+    Asc,
+    Desc,
+}
+
+impl SortDir {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "asc" => Some(Self::Asc),
+            "desc" => Some(Self::Desc),
+            _ => None,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Asc => "asc",
+            Self::Desc => "desc",
+        }
+    }
+    pub fn flip(self) -> Self {
+        match self {
+            Self::Asc => Self::Desc,
+            Self::Desc => Self::Asc,
+        }
+    }
 }
 
 pub async fn list(
@@ -181,11 +258,28 @@ pub async fn list(
             .collect();
     }
 
-    // Pagination over the filtered slice. We don't push pagination into
-    // the DB query because the `attention` filter requires N small
-    // round-trips per transaction anyway — there's no win from a SQL
-    // LIMIT/OFFSET. With per-brokerage volumes in the hundreds this is
-    // cheap; we'd revisit only past five-digit per-brokerage counts.
+    // Sort the filtered set. Defaults: Age column, desc (newest first).
+    // We sort in Rust rather than pushing ORDER BY into the SurrealDB
+    // query because the `attention` filter is computed per-row in Rust
+    // — by the time we'd hit the DB we'd lose the filter alignment.
+    let sort_key = filters
+        .sort
+        .as_deref()
+        .and_then(SortKey::parse)
+        .unwrap_or(SortKey::Age);
+    let sort_dir = filters
+        .dir
+        .as_deref()
+        .and_then(SortDir::parse)
+        .unwrap_or_else(|| sort_key.default_dir());
+    sort_transactions(&mut transactions, sort_key, sort_dir);
+
+    // Pagination over the filtered + sorted slice. We don't push
+    // pagination into the DB query because the `attention` filter
+    // requires N small round-trips per transaction anyway — there's no
+    // win from a SQL LIMIT/OFFSET. With per-brokerage volumes in the
+    // hundreds this is cheap; we'd revisit only past five-digit
+    // per-brokerage counts.
     let page = filters.page.unwrap_or(1).max(1);
     let total_filtered = transactions.len();
     let start = (page - 1).saturating_mul(TX_LIST_PAGE_SIZE);
@@ -197,7 +291,14 @@ pub async fn list(
     };
     let has_next_page = end < total_filtered;
     let next_url = if has_next_page {
-        build_list_url(&status_filter, &query, attention_on, Some(page + 1), true)
+        build_list_url(
+            &status_filter,
+            &query,
+            attention_on,
+            Some(page + 1),
+            true,
+            Some((sort_key, sort_dir)),
+        )
     } else {
         String::new()
     };
@@ -211,6 +312,12 @@ pub async fn list(
             next_url,
         });
     }
+
+    // Pre-render the header strip so the template doesn't have to
+    // think about URL composition — each link already encodes the
+    // right next sort direction (toggle if active, default if not)
+    // and carries all existing filters forward.
+    let sort_headers = build_sort_headers(&status_filter, &query, attention_on, sort_key, sort_dir);
 
     let header = AppHeader::new(
         &user.name,
@@ -239,7 +346,95 @@ pub async fn list(
         needs_attention,
         complete_count,
         active_filter,
+        sort_headers,
     })
+}
+
+/// Sort an already-filtered slice. Uses `sort_by` (stable) with a
+/// comparator that swaps direction at the top so each column's
+/// comparator stays read-as-asc.
+fn sort_transactions(rows: &mut [Transaction], key: SortKey, dir: SortDir) {
+    use std::cmp::Ordering;
+    rows.sort_by(|a, b| {
+        let ord = match key {
+            SortKey::Age => a.created_at.cmp(&b.created_at),
+            SortKey::Property => a
+                .property_address
+                .to_ascii_lowercase()
+                .cmp(&b.property_address.to_ascii_lowercase()),
+            SortKey::Price => a.price_cents.cmp(&b.price_cents),
+            SortKey::Type => a.transaction_type.cmp(&b.transaction_type),
+            SortKey::Status => a.status.cmp(&b.status),
+        };
+        if ord == Ordering::Equal {
+            // Tiebreak on created_at desc so identical rows still land
+            // in a deterministic newest-first order.
+            return b.created_at.cmp(&a.created_at);
+        }
+        match dir {
+            SortDir::Asc => ord,
+            SortDir::Desc => ord.reverse(),
+        }
+    });
+}
+
+/// One clickable header — label, the URL the click should navigate to,
+/// and whether this is the currently-active column (so the template
+/// can show the right arrow).
+#[derive(Debug, Clone)]
+pub struct SortHeader {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub url: String,
+    pub active: bool,
+    /// Arrow glyph: `▲` when active+asc, `▼` when active+desc, empty
+    /// otherwise (the template renders a faint hint glyph for inactive
+    /// columns so they read as sortable).
+    pub arrow: &'static str,
+}
+
+fn build_sort_headers(
+    status: &str,
+    query: &str,
+    attention: bool,
+    current_key: SortKey,
+    current_dir: SortDir,
+) -> Vec<SortHeader> {
+    [
+        (SortKey::Property, "Property"),
+        (SortKey::Price, "Price"),
+        (SortKey::Type, "Type"),
+        (SortKey::Age, "Age"),
+        (SortKey::Status, "Status"),
+    ]
+    .iter()
+    .map(|&(key, label)| {
+        let active = key == current_key;
+        // Clicking the active column flips the direction; clicking an
+        // inactive column starts from its natural default.
+        let next_dir = if active {
+            current_dir.flip()
+        } else {
+            key.default_dir()
+        };
+        let url = build_list_url(status, query, attention, None, false, Some((key, next_dir)));
+        let arrow = if active {
+            match current_dir {
+                SortDir::Asc => "▲",
+                SortDir::Desc => "▼",
+            }
+        } else {
+            ""
+        };
+        SortHeader {
+            key: key.as_str(),
+            label,
+            url,
+            active,
+            arrow,
+        }
+    })
+    .collect()
 }
 
 /// Map the request's filter combination to the stat-card the list page
@@ -268,15 +463,17 @@ fn is_truthy(v: &Option<String>) -> bool {
     )
 }
 
-/// Build the canonical list URL for a given (filter, page) tuple. Used
-/// to compose the "next page" link for the infinite-scroll sentinel so
-/// every filter stays applied as the user scrolls deeper.
+/// Build the canonical list URL for a given (filter, page, sort) tuple.
+/// Used to compose the "next page" link for the infinite-scroll sentinel
+/// and each clickable sortable-column header — every filter / sort
+/// stays applied as the user navigates.
 fn build_list_url(
     status: &str,
     query: &str,
     attention: bool,
     page: Option<usize>,
     fragment: bool,
+    sort: Option<(SortKey, SortDir)>,
 ) -> String {
     let mut params: Vec<(&str, String)> = Vec::new();
     if !status.is_empty() && status != "all" {
@@ -293,6 +490,10 @@ fn build_list_url(
     }
     if fragment {
         params.push(("fragment", "rows".to_string()));
+    }
+    if let Some((k, d)) = sort {
+        params.push(("sort", k.as_str().to_string()));
+        params.push(("dir", d.as_str().to_string()));
     }
     if params.is_empty() {
         return "/app/transactions".to_string();
@@ -964,6 +1165,24 @@ pub(crate) async fn load_brokerage(
     brokerage.ok_or(AppError::NotFound)
 }
 
+/// Load every transaction the current user is allowed to see.
+///
+/// Visibility rule (single source of truth for the whole app):
+///
+/// - **Broker** and **Compliance Officer**: see every transaction in
+///   their brokerage. Graph traversal: `brokerage → has_transaction →
+///   transaction`. The brokerage is established from the JWT's
+///   `works_at` edge by [`crate::auth::middleware`], so a user with no
+///   active membership gets no rows back.
+/// - **Agent**: sees only transactions they own. Graph traversal:
+///   `user → owns → transaction`. Brokers/COs can create transactions
+///   on behalf of an agent — the `owns` edge points at the agent.
+///
+/// The role gate lives on [`Role::sees_all_transactions`]; keep both
+/// in sync if a new role is introduced.
+///
+/// Order is `created_at DESC` here (newest first); callers that need a
+/// different sort do their own in-Rust sort after the fetch.
 pub(crate) async fn load_visible_transactions(
     state: &AppState,
     user: &CurrentUser,

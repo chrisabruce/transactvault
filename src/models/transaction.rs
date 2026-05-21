@@ -337,6 +337,15 @@ impl Transaction {
         record_key(&self.id)
     }
 
+    /// Human-friendly age string for list views — "3 days ago", "an hour
+    /// ago", "just now", etc. Powered by the `chrono-humanize` crate so
+    /// pluralisation + threshold handling stay consistent.
+    pub fn age_label(&self) -> String {
+        use chrono_humanize::{Accuracy, HumanTime, Tense};
+        let delta = self.created_at - chrono::Utc::now();
+        HumanTime::from(delta).to_text_en(Accuracy::Rough, Tense::Past)
+    }
+
     /// CSS hook for status colouring.
     pub fn status_class(&self) -> &'static str {
         match self.status_enum() {

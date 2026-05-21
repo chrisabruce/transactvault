@@ -207,6 +207,16 @@ DEFINE FIELD OVERWRITE updated_at              ON transaction TYPE datetime DEFA
 DEFINE TABLE OVERWRITE owns            SCHEMAFULL TYPE RELATION FROM user      TO transaction;
 DEFINE TABLE OVERWRITE has_transaction SCHEMAFULL TYPE RELATION FROM brokerage TO transaction;
 
+-- Sort/filter indexes. The transactions list is the hottest read path
+-- in the app (every signed-in agent lands here several times a day)
+-- and supports sorting by any column. Without these indexes the
+-- planner has to scan + sort the whole transaction set per request.
+DEFINE INDEX OVERWRITE idx_transaction_created_at        ON transaction FIELDS created_at;
+DEFINE INDEX OVERWRITE idx_transaction_status            ON transaction FIELDS status;
+DEFINE INDEX OVERWRITE idx_transaction_property_address  ON transaction FIELDS property_address;
+DEFINE INDEX OVERWRITE idx_transaction_price_cents       ON transaction FIELDS price_cents;
+DEFINE INDEX OVERWRITE idx_transaction_transaction_type  ON transaction FIELDS transaction_type;
+
 -- ----------------------------------------------------------------------------
 -- Checklist item (grouped + form-aware)
 -- ----------------------------------------------------------------------------

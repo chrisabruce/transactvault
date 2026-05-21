@@ -304,6 +304,9 @@ pub struct TransactionsListPage<'a> {
     /// `attention_on`. One of `""`, `"total"`, `"active"`,
     /// `"attention"`, `"sold"`.
     pub active_filter: &'a str,
+    /// Header strip — one entry per sortable column, with the URL to
+    /// click + arrow glyph for the active column.
+    pub sort_headers: Vec<crate::controllers::transactions::SortHeader>,
 }
 
 /// HTML fragment containing only the row markup for a given page. The

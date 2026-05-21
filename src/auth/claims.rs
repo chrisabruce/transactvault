@@ -32,7 +32,19 @@ pub enum Role {
 }
 
 impl Role {
-    /// Can this role see every transaction in the brokerage, or only their own?
+    /// Can this role see every transaction in the brokerage, or only
+    /// their own?
+    ///
+    /// - **True** for `Broker` and `Coordinator` (a.k.a. "Compliance
+    ///   Officer" — that's just the display label; the underlying slug
+    ///   + enum variant stayed `coordinator` to avoid a data migration).
+    /// - **False** for `Agent` — they only see transactions where they
+    ///   hold an `owns` edge.
+    ///
+    /// This is the single role gate consulted by
+    /// [`crate::controllers::transactions::load_visible_transactions`]
+    /// and the dashboard counters. Adding a new role means revisiting
+    /// this method *and* the matching SurrealQL branches.
     pub fn sees_all_transactions(self) -> bool {
         matches!(self, Role::Broker | Role::Coordinator)
     }

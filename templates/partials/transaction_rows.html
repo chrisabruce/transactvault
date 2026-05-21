@@ -1,21 +1,18 @@
 {% for tx in transactions %}
     <li class="transaction-row">
-        <section>
-            <p class="property"><a href="/app/transactions/{{ tx.url_key() }}">{{ tx.property_address }}</a></p>
+        <section class="tx-cell tx-cell-property">
+            <a class="property" href="/app/transactions/{{ tx.url_key() }}">{{ tx.property_address }}</a>
             <p class="meta">{{ tx.city }}{% if tx.city != "" %} · {% endif %}CA</p>
         </section>
-        <section>
-            <p class="meta">Price</p>
-            <p>{{ tx.price_display() }}</p>
+        <section class="tx-cell tx-cell-price">{{ tx.price_display() }}</section>
+        <section class="tx-cell tx-cell-type">{{ tx.type_label() }}</section>
+        <section class="tx-cell tx-cell-age">
+            <time datetime="{{ tx.created_at }}" title="{{ tx.created_at.format("%b %-d, %Y") }}">{{ tx.age_label() }}</time>
         </section>
-        <section>
-            <p class="meta">Type</p>
-            <p>{{ tx.type_label() }}</p>
-        </section>
-        <section>
+        <section class="tx-cell tx-cell-status">
             <span class="chip {{ tx.status_class() }}">{{ tx.status_label() }}</span>
         </section>
-        <a class="btn small secondary" href="/app/transactions/{{ tx.url_key() }}">Open</a>
+        <a class="btn small secondary tx-cell-action" href="/app/transactions/{{ tx.url_key() }}">Open</a>
     </li>
 {% endfor %}
 {% if has_next_page %}
