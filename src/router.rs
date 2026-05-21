@@ -34,7 +34,11 @@ pub fn build(state: AppState) -> Router {
         );
 
     let app = Router::new()
-        .route("/app", get(transactions::dashboard))
+        // `/app` and `/app/transactions` render the same view (the
+        // transactions list with stats + sortable headers). The list
+        // handler detects which URL it was reached at and sets the
+        // nav highlight accordingly.
+        .route("/app", get(transactions::list))
         .route("/app/search", get(transactions::search))
         .route(
             "/app/transactions",

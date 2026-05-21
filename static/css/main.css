@@ -1009,15 +1009,22 @@ form .form-row { display: grid; gap: var(--sp-3); grid-template-columns: 1fr 1fr
 }
 .tx-toolbar-icon {
     position: absolute;
-    left: 0.7rem;
-    width: 1.05rem;
-    height: 1.05rem;
+    left: 0.85rem;
+    /* Fix the rendered size in BOTH dimensions so SVG can't grow to
+       fill the flex parent on pages where the toolbar gets more
+       horizontal room (e.g. dashboard vs list view). `flex-shrink: 0`
+       belt-and-braces in case the icon is ever moved out of absolute. */
+    width: 1rem;
+    height: 1rem;
+    flex-shrink: 0;
     color: var(--color-muted);
     pointer-events: none;
 }
 .tx-toolbar-search input[type="search"] {
     width: 100%;
-    padding: 0.55rem 0.75rem 0.55rem 2.2rem;
+    /* Left padding 2.6rem = 0.85rem (icon left) + 1rem (icon width) +
+       0.75rem (gap) — guaranteed to clear the icon on every page. */
+    padding: 0.55rem 0.75rem 0.55rem 2.6rem;
     border: 0;
     background: transparent;
     font-size: var(--fs-sm);

@@ -250,34 +250,8 @@ pub fn initials(name: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// App: dashboard + transactions
+// App: transactions
 // ---------------------------------------------------------------------------
-
-#[derive(Template)]
-#[template(path = "pages/dashboard.html")]
-pub struct DashboardPage<'a> {
-    pub app_name: &'a str,
-    pub base_url: &'a str,
-    pub signed_in: bool,
-    pub header: AppHeader<'a>,
-    pub total: usize,
-    pub open_count: usize,
-    pub needs_attention: usize,
-    pub complete_count: usize,
-    pub recent: Vec<Transaction>,
-    /// Which stat-card filter is currently applied — used by the shared
-    /// stat-grid partial to highlight the active card. Always empty
-    /// on the dashboard (nothing's filtered there); the list page
-    /// derives it from `status`/`attention`.
-    pub active_filter: &'a str,
-    /// Defaulted filter state needed by the shared
-    /// `partials/tx_toolbar.html` partial. Always empty/false on the
-    /// dashboard — the toolbar simply forwards whatever the user
-    /// types into `/app/transactions`.
-    pub query: &'a str,
-    pub filter_status: &'a str,
-    pub attention_on: bool,
-}
 
 #[derive(Template)]
 #[template(path = "pages/transactions_list.html")]

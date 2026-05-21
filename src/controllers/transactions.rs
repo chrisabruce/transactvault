@@ -21,8 +21,8 @@ use crate::models::{
 };
 use crate::state::AppState;
 use crate::templates::{
-    AppHeader, ChecklistGroup, ChecklistRow, CommentView, CompliancePanel, DashboardPage,
-    SearchDocument, SearchPage, TransactionEditPage, TransactionNewPage, TransactionRowsFragment,
+    AppHeader, ChecklistGroup, ChecklistRow, CommentView, CompliancePanel, SearchDocument,
+    SearchPage, TransactionEditPage, TransactionNewPage, TransactionRowsFragment,
     TransactionShowPage, TransactionsListPage,
 };
 
@@ -34,58 +34,6 @@ const TX_LIST_PAGE_SIZE: usize = 30;
 // ---------------------------------------------------------------------------
 // Dashboard
 // ---------------------------------------------------------------------------
-
-pub async fn dashboard(
-    State(state): State<AppState>,
-    user: CurrentUser,
-) -> Result<Html<String>, AppError> {
-    let brokerage = load_brokerage(&state, &user).await?;
-    let transactions = load_visible_transactions(&state, &user).await?;
-
-    let total = transactions.len();
-    let open_count = transactions
-        .iter()
-        .filter(|t| {
-            matches!(
-                t.status_enum(),
-                TransactionStatus::Active | TransactionStatus::Pending
-            )
-        })
-        .count();
-    let complete_count = transactions
-        .iter()
-        .filter(|t| matches!(t.status_enum(), TransactionStatus::Sold))
-        .count();
-
-    let needs_attention = count_needs_attention(&state, &transactions).await?;
-
-    let recent: Vec<Transaction> = transactions.iter().take(6).cloned().collect();
-
-    let header = AppHeader::new(
-        &user.name,
-        &user.email,
-        user.role,
-        &brokerage.name,
-        "dashboard",
-    )
-    .with_super_admin(crate::controllers::is_super_admin(&state, &user))
-    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar);
-    render(&DashboardPage {
-        app_name: &state.config.app_name,
-        base_url: &state.config.base_url,
-        signed_in: true,
-        header,
-        total,
-        open_count,
-        needs_attention,
-        complete_count,
-        recent,
-        active_filter: "",
-        query: "",
-        filter_status: "",
-        attention_on: false,
-    })
-}
 
 /// Compute the four stat-grid totals over the un-filtered transaction
 /// set. Returned in the (total, open_count, needs_attention,
@@ -217,6 +165,7 @@ impl SortDir {
 pub async fn list(
     State(state): State<AppState>,
     user: CurrentUser,
+    uri: axum::http::Uri,
     Query(filters): Query<ListFilters>,
 ) -> Result<Html<String>, AppError> {
     let brokerage = load_brokerage(&state, &user).await?;
@@ -231,7 +180,20 @@ pub async fn list(
 
     let status_filter = filters.status.clone().unwrap_or_default();
     if !status_filter.is_empty() && status_filter != "all" {
-        transactions.retain(|t| t.status == status_filter);
+        // "open" is a virtual status meaning Active OR Pending — the
+        // dashboard's Active stat card links here so brokers see every
+        // deal still in flight, not just the ones in the narrow
+        // `active` state.
+        if status_filter == "open" {
+            transactions.retain(|t| {
+                matches!(
+                    t.status_enum(),
+                    TransactionStatus::Active | TransactionStatus::Pending
+                )
+            });
+        } else {
+            transactions.retain(|t| t.status == status_filter);
+        }
     }
 
     let query = filters.q.clone().unwrap_or_default();
@@ -322,12 +284,22 @@ pub async fn list(
     // and carries all existing filters forward.
     let sort_headers = build_sort_headers(&status_filter, &query, attention_on, sort_key, sort_dir);
 
+    // This handler is mounted at BOTH `/app` (dashboard home) and
+    // `/app/transactions` — same view, different URL. Pick the nav
+    // highlight from the request path so each entry point feels
+    // current when the user lands on it.
+    let active_nav = if uri.path() == "/app" {
+        "dashboard"
+    } else {
+        "transactions"
+    };
+
     let header = AppHeader::new(
         &user.name,
         &user.email,
         user.role,
         &brokerage.name,
-        "transactions",
+        active_nav,
     )
     .with_super_admin(crate::controllers::is_super_admin(&state, &user))
     .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar);
@@ -443,13 +415,16 @@ fn build_sort_headers(
 /// Map the request's filter combination to the stat-card the list page
 /// should mark "active". An empty status + attention-off means the user
 /// is looking at the unfiltered list, so we highlight Total.
+///
+/// `"open"` (active OR pending — the Active card's actual semantics) and
+/// the literal `"active"` status both highlight the Active card.
 fn derive_active_filter(status: &str, attention_on: bool) -> &'static str {
     if attention_on {
         "attention"
     } else {
         match status {
             "" | "all" => "total",
-            "active" => "active",
+            "active" | "open" => "active",
             "sold" => "sold",
             _ => "",
         }

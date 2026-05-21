@@ -10,7 +10,7 @@
         <p class="value">{{ total }}</p>
     </a>
     <a class="stat-card{% if active_filter == "active" %} is-active{% endif %}"
-       href="/app/transactions?status=active"
+       href="/app/transactions?status=open"
        aria-current="{% if active_filter == "active" %}page{% else %}false{% endif %}">
         <p class="label">Active</p>
         <p class="value">{{ open_count }}</p>
