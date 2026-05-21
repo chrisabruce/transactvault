@@ -1042,7 +1042,7 @@ form .form-row { display: grid; gap: var(--sp-3); grid-template-columns: 1fr 1fr
 .chip::before { content: ""; width: 0.5rem; height: 0.5rem; border-radius: 50%; background: currentColor; opacity: .8; }
 .chip.status-active    { background: var(--color-brand-soft); color: var(--color-brand-ink); }
 .chip.status-pending   { background: var(--color-warn-soft); color: var(--color-warn); }
-.chip.status-sold      { background: var(--color-success-soft); color: var(--color-success-ink); }
+.chip.status-sold      { background: #dbeafe; color: #1e40af; }
 .chip.status-canceled  { background: var(--color-danger-soft); color: var(--color-danger); }
 .chip.status-withdrawn { background: var(--color-line-soft); color: var(--color-muted); }
 .chip.role-broker      { background: var(--color-brand-soft); color: var(--color-brand-ink); }
