@@ -1243,13 +1243,18 @@ async fn load_transaction_owner_name(
 }
 
 /// True/false per transaction (aligned with the input slice): is the
-/// transaction in an open status AND does it have at least one required
-/// checklist item that isn't yet approved? Drives both the dashboard
+/// transaction in an open status AND has at least one checklist item
+/// been denied by a Compliance Officer? Drives both the dashboard
 /// "Needs attention" counter and the `?attention=1` list filter.
 ///
+/// "Needs attention" is intentionally the *narrow* predicate — pending
+/// items are the normal in-flight state and shouldn't surface here.
+/// Only an explicit denial (someone flipped the row to `denied`) means
+/// the agent must take action: replace the document, then ask for
+/// re-review.
+///
 /// Closed transactions (Sold/Canceled/Withdrawn) always return `false`
-/// here — finished work doesn't "need attention" even if some optional
-/// row never got an approval signal.
+/// — historical denials on a finished deal aren't actionable.
 async fn needs_attention_flags(
     state: &AppState,
     transactions: &[Transaction],
@@ -1265,12 +1270,12 @@ async fn needs_attention_flags(
             .db
             .query(
                 "SELECT count() FROM $t->has_item->checklist_item \
-                 WHERE required = true AND approval_status != 'approved' GROUP ALL",
+                 WHERE approval_status = 'denied' GROUP ALL",
             )
             .bind(("t", t.id.clone()))
             .await?;
-        let incomplete: Option<CountRow> = r.take(0)?;
-        Ok::<bool, AppError>(incomplete.map(|c| c.count > 0).unwrap_or(false))
+        let denied: Option<CountRow> = r.take(0)?;
+        Ok::<bool, AppError>(denied.map(|c| c.count > 0).unwrap_or(false))
     });
     let results = futures::future::try_join_all(futures).await?;
     Ok(results)
