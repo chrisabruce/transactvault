@@ -25,7 +25,8 @@ pub async fn list(
     let pending = load_pending_invitations(&state, &user).await?;
 
     let header = AppHeader::new(&user.name, &user.email, user.role, &brokerage.name, "team")
-        .with_super_admin(crate::controllers::is_super_admin(&state, &user));
+        .with_super_admin(crate::controllers::is_super_admin(&state, &user))
+    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar);
     render(&TeamPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
@@ -55,7 +56,8 @@ pub async fn invite(
 
     let brokerage = load_brokerage(&state, &user).await?;
     let header = AppHeader::new(&user.name, &user.email, user.role, &brokerage.name, "team")
-        .with_super_admin(crate::controllers::is_super_admin(&state, &user));
+        .with_super_admin(crate::controllers::is_super_admin(&state, &user))
+    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar);
 
     let email = input.email.trim().to_ascii_lowercase();
     let role = match input.role.as_str() {
@@ -121,7 +123,8 @@ async fn load_members(state: &AppState, user: &CurrentUser) -> Result<Vec<Member
     let mut response = state
         .db
         .query(
-            "SELECT in AS user_id, in.name AS name, in.email AS email, role
+            "SELECT in AS user_id, in.name AS name, in.email AS email,
+                    in.avatar_storage_key AS avatar_storage_key, role
              FROM works_at WHERE out = $b",
         )
         .bind(("b", user.brokerage_id.clone()))
@@ -132,6 +135,7 @@ async fn load_members(state: &AppState, user: &CurrentUser) -> Result<Vec<Member
         user_id: RecordId,
         name: String,
         email: String,
+        avatar_storage_key: Option<String>,
         role: String,
     }
     let rows: Vec<Row> = response.take(0)?;
@@ -142,7 +146,8 @@ async fn load_members(state: &AppState, user: &CurrentUser) -> Result<Vec<Member
             Role::parse(&r.role).map(|role| {
                 let is_self = r.user_id == user.user_id;
                 let key = crate::db::record_key(&r.user_id);
-                Member::new(key, r.name, r.email, role, is_self)
+                let has_avatar = r.avatar_storage_key.is_some();
+                Member::new(key, r.name, r.email, role, is_self, has_avatar)
             })
         })
         .collect();

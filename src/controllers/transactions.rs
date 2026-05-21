@@ -68,7 +68,8 @@ pub async fn dashboard(
         &brokerage.name,
         "dashboard",
     )
-    .with_super_admin(crate::controllers::is_super_admin(&state, &user));
+    .with_super_admin(crate::controllers::is_super_admin(&state, &user))
+    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar);
     render(&DashboardPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
@@ -218,7 +219,8 @@ pub async fn list(
         &brokerage.name,
         "transactions",
     )
-    .with_super_admin(crate::controllers::is_super_admin(&state, &user));
+    .with_super_admin(crate::controllers::is_super_admin(&state, &user))
+    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar);
     let active_filter = derive_active_filter(&status_filter, attention_on);
 
     render(&TransactionsListPage {
@@ -318,7 +320,8 @@ pub async fn new_form(
         &brokerage.name,
         "transactions",
     )
-    .with_super_admin(crate::controllers::is_super_admin(&state, &user));
+    .with_super_admin(crate::controllers::is_super_admin(&state, &user))
+    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar);
     render(&TransactionNewPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
@@ -467,7 +470,8 @@ pub async fn show(
         &brokerage.name,
         "transactions",
     )
-    .with_super_admin(crate::controllers::is_super_admin(&state, &user));
+    .with_super_admin(crate::controllers::is_super_admin(&state, &user))
+    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar);
     let tx_key = crate::db::record_key(&tx.id);
     let can_review = user.role.can_review();
     render(&TransactionShowPage {
@@ -549,7 +553,8 @@ pub async fn edit_form(
         &brokerage.name,
         "transactions",
     )
-    .with_super_admin(crate::controllers::is_super_admin(&state, &user));
+    .with_super_admin(crate::controllers::is_super_admin(&state, &user))
+    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar);
     let tx_key = crate::db::record_key(&tx.id);
     render(&TransactionEditPage {
         app_name: &state.config.app_name,
@@ -934,7 +939,8 @@ pub async fn search(
         &brokerage.name,
         "search",
     )
-    .with_super_admin(crate::controllers::is_super_admin(&state, &user));
+    .with_super_admin(crate::controllers::is_super_admin(&state, &user))
+    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar);
     render(&SearchPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
@@ -1139,7 +1145,10 @@ pub async fn load_comments(
     let mut response = state
         .db
         .query(
-            "SELECT body, created_at, author.name AS author_name, \
+            "SELECT body, created_at, \
+                    author.id AS author_id, \
+                    author.name AS author_name, \
+                    author.avatar_storage_key AS author_avatar_key, \
                     references_document.id AS ref_id, \
                     references_document.filename AS ref_filename, \
                     references_document.version AS ref_version \
@@ -1150,7 +1159,9 @@ pub async fn load_comments(
     #[derive(Debug, serde::Deserialize, SurrealValue)]
     struct Row {
         body: String,
+        author_id: Option<RecordId>,
         author_name: Option<String>,
+        author_avatar_key: Option<String>,
         created_at: chrono::DateTime<chrono::Utc>,
         ref_id: Option<RecordId>,
         ref_filename: Option<String>,
@@ -1170,9 +1181,19 @@ pub async fn load_comments(
                 }
                 _ => None,
             };
+            let author_name = r.author_name.unwrap_or_else(|| "Someone".into());
+            let author_initials = crate::templates::initials(&author_name);
+            let author_key = r
+                .author_id
+                .as_ref()
+                .map(crate::db::record_key)
+                .unwrap_or_default();
             CommentView {
                 body: r.body,
-                author_name: r.author_name.unwrap_or_else(|| "Someone".into()),
+                author_initials,
+                author_name,
+                author_key,
+                author_has_avatar: r.author_avatar_key.is_some(),
                 created_at: r.created_at,
                 referenced_document,
             }

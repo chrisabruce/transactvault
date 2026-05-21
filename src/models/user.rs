@@ -12,7 +12,10 @@ pub struct User {
     pub email: String,
     pub name: String,
     pub password_hash: String,
-    pub photo_url: Option<String>,
+    /// Object-storage key for the user's cropped avatar PNG. Served at
+    /// `/app/users/{key}/avatar` for any signed-in viewer in the same
+    /// brokerage. `None` means "show initials".
+    pub avatar_storage_key: Option<String>,
 
     /// Email verification gate — accounts start unverified and can't sign in
     /// until they click the verify link sent at signup.
@@ -38,7 +41,7 @@ pub struct UserProfile {
     pub id: RecordId,
     pub email: String,
     pub name: String,
-    pub photo_url: Option<String>,
+    pub avatar_storage_key: Option<String>,
 }
 
 impl From<User> for UserProfile {
@@ -47,7 +50,7 @@ impl From<User> for UserProfile {
             id: u.id,
             email: u.email,
             name: u.name,
-            photo_url: u.photo_url,
+            avatar_storage_key: u.avatar_storage_key,
         }
     }
 }

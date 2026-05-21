@@ -14,7 +14,7 @@ use tower_http::trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse, Tr
 use tracing::Level;
 
 use crate::controllers::{
-    admin, auth, checklists, comments, documents, health, marketing, members, transactions,
+    admin, auth, checklists, comments, documents, health, marketing, members, profile, transactions,
 };
 use crate::state::AppState;
 
@@ -76,7 +76,15 @@ pub fn build(state: AppState) -> Router {
             "/app/team/invite/{token}/cancel",
             post(members::cancel_invite),
         )
-        .route("/app/team/{user_id}/role", post(members::change_role));
+        .route("/app/team/{user_id}/role", post(members::change_role))
+        .route(
+            "/app/profile",
+            get(profile::show).post(profile::update),
+        )
+        .route("/app/profile/password", post(profile::change_password))
+        .route("/app/profile/avatar", post(profile::upload_avatar))
+        .route("/app/profile/avatar/delete", post(profile::delete_avatar))
+        .route("/app/users/{key}/avatar", get(profile::serve_avatar));
 
     let admin_routes = Router::new()
         .route("/admin", get(admin::users))

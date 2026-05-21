@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+
+{% block title %}Profile — {{ app_name }}{% endblock %}
+{% block body_class %}page-app{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cropperjs@2/dist/cropper.css">
+{% endblock %}
+
+{% block body %}
+{% include "components/app_header.html" %}
+
+<main class="app-main">
+    <header class="page-title">
+        <section>
+            <h1>Your profile</h1>
+            <p class="subtitle">Update your name, password, and profile photo.</p>
+        </section>
+    </header>
+
+    <section class="profile-grid">
+        <article class="panel">
+            <h2>Profile photo</h2>
+            <section class="avatar-stack">
+                {% if has_avatar %}
+                    <img id="avatar-current"
+                         class="avatar-preview"
+                         src="/app/users/{{ user_key }}/avatar"
+                         alt="Your current avatar">
+                {% else %}
+                    <div id="avatar-current" class="avatar-preview avatar-fallback">
+                        <span>{{ header.user_initials }}</span>
+                    </div>
+                {% endif %}
+                <form id="avatar-form"
+                      method="post"
+                      action="/app/profile/avatar"
+                      enctype="multipart/form-data"
+                      class="avatar-form">
+                    <label class="btn small secondary">
+                        Choose photo
+                        <input id="avatar-picker" type="file" accept="image/*" hidden>
+                    </label>
+                    <button id="avatar-save" type="submit" class="btn small" disabled>Save photo</button>
+                </form>
+                {% if has_avatar %}
+                    <form method="post"
+                          action="/app/profile/avatar/delete"
+                          onsubmit="return confirm('Remove your profile photo?');"
+                          class="avatar-remove">
+                        <button type="submit" class="btn small ghost danger">Remove photo</button>
+                    </form>
+                {% endif %}
+            </section>
+            <dialog id="avatar-cropper-dialog" class="lightbox">
+                <header class="lightbox-head">
+                    <p class="lightbox-title">Crop your photo</p>
+                    <button type="button" id="avatar-crop-cancel" class="btn ghost small">Cancel</button>
+                    <button type="button" id="avatar-crop-apply" class="btn small">Use this crop</button>
+                </header>
+                <section class="lightbox-body">
+                    <img id="avatar-cropper-image" alt="" style="max-width: 100%;">
+                </section>
+            </dialog>
+        </article>
+
+        <article class="panel">
+            <h2>Account</h2>
+            {% match profile_error %}{% when Some with (msg) %}
+                <p class="alert error" role="alert">{{ msg }}</p>
+            {% when None %}{% endmatch %}
+            <form method="post" action="/app/profile" class="stacked-form">
+                <label>
+                    <span>Full name</span>
+                    <input type="text" name="name" value="{{ name }}" required maxlength="200">
+                </label>
+                <label>
+                    <span>Email</span>
+                    <input type="email" value="{{ email }}" disabled>
+                    <small class="meta">Contact support to change your email address.</small>
+                </label>
+                <button type="submit" class="btn">Save changes</button>
+            </form>
+        </article>
+
+        <article class="panel">
+            <h2>Password</h2>
+            {% match password_error %}{% when Some with (msg) %}
+                <p class="alert error" role="alert">{{ msg }}</p>
+            {% when None %}{% endmatch %}
+            <form method="post" action="/app/profile/password" class="stacked-form">
+                <label>
+                    <span>Current password</span>
+                    <input type="password" name="current_password" required autocomplete="current-password">
+                </label>
+                <label>
+                    <span>New password</span>
+                    <input type="password" name="new_password" required autocomplete="new-password" minlength="8">
+                </label>
+                <label>
+                    <span>Confirm new password</span>
+                    <input type="password" name="confirm_password" required autocomplete="new-password" minlength="8">
+                </label>
+                <button type="submit" class="btn">Change password</button>
+            </form>
+        </article>
+    </section>
+</main>
+
+<script type="module" src="https://cdn.jsdelivr.net/npm/cropperjs@2"></script>
+<script src="/static/js/avatar-cropper.js" defer></script>
+{% endblock %}

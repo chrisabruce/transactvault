@@ -91,7 +91,8 @@ pub async fn users(
     let brokerage_name = lookup_brokerage_name(&state, &user).await;
 
     let header = AppHeader::new(&user.name, &user.email, user.role, &brokerage_name, "admin")
-        .with_super_admin(true);
+        .with_super_admin(true)
+        .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar);
     render(&AdminUsersPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
@@ -164,7 +165,8 @@ pub async fn audit_log(
     let brokerage_name = lookup_brokerage_name(&state, &user).await;
 
     let header = AppHeader::new(&user.name, &user.email, user.role, &brokerage_name, "admin")
-        .with_super_admin(true);
+        .with_super_admin(true)
+        .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar);
     render(&AdminAuditPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
@@ -197,6 +199,9 @@ const AUDIT_KIND_OPTIONS: &[&str] = &[
     "invite_accepted",
     "admin_view",
     "document_deleted",
+    "profile_updated",
+    "password_changed",
+    "avatar_updated",
 ];
 
 async fn lookup_brokerage_name(state: &AppState, user: &crate::auth::CurrentUser) -> String {

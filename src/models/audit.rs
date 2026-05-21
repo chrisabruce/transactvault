@@ -48,6 +48,9 @@ impl AuditEvent {
             "invite_accepted" => "Invite accepted",
             "admin_view" => "Admin view",
             "document_deleted" => "Document deleted",
+            "profile_updated" => "Profile updated",
+            "password_changed" => "Password changed",
+            "avatar_updated" => "Avatar updated",
             _ => "Event",
         }
     }

@@ -86,4 +86,8 @@ pub struct CurrentUser {
     pub email: String,
     pub name: String,
     pub role: Role,
+    /// True if the user has uploaded an avatar. Lets templates decide
+    /// between an `<img>` (pointing at the avatar endpoint) and the
+    /// initials fallback without an extra DB call.
+    pub has_avatar: bool,
 }

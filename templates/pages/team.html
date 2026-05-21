@@ -46,7 +46,11 @@
         <ul class="member-list" role="list">
             {% for member in members %}
                 <li class="member-card">
-                    <span class="avatar" aria-hidden="true">{{ member.initials }}</span>
+                    {% if member.has_avatar %}
+                        <img class="avatar" src="/app/users/{{ member.user_key }}/avatar" alt="">
+                    {% else %}
+                        <span class="avatar" aria-hidden="true">{{ member.initials }}</span>
+                    {% endif %}
                     <section>
                         <p class="name">{{ member.name }}{% if member.is_self %} <small class="meta">(you)</small>{% endif %}</p>
                         <p class="email">{{ member.email }}</p>

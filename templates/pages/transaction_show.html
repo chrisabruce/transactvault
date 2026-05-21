@@ -155,13 +155,20 @@
                                             <ul class="item-comments" role="list">
                                                 {% for c in row.comments %}
                                                     <li>
+                                                        <header class="comment-head">
+                                                            {% if c.author_has_avatar %}
+                                                                <img class="avatar small" src="/app/users/{{ c.author_key }}/avatar" alt="">
+                                                            {% else %}
+                                                                <span class="avatar small" aria-hidden="true">{{ c.author_initials }}</span>
+                                                            {% endif %}
+                                                            <small class="comment-meta">{{ c.author_name }} · {{ c.date_label() }}</small>
+                                                        </header>
                                                         <p class="comment-body">{{ c.body }}</p>
                                                         {% match c.referenced_document %}{% when Some with (doc_ref) %}
                                                             <p class="comment-ref">
                                                                 <a href="/app/documents/{{ doc_ref.key }}/download">↳ {{ doc_ref.filename }} (v{{ doc_ref.version }})</a>
                                                             </p>
                                                         {% when None %}{% endmatch %}
-                                                        <small class="comment-meta">{{ c.author_name }} · {{ c.date_label() }}</small>
                                                     </li>
                                                 {% endfor %}
                                             </ul>
@@ -224,13 +231,20 @@
                     <ul class="comment-thread" role="list">
                         {% for c in transaction_comments %}
                             <li>
+                                <header class="comment-head">
+                                    {% if c.author_has_avatar %}
+                                        <img class="avatar small" src="/app/users/{{ c.author_key }}/avatar" alt="">
+                                    {% else %}
+                                        <span class="avatar small" aria-hidden="true">{{ c.author_initials }}</span>
+                                    {% endif %}
+                                    <small class="comment-meta">{{ c.author_name }} · {{ c.date_label() }}</small>
+                                </header>
                                 <p class="comment-body">{{ c.body }}</p>
                                 {% match c.referenced_document %}{% when Some with (doc_ref) %}
                                     <p class="comment-ref">
                                         <a href="/app/documents/{{ doc_ref.key }}/download">↳ {{ doc_ref.filename }} (v{{ doc_ref.version }})</a>
                                     </p>
                                 {% when None %}{% endmatch %}
-                                <small class="comment-meta">{{ c.author_name }} · {{ c.date_label() }}</small>
                             </li>
                         {% endfor %}
                     </ul>

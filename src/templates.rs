@@ -194,6 +194,12 @@ pub struct AppHeader<'a> {
     pub brokerage_name: &'a str,
     pub active_nav: &'a str,
     pub is_super_admin: bool,
+    /// URL-safe key for the signed-in user, used to compose the avatar
+    /// URL `/app/users/{user_key}/avatar` for the header dropdown.
+    pub user_key: String,
+    /// Whether the user has uploaded an avatar — drives the
+    /// `<img>` vs initials choice in the header.
+    pub has_avatar: bool,
 }
 
 impl<'a> AppHeader<'a> {
@@ -212,6 +218,8 @@ impl<'a> AppHeader<'a> {
             brokerage_name,
             active_nav,
             is_super_admin: false,
+            user_key: String::new(),
+            has_avatar: false,
         }
     }
 
@@ -222,9 +230,18 @@ impl<'a> AppHeader<'a> {
         self.is_super_admin = yes;
         self
     }
+
+    /// Set the avatar-related fields from a [`CurrentUser`]. Every
+    /// authenticated page calls this so the header dropdown renders
+    /// the right thumbnail.
+    pub fn with_avatar(mut self, user_key: String, has_avatar: bool) -> Self {
+        self.user_key = user_key;
+        self.has_avatar = has_avatar;
+        self
+    }
 }
 
-fn initials(name: &str) -> String {
+pub fn initials(name: &str) -> String {
     name.split_whitespace()
         .take(2)
         .filter_map(|w| w.chars().next())
@@ -316,6 +333,21 @@ pub struct TransactionNewPage<'a> {
 }
 
 #[derive(Template)]
+#[template(path = "pages/profile.html")]
+pub struct ProfilePage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+    pub signed_in: bool,
+    pub header: AppHeader<'a>,
+    pub name: &'a str,
+    pub email: &'a str,
+    pub user_key: String,
+    pub has_avatar: bool,
+    pub profile_error: Option<&'a str>,
+    pub password_error: Option<&'a str>,
+}
+
+#[derive(Template)]
 #[template(path = "pages/transaction_edit.html")]
 pub struct TransactionEditPage<'a> {
     pub app_name: &'a str,
@@ -376,6 +408,12 @@ pub struct ChecklistRow {
 pub struct CommentView {
     pub body: String,
     pub author_name: String,
+    pub author_initials: String,
+    /// URL-safe key for the author, used by the template to render
+    /// their avatar via `/app/users/{key}/avatar`. Always present even
+    /// for the initials-fallback case so the template stays uniform.
+    pub author_key: String,
+    pub author_has_avatar: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub referenced_document: Option<ReferencedDocument>,
 }
@@ -521,10 +559,18 @@ pub struct Member {
     pub role: Role,
     pub initials: String,
     pub is_self: bool,
+    pub has_avatar: bool,
 }
 
 impl Member {
-    pub fn new(user_key: String, name: String, email: String, role: Role, is_self: bool) -> Self {
+    pub fn new(
+        user_key: String,
+        name: String,
+        email: String,
+        role: Role,
+        is_self: bool,
+        has_avatar: bool,
+    ) -> Self {
         let initials = initials(&name);
         Self {
             user_key,
@@ -533,6 +579,7 @@ impl Member {
             role,
             initials,
             is_self,
+            has_avatar,
         }
     }
 }

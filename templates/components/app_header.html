@@ -17,16 +17,53 @@
             {% endif %}
         </ul>
 
-        <section class="user-menu" aria-label="Account">
-            <section class="user-meta">
-                <p class="user-name">{{ header.user_name }}</p>
-                <p class="user-role">{{ header.role.label() }}</p>
-                <p class="user-brokerage">{{ header.brokerage_name }}</p>
+        <details class="user-menu" aria-label="Account menu">
+            <summary class="user-menu-trigger">
+                {% if header.has_avatar %}
+                    <img class="avatar" src="/app/users/{{ header.user_key }}/avatar" alt="">
+                {% else %}
+                    <span class="avatar" aria-hidden="true">{{ header.user_initials }}</span>
+                {% endif %}
+                <section class="user-meta">
+                    <p class="user-name">{{ header.user_name }}</p>
+                    <p class="user-role">{{ header.role.label() }}</p>
+                </section>
+                <span class="user-menu-caret" aria-hidden="true">▾</span>
+            </summary>
+            <section class="user-menu-panel" role="menu">
+                <section class="user-menu-header">
+                    <p class="user-name">{{ header.user_name }}</p>
+                    <p class="user-email">{{ header.user_email }}</p>
+                    <p class="user-brokerage">{{ header.brokerage_name }}</p>
+                </section>
+                <a class="user-menu-item" href="/app/profile" role="menuitem"
+                   {% if header.active_nav == "profile" %}aria-current="page"{% endif %}>
+                    Profile &amp; password
+                </a>
+                <form method="post" action="/logout" class="user-menu-form">
+                    <button type="submit" class="user-menu-item" role="menuitem">Sign out</button>
+                </form>
             </section>
-            <span class="avatar" aria-hidden="true">{{ header.user_initials }}</span>
-            <form method="post" action="/logout" class="signout-form">
-                <button type="submit" class="signout-link">Sign Out</button>
-            </form>
-        </section>
+        </details>
     </nav>
 </header>
+
+<script>
+// Close the account-menu <details> when the user clicks outside it.
+// Native <details> only toggles via the <summary> click — without this
+// the menu would stay open until they explicitly clicked the summary
+// again, which feels broken next to standard SaaS menus.
+(function () {
+    var menu = document.querySelector("details.user-menu");
+    if (!menu) return;
+    document.addEventListener("click", function (e) {
+        if (menu.open && !menu.contains(e.target)) {
+            menu.open = false;
+        }
+    });
+    // Close on ESC for keyboard parity.
+    document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape" && menu.open) menu.open = false;
+    });
+})();
+</script>

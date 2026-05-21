@@ -21,6 +21,7 @@ pub const SESSION_COOKIE: &str = "tv_session";
 struct UserProfile {
     email: String,
     name: String,
+    avatar_storage_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize, SurrealValue)]
@@ -52,7 +53,7 @@ impl FromRequestParts<AppState> for CurrentUser {
 
         let mut profile_q = state
             .db
-            .query("SELECT email, name FROM ONLY $u")
+            .query("SELECT email, name, avatar_storage_key FROM ONLY $u")
             .bind(("u", user_id.clone()))
             .await?;
         let profile: Option<UserProfile> = profile_q.take(0)?;
@@ -76,6 +77,7 @@ impl FromRequestParts<AppState> for CurrentUser {
             email: profile.email,
             name: profile.name,
             role,
+            has_avatar: profile.avatar_storage_key.is_some(),
         })
     }
 }

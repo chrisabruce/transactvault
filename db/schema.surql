@@ -132,7 +132,9 @@ DEFINE TABLE OVERWRITE user SCHEMAFULL;
 DEFINE FIELD OVERWRITE email         ON user TYPE string ASSERT string::is_email($value);
 DEFINE FIELD OVERWRITE name          ON user TYPE string ASSERT string::len($value) >= 1;
 DEFINE FIELD OVERWRITE password_hash ON user TYPE string;
-DEFINE FIELD OVERWRITE photo_url     ON user TYPE option<string>;
+-- Object-storage key for the user's avatar PNG. Served from
+-- /app/users/{key}/avatar; absent means "no avatar uploaded yet".
+DEFINE FIELD OVERWRITE avatar_storage_key ON user TYPE option<string>;
 
 -- Email verification — accounts start unverified; the welcome email is only
 -- sent AFTER the user clicks the verification link, proving they own the
@@ -290,7 +292,8 @@ DEFINE FIELD OVERWRITE kind ON audit_event TYPE string
         "login_success", "login_failure", "login_blocked_unverified",
         "logout", "invite_sent", "invite_resent", "invite_cancelled",
         "invite_accepted", "admin_view",
-        "document_deleted"
+        "document_deleted",
+        "profile_updated", "password_changed", "avatar_updated"
     ];
 DEFINE FIELD OVERWRITE actor_email ON audit_event TYPE option<string>;
 DEFINE FIELD OVERWRITE actor       ON audit_event TYPE option<record<user>>;
