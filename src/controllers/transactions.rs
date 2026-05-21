@@ -165,7 +165,6 @@ impl SortDir {
 pub async fn list(
     State(state): State<AppState>,
     user: CurrentUser,
-    uri: axum::http::Uri,
     Query(filters): Query<ListFilters>,
 ) -> Result<Html<String>, AppError> {
     let brokerage = load_brokerage(&state, &user).await?;
@@ -284,22 +283,14 @@ pub async fn list(
     // and carries all existing filters forward.
     let sort_headers = build_sort_headers(&status_filter, &query, attention_on, sort_key, sort_dir);
 
-    // This handler is mounted at BOTH `/app` (dashboard home) and
-    // `/app/transactions` — same view, different URL. Pick the nav
-    // highlight from the request path so each entry point feels
-    // current when the user lands on it.
-    let active_nav = if uri.path() == "/app" {
-        "dashboard"
-    } else {
-        "transactions"
-    };
-
+    // Mounted at both `/app` and `/app/transactions`; same view, same
+    // nav highlight — Transactions is the canonical entry point.
     let header = AppHeader::new(
         &user.name,
         &user.email,
         user.role,
         &brokerage.name,
-        active_nav,
+        "transactions",
     )
     .with_super_admin(crate::controllers::is_super_admin(&state, &user))
     .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar);

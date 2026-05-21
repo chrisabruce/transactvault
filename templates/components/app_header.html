@@ -6,7 +6,6 @@
         </a>
 
         <ul class="app-nav" role="list">
-            <li><a href="/app" {% if header.active_nav == "dashboard" %}class="active" aria-current="page"{% endif %}>Dashboard</a></li>
             <li><a href="/app/transactions" {% if header.active_nav == "transactions" %}class="active" aria-current="page"{% endif %}>Transactions</a></li>
             <li><a href="/app/search" {% if header.active_nav == "search" %}class="active" aria-current="page"{% endif %}>Search</a></li>
             {% if header.role.is_broker() %}
