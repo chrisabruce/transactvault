@@ -7,19 +7,14 @@
       role="search"
       aria-label="Filter transactions"
       class="tx-toolbar">
-    <span class="tx-toolbar-search">
-        <svg class="tx-toolbar-icon" width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-            <circle cx="9" cy="9" r="6" stroke="currentColor" stroke-width="1.6"/>
-            <path d="M13.5 13.5L17 17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-        </svg>
-        <label class="visually-hidden" for="tx-search">Search</label>
-        <input id="tx-search"
-               type="search"
-               name="q"
-               value="{{ query }}"
-               placeholder="Search address, client, MLS…"
-               autocomplete="off">
-    </span>
+    <label class="visually-hidden" for="tx-search">Search</label>
+    <input id="tx-search"
+           class="tx-toolbar-input"
+           type="search"
+           name="q"
+           value="{{ query }}"
+           placeholder="Search address, client, MLS…"
+           autocomplete="off">
     <select name="status" aria-label="Status" class="tx-toolbar-select">
         <option value="all"{% if filter_status == "all" || filter_status == "" %} selected{% endif %}>All statuses</option>
         <option value="open"{% if filter_status == "open" %} selected{% endif %}>Open</option>
