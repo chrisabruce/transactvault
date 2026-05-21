@@ -22,9 +22,14 @@ use crate::models::{
 use crate::state::AppState;
 use crate::templates::{
     AppHeader, ChecklistGroup, ChecklistRow, CommentView, CompliancePanel, DashboardPage,
-    SearchDocument, SearchPage, TransactionEditPage, TransactionNewPage, TransactionShowPage,
-    TransactionsListPage,
+    SearchDocument, SearchPage, TransactionEditPage, TransactionNewPage, TransactionRowsFragment,
+    TransactionShowPage, TransactionsListPage,
 };
+
+/// Default page size for the transactions list. Tuned for first-paint
+/// speed plus enough rows to fill a typical viewport — Datastar fetches
+/// the next page when the sentinel scrolls into view.
+const TX_LIST_PAGE_SIZE: usize = 30;
 
 // ---------------------------------------------------------------------------
 // Dashboard
@@ -87,6 +92,19 @@ pub struct ListFilters {
     pub status: Option<String>,
     #[serde(default)]
     pub q: Option<String>,
+    /// `"1"` (or any truthy string) restricts the list to transactions
+    /// with at least one required-and-not-yet-approved checklist item —
+    /// the same predicate that drives the dashboard "Needs attention"
+    /// counter.
+    #[serde(default)]
+    pub attention: Option<String>,
+    /// 1-indexed page number. Defaults to 1.
+    #[serde(default)]
+    pub page: Option<usize>,
+    /// `"rows"` returns just the row HTML (for infinite-scroll appends);
+    /// anything else (or absent) renders the full page chrome.
+    #[serde(default)]
+    pub fragment: Option<String>,
 }
 
 pub async fn list(
@@ -97,12 +115,12 @@ pub async fn list(
     let brokerage = load_brokerage(&state, &user).await?;
     let mut transactions = load_visible_transactions(&state, &user).await?;
 
-    let status_filter = filters.status.unwrap_or_default();
+    let status_filter = filters.status.clone().unwrap_or_default();
     if !status_filter.is_empty() && status_filter != "all" {
         transactions.retain(|t| t.status == status_filter);
     }
 
-    let query = filters.q.unwrap_or_default();
+    let query = filters.q.clone().unwrap_or_default();
     if !query.trim().is_empty() {
         let needle = query.to_ascii_lowercase();
         transactions.retain(|t| {
@@ -119,6 +137,47 @@ pub async fn list(
         });
     }
 
+    let attention_on = is_truthy(&filters.attention);
+    if attention_on {
+        let flags = needs_attention_flags(&state, &transactions).await?;
+        transactions = transactions
+            .into_iter()
+            .zip(flags)
+            .filter_map(|(t, f)| if f { Some(t) } else { None })
+            .collect();
+    }
+
+    // Pagination over the filtered slice. We don't push pagination into
+    // the DB query because the `attention` filter requires N small
+    // round-trips per transaction anyway — there's no win from a SQL
+    // LIMIT/OFFSET. With per-brokerage volumes in the hundreds this is
+    // cheap; we'd revisit only past five-digit per-brokerage counts.
+    let page = filters.page.unwrap_or(1).max(1);
+    let total_filtered = transactions.len();
+    let start = (page - 1).saturating_mul(TX_LIST_PAGE_SIZE);
+    let end = start.saturating_add(TX_LIST_PAGE_SIZE).min(total_filtered);
+    let page_rows: Vec<Transaction> = if start < end {
+        transactions[start..end].to_vec()
+    } else {
+        Vec::new()
+    };
+    let has_next_page = end < total_filtered;
+    let next_url = if has_next_page {
+        build_list_url(&status_filter, &query, attention_on, Some(page + 1), true)
+    } else {
+        String::new()
+    };
+
+    // Fragment mode: just the rows (plus the next sentinel). Used by
+    // the Datastar infinite-scroll trigger to append the next page.
+    if filters.fragment.as_deref() == Some("rows") {
+        return render(&TransactionRowsFragment {
+            transactions: page_rows,
+            has_next_page,
+            next_url,
+        });
+    }
+
     let header = AppHeader::new(
         &user.name,
         &user.email,
@@ -132,10 +191,59 @@ pub async fn list(
         base_url: &state.config.base_url,
         signed_in: true,
         header,
-        transactions,
+        transactions: page_rows,
         filter_status: &status_filter,
         query: &query,
+        attention_on,
+        has_next_page,
+        next_url,
     })
+}
+
+/// Whether a query-string flag should be treated as on. Accepts any of
+/// the common truthy spellings users (or links from the dashboard) might
+/// hand us.
+fn is_truthy(v: &Option<String>) -> bool {
+    matches!(
+        v.as_deref(),
+        Some("1" | "true" | "on" | "yes")
+    )
+}
+
+/// Build the canonical list URL for a given (filter, page) tuple. Used
+/// to compose the "next page" link for the infinite-scroll sentinel so
+/// every filter stays applied as the user scrolls deeper.
+fn build_list_url(
+    status: &str,
+    query: &str,
+    attention: bool,
+    page: Option<usize>,
+    fragment: bool,
+) -> String {
+    let mut params: Vec<(&str, String)> = Vec::new();
+    if !status.is_empty() && status != "all" {
+        params.push(("status", status.to_string()));
+    }
+    if !query.trim().is_empty() {
+        params.push(("q", query.to_string()));
+    }
+    if attention {
+        params.push(("attention", "1".to_string()));
+    }
+    if let Some(p) = page {
+        params.push(("page", p.to_string()));
+    }
+    if fragment {
+        params.push(("fragment", "rows".to_string()));
+    }
+    if params.is_empty() {
+        return "/app/transactions".to_string();
+    }
+    let qs: Vec<String> = params
+        .into_iter()
+        .map(|(k, v)| format!("{k}={}", urlencoding::encode(&v)))
+        .collect();
+    format!("/app/transactions?{}", qs.join("&"))
 }
 
 // ---------------------------------------------------------------------------
@@ -1057,34 +1165,48 @@ async fn load_transaction_owner_name(
         .unwrap_or_else(|| "Unassigned".into()))
 }
 
+/// True/false per transaction (aligned with the input slice): is the
+/// transaction in an open status AND does it have at least one required
+/// checklist item that isn't yet approved? Drives both the dashboard
+/// "Needs attention" counter and the `?attention=1` list filter.
+///
+/// Closed transactions (Sold/Canceled/Withdrawn) always return `false`
+/// here — finished work doesn't "need attention" even if some optional
+/// row never got an approval signal.
+async fn needs_attention_flags(
+    state: &AppState,
+    transactions: &[Transaction],
+) -> Result<Vec<bool>, AppError> {
+    let futures = transactions.iter().map(|t| async move {
+        if matches!(
+            t.status_enum(),
+            TransactionStatus::Sold | TransactionStatus::Canceled | TransactionStatus::Withdrawn
+        ) {
+            return Ok::<bool, AppError>(false);
+        }
+        let mut r = state
+            .db
+            .query(
+                "SELECT count() FROM $t->has_item->checklist_item \
+                 WHERE required = true AND approval_status != 'approved' GROUP ALL",
+            )
+            .bind(("t", t.id.clone()))
+            .await?;
+        let incomplete: Option<CountRow> = r.take(0)?;
+        Ok::<bool, AppError>(incomplete.map(|c| c.count > 0).unwrap_or(false))
+    });
+    let results = futures::future::try_join_all(futures).await?;
+    Ok(results)
+}
+
+/// Count of transactions that need attention. Thin wrapper around
+/// [`needs_attention_flags`] used by the dashboard summary card.
 async fn count_needs_attention(
     state: &AppState,
     transactions: &[Transaction],
 ) -> Result<usize, AppError> {
-    let futures = transactions
-        .iter()
-        .filter(|t| {
-            !matches!(
-                t.status_enum(),
-                TransactionStatus::Sold
-                    | TransactionStatus::Canceled
-                    | TransactionStatus::Withdrawn
-            )
-        })
-        .map(|t| async move {
-            let mut r = state
-                .db
-                .query(
-                    "SELECT count() FROM $t->has_item->checklist_item \
-                     WHERE required = true AND approval_status != 'approved' GROUP ALL",
-                )
-                .bind(("t", t.id.clone()))
-                .await?;
-            let incomplete: Option<CountRow> = r.take(0)?;
-            Ok::<_, AppError>(incomplete.map(|c| c.count > 0).unwrap_or(false))
-        });
-    let results = futures::future::try_join_all(futures).await?;
-    Ok(results.into_iter().filter(|&b| b).count())
+    let flags = needs_attention_flags(state, transactions).await?;
+    Ok(flags.into_iter().filter(|&b| b).count())
 }
 
 async fn search_documents(

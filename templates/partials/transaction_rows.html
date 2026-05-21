@@ -1,0 +1,25 @@
+{% for tx in transactions %}
+    <li class="transaction-row">
+        <section>
+            <p class="property"><a href="/app/transactions/{{ tx.url_key() }}">{{ tx.property_address }}</a></p>
+            <p class="meta">{{ tx.city }}{% if tx.city != "" %} · {% endif %}CA</p>
+        </section>
+        <section>
+            <p class="meta">Price</p>
+            <p>{{ tx.price_display() }}</p>
+        </section>
+        <section>
+            <p class="meta">Type</p>
+            <p>{{ tx.type_label() }}</p>
+        </section>
+        <section>
+            <span class="chip {{ tx.status_class() }}">{{ tx.status_label() }}</span>
+        </section>
+        <a class="btn small secondary" href="/app/transactions/{{ tx.url_key() }}">Open</a>
+    </li>
+{% endfor %}
+{% if has_next_page %}
+    <li class="transaction-sentinel" data-tx-sentinel="{{ next_url }}" aria-hidden="true">
+        <span class="loader">Loading more…</span>
+    </li>
+{% endif %}

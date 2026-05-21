@@ -841,6 +841,17 @@ form .form-row { display: grid; gap: var(--sp-3); grid-template-columns: 1fr 1fr
     border: 1px solid var(--color-line);
     border-radius: var(--radius-lg);
     padding: var(--sp-5);
+    display: block;
+    color: inherit;
+    text-decoration: none;
+    transition: transform var(--transition), border-color var(--transition), box-shadow var(--transition);
+}
+.stat-card:hover,
+.stat-card:focus-visible {
+    transform: translateY(-2px);
+    border-color: var(--color-brand);
+    box-shadow: var(--shadow);
+    text-decoration: none;
 }
 .stat-card .label { color: var(--color-muted); font-size: var(--fs-sm); margin: 0 0 0.35rem; }
 .stat-card .value { font-family: var(--font-display); font-size: 2.25rem; font-weight: 700; color: var(--color-ink); line-height: 1; }
@@ -875,6 +886,29 @@ form .form-row { display: grid; gap: var(--sp-3); grid-template-columns: 1fr 1fr
 }
 .transaction-row:last-child { border-bottom: 0; }
 .transaction-row:hover { background: var(--color-surface-alt); }
+.transaction-sentinel {
+    display: flex;
+    justify-content: center;
+    padding: var(--sp-4);
+    color: var(--color-muted);
+    font-size: var(--fs-sm);
+    border-bottom: 0;
+}
+.transaction-sentinel .loader::after {
+    content: "";
+    display: inline-block;
+    width: 0.55rem;
+    height: 0.55rem;
+    margin-left: 0.4rem;
+    border: 2px solid var(--color-line);
+    border-top-color: var(--color-brand);
+    border-radius: 50%;
+    animation: tx-sentinel-spin 0.7s linear infinite;
+    vertical-align: -1px;
+}
+@keyframes tx-sentinel-spin {
+    to { transform: rotate(360deg); }
+}
 .transaction-row .property { color: var(--color-ink); font-weight: 600; }
 .transaction-row .meta { color: var(--color-muted); font-size: var(--fs-sm); margin: 0; }
 .transaction-row a { color: inherit; }
@@ -909,7 +943,7 @@ form .form-row { display: grid; gap: var(--sp-3); grid-template-columns: 1fr 1fr
 }
 .chip::before { content: ""; width: 0.5rem; height: 0.5rem; border-radius: 50%; background: currentColor; opacity: .8; }
 .chip.status-active    { background: var(--color-brand-soft); color: var(--color-brand-ink); }
-.chip.status-pending   { background: #dbeafe; color: #1e40af; }
+.chip.status-pending   { background: var(--color-warn-soft); color: var(--color-warn); }
 .chip.status-sold      { background: var(--color-success-soft); color: var(--color-success-ink); }
 .chip.status-canceled  { background: var(--color-danger-soft); color: var(--color-danger); }
 .chip.status-withdrawn { background: var(--color-line-soft); color: var(--color-muted); }

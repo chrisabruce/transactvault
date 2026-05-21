@@ -27,6 +27,10 @@
                 <option value="canceled"{% if filter_status == "canceled" %} selected{% endif %}>Canceled</option>
                 <option value="withdrawn"{% if filter_status == "withdrawn" %} selected{% endif %}>Withdrawn</option>
             </select>
+            <label class="checkbox">
+                <input type="checkbox" name="attention" value="1"{% if attention_on %} checked{% endif %}>
+                <span>Needs attention</span>
+            </label>
             <button type="submit" class="btn small secondary">Apply</button>
         </form>
     </section>
@@ -41,29 +45,11 @@
         </section>
     {% else %}
         <section class="transaction-list">
-            <ul role="list">
-                {% for tx in transactions %}
-                    <li class="transaction-row">
-                        <section>
-                            <p class="property"><a href="/app/transactions/{{ tx.url_key() }}">{{ tx.property_address }}</a></p>
-                            <p class="meta">{{ tx.city }}{% if tx.city != "" %} · {% endif %}CA</p>
-                        </section>
-                        <section>
-                            <p class="meta">Price</p>
-                            <p>{{ tx.price_display() }}</p>
-                        </section>
-                        <section>
-                            <p class="meta">Type</p>
-                            <p>{{ tx.type_label() }}</p>
-                        </section>
-                        <section>
-                            <span class="chip {{ tx.status_class() }}">{{ tx.status_label() }}</span>
-                        </section>
-                        <a class="btn small secondary" href="/app/transactions/{{ tx.url_key() }}">Open</a>
-                    </li>
-                {% endfor %}
+            <ul id="tx-list" role="list">
+                {% include "partials/transaction_rows.html" %}
             </ul>
         </section>
     {% endif %}
 </main>
+<script src="/static/js/infinite-scroll.js" defer></script>
 {% endblock %}

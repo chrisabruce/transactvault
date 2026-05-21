@@ -257,9 +257,32 @@ pub struct TransactionsListPage<'a> {
     pub base_url: &'a str,
     pub signed_in: bool,
     pub header: AppHeader<'a>,
+    /// First page of rows (subsequent pages stream in via the
+    /// infinite-scroll fragment endpoint).
     pub transactions: Vec<Transaction>,
     pub filter_status: &'a str,
     pub query: &'a str,
+    /// True when the dashboard's "Needs attention" filter is on; carried
+    /// into the URL on form submits + the sentinel's next-page link.
+    pub attention_on: bool,
+    /// More rows exist past this page → render the infinite-scroll
+    /// sentinel pointing at `next_url`.
+    pub has_next_page: bool,
+    /// Fully-formed URL to GET for the next page (already includes the
+    /// `fragment=rows` flag).
+    pub next_url: String,
+}
+
+/// HTML fragment containing only the row markup for a given page. The
+/// list endpoint returns this (no chrome, no `<html>`) when the request
+/// carries `?fragment=rows`, so the infinite-scroll trigger can append
+/// the response directly into the existing list.
+#[derive(Template)]
+#[template(path = "partials/transaction_rows.html")]
+pub struct TransactionRowsFragment {
+    pub transactions: Vec<Transaction>,
+    pub has_next_page: bool,
+    pub next_url: String,
 }
 
 #[derive(Template)]
