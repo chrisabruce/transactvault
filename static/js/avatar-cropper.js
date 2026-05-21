@@ -48,8 +48,9 @@
             cropper = null;
         }
         if (typeof window.Cropper !== "function") {
-            // The Cropper module hasn't loaded yet — fall back to no
-            // crop, just use the raw file.
+            // The Cropper script hasn't loaded yet (CDN hiccup or
+            // offline dev). Fall back gracefully: the user can still
+            // upload the raw file, just without an in-browser crop.
             console.warn("avatar-cropper: Cropper not available, using raw file");
             return;
         }
@@ -70,38 +71,26 @@
 
     applyBtn.addEventListener("click", function () {
         if (!cropper) {
-            // Cropper failed to load — submit the raw picked file.
-            file = picker.files && picker.files[0];
-            if (file) { attachToForm(file); }
+            // Cropper unavailable — submit the raw picked file as-is.
+            var rawFile = picker.files && picker.files[0];
+            if (rawFile) attachToForm(rawFile);
             closeCropper();
             return;
         }
-        // Cropper v2 returns a Promise<CroppedCanvas> via getCroppedCanvas
-        // or in v2 idioms via toCanvas(). Both forms exist depending on
-        // package version; we feature-detect.
-        var canvasPromise;
-        if (typeof cropper.getCroppedCanvas === "function") {
-            // Cropper v1-style API: synchronous canvas.
-            var canvas = cropper.getCroppedCanvas({
-                width: 512,
-                height: 512,
-                imageSmoothingQuality: "high",
-            });
-            canvasPromise = Promise.resolve(canvas);
-        } else if (typeof cropper.$toCanvas === "function") {
-            // Cropper v2-style API: returns Promise.
-            canvasPromise = cropper.$toCanvas({ width: 512, height: 512 });
-        } else {
-            console.warn("avatar-cropper: no known canvas method");
+        var canvas = cropper.getCroppedCanvas({
+            width: 512,
+            height: 512,
+            imageSmoothingQuality: "high",
+        });
+        if (!canvas) {
+            console.warn("avatar-cropper: getCroppedCanvas returned null");
             return;
         }
-        canvasPromise.then(function (canvas) {
-            canvas.toBlob(function (blob) {
-                if (!blob) return;
-                attachToForm(blob);
-                closeCropper();
-            }, "image/png");
-        });
+        canvas.toBlob(function (blob) {
+            if (!blob) return;
+            attachToForm(blob);
+            closeCropper();
+        }, "image/png");
     });
 
     function attachToForm(blob) {
