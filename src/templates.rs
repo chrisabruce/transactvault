@@ -270,6 +270,13 @@ pub struct DashboardPage<'a> {
     /// on the dashboard (nothing's filtered there); the list page
     /// derives it from `status`/`attention`.
     pub active_filter: &'a str,
+    /// Defaulted filter state needed by the shared
+    /// `partials/tx_toolbar.html` partial. Always empty/false on the
+    /// dashboard — the toolbar simply forwards whatever the user
+    /// types into `/app/transactions`.
+    pub query: &'a str,
+    pub filter_status: &'a str,
+    pub attention_on: bool,
 }
 
 #[derive(Template)]

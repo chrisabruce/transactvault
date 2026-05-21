@@ -81,6 +81,9 @@ pub async fn dashboard(
         complete_count,
         recent,
         active_filter: "",
+        query: "",
+        filter_status: "",
+        attention_on: false,
     })
 }
 

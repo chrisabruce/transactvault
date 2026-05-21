@@ -1,0 +1,60 @@
+{# Shared transactions search/filter toolbar. Included from the
+   dashboard (defaulted filter state) and the transactions list
+   (live filter state). Posts to /app/transactions either way. #}
+<form id="tx-toolbar"
+      method="get"
+      action="/app/transactions"
+      role="search"
+      aria-label="Filter transactions"
+      class="tx-toolbar">
+    <span class="tx-toolbar-search">
+        <svg class="tx-toolbar-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <circle cx="9" cy="9" r="6" stroke="currentColor" stroke-width="1.6"/>
+            <path d="M13.5 13.5L17 17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+        <label class="visually-hidden" for="tx-search">Search</label>
+        <input id="tx-search"
+               type="search"
+               name="q"
+               value="{{ query }}"
+               placeholder="Search address, client, MLS…"
+               autocomplete="off">
+    </span>
+    <select name="status" aria-label="Status" class="tx-toolbar-select">
+        <option value="all"{% if filter_status == "all" || filter_status == "" %} selected{% endif %}>All statuses</option>
+        <option value="active"{% if filter_status == "active" %} selected{% endif %}>Active</option>
+        <option value="pending"{% if filter_status == "pending" %} selected{% endif %}>Pending</option>
+        <option value="sold"{% if filter_status == "sold" %} selected{% endif %}>Sold</option>
+        <option value="canceled"{% if filter_status == "canceled" %} selected{% endif %}>Canceled</option>
+        <option value="withdrawn"{% if filter_status == "withdrawn" %} selected{% endif %}>Withdrawn</option>
+    </select>
+    <label class="tx-toolbar-toggle">
+        <input type="checkbox" name="attention" value="1"{% if attention_on %} checked{% endif %}>
+        <span>Needs attention</span>
+    </label>
+    {# Hidden submit so Enter inside the search input always works
+       even when the change-handler script hasn't booted yet. #}
+    <button type="submit" class="visually-hidden">Apply</button>
+</form>
+
+<script>
+// Live-filter UX: changing the status select or toggling "Needs
+// attention" submits the form immediately. Search submits 350 ms
+// after the user stops typing (or instantly via Enter through the
+// hidden button).
+(function () {
+    var form = document.getElementById("tx-toolbar");
+    if (!form) return;
+    form.querySelectorAll("select, input[type=checkbox]").forEach(function (el) {
+        el.addEventListener("change", function () { form.submit(); });
+    });
+    var q = form.querySelector("input[name=q]");
+    if (q) {
+        var t;
+        q.addEventListener("input", function () {
+            clearTimeout(t);
+            t = setTimeout(function () { form.submit(); }, 350);
+        });
+    }
+})();
+</script>
