@@ -276,6 +276,18 @@ a.btn {
 .btn.small { padding: 0.4rem 0.75rem; font-size: var(--fs-xs); }
 .btn.danger { background: var(--color-danger); }
 .btn.danger:hover { background: #b91c1c; }
+/* Destructive ghost: both .ghost and .danger together → red text on
+   transparent surface, soft-red on hover. `.btn.danger`'s solid-red
+   background otherwise wins on cascade order, painting dark-on-dark. */
+.btn.ghost.danger {
+    background: transparent;
+    color: var(--color-danger);
+    border-color: transparent;
+}
+.btn.ghost.danger:hover {
+    background: var(--color-danger-soft);
+    color: var(--color-danger);
+}
 
 /* --------------------------------------------------------------------------
    Landing page
@@ -1067,7 +1079,13 @@ form .form-row { display: grid; gap: var(--sp-3); grid-template-columns: 1fr 1fr
     padding: var(--sp-6);
     margin-bottom: var(--sp-5);
 }
-.panel h2 { font-size: var(--fs-lg); margin-bottom: var(--sp-4); }
+.panel h2 {
+    font-size: var(--fs-lg);
+    font-weight: 700;
+    color: var(--color-ink);
+    letter-spacing: -0.005em;
+    margin-bottom: var(--sp-4);
+}
 .panel.sidebar h2 { font-size: var(--fs-md); }
 .sidebar-header {
     display: flex;
@@ -1549,6 +1567,62 @@ select:disabled {
     align-items: center;
     gap: var(--sp-3);
     flex-wrap: wrap;
+}
+
+/* The status-control card groups "what status is it now" (the chip) with
+   "change it to..." (the form). A subtle border + matching surface make
+   them read as a single intentional object, with a left-border on the
+   change-form acting as a visual divider rather than the previous
+   uncontained sprawl. */
+.status-control {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-3);
+    padding: 0.5rem 0.75rem;
+    background: var(--color-surface);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 1px 0 rgba(15, 23, 42, 0.02);
+}
+.status-update {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-2);
+    margin: 0;
+    padding-left: var(--sp-3);
+    border-left: 1px solid var(--color-line);
+}
+.status-update label {
+    color: var(--color-muted);
+    font-size: var(--fs-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 600;
+}
+.status-update select {
+    padding: 0.35rem 0.6rem;
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-alt);
+    border: 1px solid var(--color-line);
+    font-size: var(--fs-sm);
+    color: var(--color-ink);
+    min-width: 8rem;
+}
+@media (max-width: 36rem) {
+    .status-control { flex-direction: column; align-items: stretch; }
+    .status-update {
+        padding-left: 0;
+        border-left: 0;
+        border-top: 1px solid var(--color-line);
+        padding-top: var(--sp-2);
+    }
+}
+
+/* Sidebar Details panel — give the Edit button real space to breathe
+   instead of butting straight into the bottom of the description list. */
+.panel.sidebar dl + .btn {
+    margin-top: var(--sp-5);
+    display: inline-flex;
 }
 
 /* --------------------------------------------------------------------------

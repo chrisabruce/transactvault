@@ -16,17 +16,21 @@
             </p>
         </section>
         <section class="property-actions">
-            <span class="chip {{ transaction.status_class() }}">{{ transaction.status_label() }}</span>
-            <form method="post" action="/app/transactions/{{ transaction_key }}/status" class="filter-bar">
-                <label class="visually-hidden" for="status-select">Update status</label>
-                <select id="status-select" name="status">
-                    {% for s in statuses %}
-                        <option value="{{ s.as_str() }}"{% if s.as_str() == transaction.status %} selected{% endif %}>{{ s.label() }}</option>
-                    {% endfor %}
-                </select>
-                <button class="btn small secondary" type="submit">Update</button>
-                <a class="btn small" href="/app/transactions/{{ transaction_key }}/export">Export ZIP</a>
-            </form>
+            <section class="status-control" aria-label="Transaction status">
+                <span class="chip {{ transaction.status_class() }}">{{ transaction.status_label() }}</span>
+                <form method="post"
+                      action="/app/transactions/{{ transaction_key }}/status"
+                      class="status-update">
+                    <label for="status-select">Change to</label>
+                    <select id="status-select" name="status">
+                        {% for s in statuses %}
+                            <option value="{{ s.as_str() }}"{% if s.as_str() == transaction.status %} selected{% endif %}>{{ s.label() }}</option>
+                        {% endfor %}
+                    </select>
+                    <button class="btn small secondary" type="submit">Update</button>
+                </form>
+            </section>
+            <a class="btn small" href="/app/transactions/{{ transaction_key }}/export">Export ZIP</a>
         </section>
     </header>
 
