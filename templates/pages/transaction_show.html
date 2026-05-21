@@ -118,9 +118,6 @@
                                     </header>
                                     <section class="checklist-text">
                                         <p class="title">{{ row.item.title }}</p>
-                                        {% match row.form %}{% when Some with (f) %}
-                                            <p class="meta">{{ f.description }}</p>
-                                        {% when None %}{% endmatch %}
                                         {% if row.item.is_approved() || row.item.is_denied() %}
                                             <p class="audit">{{ row.audit_label }}</p>
                                         {% endif %}

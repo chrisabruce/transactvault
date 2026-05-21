@@ -26,6 +26,11 @@ use crate::models::transaction::{SalesType, SpecialSalesCondition, TransactionTy
 pub struct CarForm {
     pub code: &'static str,
     pub name: &'static str,
+    /// Short hint describing what the form is for. Carried on the
+    /// struct so callers can surface it as a tooltip or aria-description
+    /// in the future; currently unused after we removed the inline
+    /// subtitle on the transaction show page.
+    #[allow(dead_code)]
     pub description: &'static str,
     pub allows_multiple: bool,
 }
