@@ -79,7 +79,33 @@ pub async fn dashboard(
         needs_attention,
         complete_count,
         recent,
+        active_filter: "",
     })
+}
+
+/// Compute the four stat-grid totals over the un-filtered transaction
+/// set. Returned in the (total, open_count, needs_attention,
+/// complete_count) order used by the templates.
+async fn stat_grid_totals(
+    state: &AppState,
+    transactions: &[Transaction],
+) -> Result<(usize, usize, usize, usize), AppError> {
+    let total = transactions.len();
+    let open_count = transactions
+        .iter()
+        .filter(|t| {
+            matches!(
+                t.status_enum(),
+                TransactionStatus::Active | TransactionStatus::Pending
+            )
+        })
+        .count();
+    let complete_count = transactions
+        .iter()
+        .filter(|t| matches!(t.status_enum(), TransactionStatus::Sold))
+        .count();
+    let needs_attention = count_needs_attention(state, transactions).await?;
+    Ok((total, open_count, needs_attention, complete_count))
 }
 
 // ---------------------------------------------------------------------------
@@ -114,6 +140,13 @@ pub async fn list(
 ) -> Result<Html<String>, AppError> {
     let brokerage = load_brokerage(&state, &user).await?;
     let mut transactions = load_visible_transactions(&state, &user).await?;
+
+    // Stat-grid totals are computed on the FULL visible set, before any
+    // filter is applied, so the cards keep showing real counts even when
+    // a filter is active. (Otherwise "Active" view would say "Total: 5"
+    // which defeats the purpose of leaving the cards on the page.)
+    let (total, open_count, needs_attention, complete_count) =
+        stat_grid_totals(&state, &transactions).await?;
 
     let status_filter = filters.status.clone().unwrap_or_default();
     if !status_filter.is_empty() && status_filter != "all" {
@@ -186,6 +219,8 @@ pub async fn list(
         "transactions",
     )
     .with_super_admin(crate::controllers::is_super_admin(&state, &user));
+    let active_filter = derive_active_filter(&status_filter, attention_on);
+
     render(&TransactionsListPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
@@ -197,7 +232,28 @@ pub async fn list(
         attention_on,
         has_next_page,
         next_url,
+        total,
+        open_count,
+        needs_attention,
+        complete_count,
+        active_filter,
     })
+}
+
+/// Map the request's filter combination to the stat-card the list page
+/// should mark "active". An empty status + attention-off means the user
+/// is looking at the unfiltered list, so we highlight Total.
+fn derive_active_filter(status: &str, attention_on: bool) -> &'static str {
+    if attention_on {
+        "attention"
+    } else {
+        match status {
+            "" | "all" => "total",
+            "active" => "active",
+            "sold" => "sold",
+            _ => "",
+        }
+    }
 }
 
 /// Whether a query-string flag should be treated as on. Accepts any of

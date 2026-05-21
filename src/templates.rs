@@ -248,6 +248,11 @@ pub struct DashboardPage<'a> {
     pub needs_attention: usize,
     pub complete_count: usize,
     pub recent: Vec<Transaction>,
+    /// Which stat-card filter is currently applied — used by the shared
+    /// stat-grid partial to highlight the active card. Always empty
+    /// on the dashboard (nothing's filtered there); the list page
+    /// derives it from `status`/`attention`.
+    pub active_filter: &'a str,
 }
 
 #[derive(Template)]
@@ -271,6 +276,17 @@ pub struct TransactionsListPage<'a> {
     /// Fully-formed URL to GET for the next page (already includes the
     /// `fragment=rows` flag).
     pub next_url: String,
+    /// Totals across the full visible set (NOT the filtered page) so
+    /// the stat-grid cards always show real numbers regardless of
+    /// which filter is on.
+    pub total: usize,
+    pub open_count: usize,
+    pub needs_attention: usize,
+    pub complete_count: usize,
+    /// Which stat-card to highlight — derived from `filter_status` +
+    /// `attention_on`. One of `""`, `"total"`, `"active"`,
+    /// `"attention"`, `"sold"`.
+    pub active_filter: &'a str,
 }
 
 /// HTML fragment containing only the row markup for a given page. The

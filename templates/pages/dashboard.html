@@ -15,24 +15,7 @@
         <a class="btn" href="/app/transactions/new">+ New transaction</a>
     </header>
 
-    <section class="stat-grid" aria-label="Key metrics">
-        <a class="stat-card" href="/app/transactions">
-            <p class="label">Total transactions</p>
-            <p class="value">{{ total }}</p>
-        </a>
-        <a class="stat-card" href="/app/transactions?status=active">
-            <p class="label">Active</p>
-            <p class="value">{{ open_count }}</p>
-        </a>
-        <a class="stat-card" href="/app/transactions?attention=1">
-            <p class="label">Needs attention</p>
-            <p class="value warn">{{ needs_attention }}</p>
-        </a>
-        <a class="stat-card" href="/app/transactions?status=sold">
-            <p class="label">Closed</p>
-            <p class="value success">{{ complete_count }}</p>
-        </a>
-    </section>
+    {% include "partials/stat_grid.html" %}
 
     <section class="panel" aria-labelledby="recent-heading">
         <h2 id="recent-heading">Recent transactions</h2>

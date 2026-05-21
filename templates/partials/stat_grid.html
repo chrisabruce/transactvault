@@ -1,0 +1,30 @@
+{# Shared dashboard / transaction-list summary cards.
+   Each card is a link that filters the list. `active_filter` is one of
+   "", "total", "active", "attention", "sold" — used to highlight the
+   currently-applied filter so the user sees which view they're in. #}
+<section class="stat-grid" aria-label="Key metrics">
+    <a class="stat-card{% if active_filter == "total" %} is-active{% endif %}"
+       href="/app/transactions"
+       aria-current="{% if active_filter == "total" %}page{% else %}false{% endif %}">
+        <p class="label">Total transactions</p>
+        <p class="value">{{ total }}</p>
+    </a>
+    <a class="stat-card{% if active_filter == "active" %} is-active{% endif %}"
+       href="/app/transactions?status=active"
+       aria-current="{% if active_filter == "active" %}page{% else %}false{% endif %}">
+        <p class="label">Active</p>
+        <p class="value">{{ open_count }}</p>
+    </a>
+    <a class="stat-card{% if active_filter == "attention" %} is-active{% endif %}"
+       href="/app/transactions?attention=1"
+       aria-current="{% if active_filter == "attention" %}page{% else %}false{% endif %}">
+        <p class="label">Needs attention</p>
+        <p class="value warn">{{ needs_attention }}</p>
+    </a>
+    <a class="stat-card{% if active_filter == "sold" %} is-active{% endif %}"
+       href="/app/transactions?status=sold"
+       aria-current="{% if active_filter == "sold" %}page{% else %}false{% endif %}">
+        <p class="label">Closed</p>
+        <p class="value success">{{ complete_count }}</p>
+    </a>
+</section>
