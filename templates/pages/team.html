@@ -34,7 +34,7 @@
             <label class="visually-hidden" for="invite-role">Role</label>
             <select id="invite-role" name="role">
                 <option value="agent">Agent</option>
-                <option value="coordinator">Transaction Coordinator</option>
+                <option value="coordinator">Compliance Officer</option>
                 <option value="broker">Broker</option>
             </select>
             <button type="submit" class="btn">Send invite</button>
@@ -60,7 +60,7 @@
                             <label class="visually-hidden" for="role-{{ member.user_key }}">Role for {{ member.name }}</label>
                             <select id="role-{{ member.user_key }}" name="role">
                                 <option value="agent"{% if member.role.as_str() == "agent" %} selected{% endif %}>Agent</option>
-                                <option value="coordinator"{% if member.role.as_str() == "coordinator" %} selected{% endif %}>Transaction Coordinator</option>
+                                <option value="coordinator"{% if member.role.as_str() == "coordinator" %} selected{% endif %}>Compliance Officer</option>
                                 <option value="broker"{% if member.role.as_str() == "broker" %} selected{% endif %}>Broker</option>
                             </select>
                             <button type="submit" class="btn small">Update</button>

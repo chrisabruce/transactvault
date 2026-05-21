@@ -64,7 +64,7 @@ impl Role {
         match self {
             Role::Broker => "Broker",
             Role::Agent => "Agent",
-            Role::Coordinator => "Transaction Coordinator",
+            Role::Coordinator => "Compliance Officer",
         }
     }
 

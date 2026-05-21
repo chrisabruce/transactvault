@@ -138,7 +138,7 @@ impl Mailer {
     ) {
         let role_label = match role {
             "broker" => "Broker",
-            "coordinator" => "Transaction Coordinator",
+            "coordinator" => "Compliance Officer",
             _ => "Agent",
         };
         let subject = format!("{inviter} invited you to {brokerage} on TransactVault");
