@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+
+{% block title %}Delete brokerage — {{ app_name }}{% endblock %}
+{% block body_class %}page-app{% endblock %}
+
+{% block body %}
+{% include "components/app_header.html" %}
+
+<main class="app-main">
+    <header class="page-title">
+        <section>
+            <h1>Delete this brokerage</h1>
+            <p class="subtitle">Permanently remove {{ brokerage_name }} and everything attached to it.</p>
+        </section>
+        <a class="btn ghost" href="/app/team">Back to team</a>
+    </header>
+
+    <section class="panel danger-panel" role="alert">
+        <h2>This cannot be undone</h2>
+        <p>
+            Deleting <strong>{{ brokerage_name }}</strong> will <strong>permanently destroy
+            every piece of data linked to this brokerage</strong>. There is no recovery. There is
+            no backup restore. Once you confirm, the data is gone.
+        </p>
+
+        <ul class="danger-list">
+            <li><strong>{{ user_count }}</strong> user account{% if user_count != 1 %}s{% endif %} (including yours)</li>
+            <li><strong>{{ transaction_count }}</strong> transaction{% if transaction_count != 1 %}s{% endif %} with their checklists, comments, audit history</li>
+            <li><strong>{{ document_count }}</strong> uploaded document{% if document_count != 1 %}s{% endif %} ({{ storage_display }} of file storage)</li>
+            <li>All pending teammate invitations</li>
+            <li>The brokerage record itself</li>
+        </ul>
+
+        <p>
+            You'll be signed out the moment this completes. Any users you previously invited
+            will lose access. Any files in active transactions will be permanently erased from
+            object storage.
+        </p>
+
+        {% match error %}{% when Some with (msg) %}
+            <p class="alert error" role="alert">{{ msg }}</p>
+        {% when None %}{% endmatch %}
+
+        <form method="post"
+              action="/app/team/delete-brokerage"
+              class="danger-form"
+              onsubmit="return confirm('FINAL WARNING — this permanently deletes {{ brokerage_name }} and all its data. There is no undo. Continue?');">
+            <label>
+                <span>Type the brokerage name to confirm</span>
+                <input type="text"
+                       name="confirm_name"
+                       autocomplete="off"
+                       autocapitalize="off"
+                       spellcheck="false"
+                       placeholder="{{ brokerage_name }}"
+                       required>
+            </label>
+            <button type="submit" class="btn danger">Delete brokerage forever</button>
+        </form>
+    </section>
+</main>
+{% endblock %}

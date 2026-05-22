@@ -2157,7 +2157,6 @@ pub const LIBRARY: &[CarForm] = &[
         description: "",
         allows_multiple: false,
     },
-
     // Catch-all
     CarForm {
         code: "MISC",

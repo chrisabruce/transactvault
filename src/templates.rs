@@ -568,6 +568,54 @@ impl Member {
     }
 }
 
+/// Brokerage-scoped audit log. Shows events where the `actor` is (or
+/// was) a member of the current user's brokerage. Brokers + Compliance
+/// Officers can read this; agents cannot.
+#[derive(Template)]
+#[template(path = "pages/brokerage_audit.html")]
+pub struct BrokerageAuditPage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+    pub signed_in: bool,
+    pub header: AppHeader<'a>,
+    pub events: Vec<AuditEvent>,
+    pub kind_filter: String,
+    pub query: String,
+    pub kinds: Vec<String>,
+    pub has_next_page: bool,
+    pub next_url: String,
+}
+
+/// Rows-only fragment for the audit log's infinite scroll. Mirrors
+/// `TransactionRowsFragment` — the controller renders just the next
+/// page's rows + (optional) sentinel; client JS appends them in
+/// place of the previous sentinel.
+#[derive(Template)]
+#[template(path = "partials/audit_rows.html")]
+pub struct AuditRowsFragment {
+    pub events: Vec<AuditEvent>,
+    pub has_next_page: bool,
+    pub next_url: String,
+}
+
+/// Pre-delete confirmation page for the destructive "delete entire
+/// brokerage" flow. The numbers below are computed server-side so the
+/// warning shows exactly what's about to disappear.
+#[derive(Template)]
+#[template(path = "pages/brokerage_delete.html")]
+pub struct BrokerageDeletePage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+    pub signed_in: bool,
+    pub header: AppHeader<'a>,
+    pub brokerage_name: String,
+    pub user_count: usize,
+    pub transaction_count: usize,
+    pub document_count: usize,
+    pub storage_display: String,
+    pub error: Option<&'a str>,
+}
+
 // ---------------------------------------------------------------------------
 // App: search
 // ---------------------------------------------------------------------------
@@ -621,6 +669,34 @@ pub struct AdminAuditPage<'a> {
     pub kind_filter: String,
     pub query: String,
     pub kinds: Vec<String>,
+}
+
+#[derive(Template)]
+#[template(path = "pages/admin_brokerages.html")]
+pub struct AdminBrokeragesPage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+    pub signed_in: bool,
+    pub header: AppHeader<'a>,
+    pub rows: Vec<AdminBrokerageRow>,
+    /// Pre-formatted totals (humansized + thousands-separated) so the
+    /// template stays presentation-only.
+    pub total_brokerages_display: String,
+    pub total_transactions_display: String,
+    pub total_documents_display: String,
+    pub total_storage_display: String,
+}
+
+/// One row on the brokerages admin page: name + already-human-formatted
+/// counts and byte size, so the template doesn't have to call
+/// `humansize` / `num-format` directly.
+#[derive(Debug, Clone)]
+pub struct AdminBrokerageRow {
+    pub name: String,
+    pub created_at: DateTime<Utc>,
+    pub tx_count_display: String,
+    pub storage_display: String,
+    pub document_count_display: String,
 }
 
 /// Cross-brokerage user view used by the admin dashboard. Hydrated from a

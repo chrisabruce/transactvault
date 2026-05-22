@@ -16,7 +16,9 @@ pub use audit::{AuditEvent, NewAuditEvent};
 pub use brokerage::{Brokerage, NewBrokerage};
 pub use checklist::{ApprovalStatus, ChecklistItem, NewChecklistItem};
 pub use comment::{Comment, NewComment};
-pub use document::{Document, NewDocument};
+pub use document::Document;
+#[allow(unused_imports)]
+pub use document::NewDocument;
 pub use invitation::{Invitation, NewInvitation};
 pub use transaction::{
     NewTransaction, SalesType, SpecialSalesCondition, Transaction, TransactionStatus,

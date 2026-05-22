@@ -9,6 +9,8 @@
 
 use axum::extract::{Query, State};
 use axum::response::Html;
+use humansize::{DECIMAL, format_size};
+use num_format::{Locale, ToFormattedString};
 use serde::Deserialize;
 
 use crate::audit;
@@ -16,7 +18,9 @@ use crate::auth::middleware::SuperAdmin;
 use crate::controllers::render;
 use crate::error::AppError;
 use crate::state::AppState;
-use crate::templates::{AdminAuditPage, AdminUser, AdminUsersPage, AppHeader};
+use crate::templates::{
+    AdminAuditPage, AdminBrokerageRow, AdminBrokeragesPage, AdminUser, AdminUsersPage, AppHeader,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct UsersFilter {
@@ -104,6 +108,98 @@ pub async fn users(
         unverified_count,
         query: filter.q.unwrap_or_default(),
         status_filter: filter.status.unwrap_or_default(),
+    })
+}
+
+pub async fn brokerages(
+    State(state): State<AppState>,
+    SuperAdmin(user): SuperAdmin,
+) -> Result<Html<String>, AppError> {
+    audit::record(
+        &state.db,
+        "admin_view",
+        Some(user.user_id.clone()),
+        Some(user.email.clone()),
+        None,
+        None,
+        Some("brokerages".into()),
+    )
+    .await;
+
+    use chrono::{DateTime, Utc};
+    use surrealdb::types::SurrealValue;
+
+    // One SurrealQL query gets us name + tx count + total bytes per
+    // brokerage. `math::sum` returns `NONE` when its set is empty
+    // (brand-new brokerage with zero docs), so the deserialised
+    // counts are `Option<i64>` — defaulted to 0 in Rust.
+    let mut q = state
+        .db
+        .query(
+            r#"
+            SELECT
+                name,
+                created_at,
+                count((SELECT id FROM $parent.id->has_transaction->transaction)) AS tx_count,
+                count((SELECT id FROM $parent.id->has_transaction->transaction->has_document->document)) AS doc_count,
+                math::sum((SELECT VALUE size_bytes FROM $parent.id->has_transaction->transaction->has_document->document)) AS bytes_used
+            FROM brokerage
+            ORDER BY name ASC
+            "#,
+        )
+        .await?;
+
+    #[derive(Debug, serde::Deserialize, SurrealValue)]
+    struct Row {
+        name: String,
+        created_at: DateTime<Utc>,
+        tx_count: Option<i64>,
+        doc_count: Option<i64>,
+        bytes_used: Option<i64>,
+    }
+    let raw: Vec<Row> = q.take(0).unwrap_or_default();
+
+    // Aggregate totals in the same pass — saves a second query and
+    // keeps the per-brokerage rows + the grand totals trivially in
+    // sync.
+    let mut total_tx: u64 = 0;
+    let mut total_docs: u64 = 0;
+    let mut total_bytes: u64 = 0;
+    let rows: Vec<AdminBrokerageRow> = raw
+        .into_iter()
+        .map(|r| {
+            let tx = r.tx_count.unwrap_or(0).max(0) as u64;
+            let docs = r.doc_count.unwrap_or(0).max(0) as u64;
+            let bytes = r.bytes_used.unwrap_or(0).max(0) as u64;
+            total_tx += tx;
+            total_docs += docs;
+            total_bytes += bytes;
+            AdminBrokerageRow {
+                name: r.name,
+                created_at: r.created_at,
+                tx_count_display: tx.to_formatted_string(&Locale::en),
+                document_count_display: docs.to_formatted_string(&Locale::en),
+                storage_display: format_size(bytes, DECIMAL),
+            }
+        })
+        .collect();
+
+    let brokerage_name = lookup_brokerage_name(&state, &user).await;
+    let header = AppHeader::new(&user.name, &user.email, user.role, &brokerage_name, "admin")
+        .with_super_admin(true)
+        .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar);
+
+    let total_brokerages = rows.len() as u64;
+    render(&AdminBrokeragesPage {
+        app_name: &state.config.app_name,
+        base_url: &state.config.base_url,
+        signed_in: true,
+        header,
+        rows,
+        total_brokerages_display: total_brokerages.to_formatted_string(&Locale::en),
+        total_transactions_display: total_tx.to_formatted_string(&Locale::en),
+        total_documents_display: total_docs.to_formatted_string(&Locale::en),
+        total_storage_display: format_size(total_bytes, DECIMAL),
     })
 }
 
@@ -202,6 +298,7 @@ const AUDIT_KIND_OPTIONS: &[&str] = &[
     "profile_updated",
     "password_changed",
     "avatar_updated",
+    "brokerage_deleted",
 ];
 
 async fn lookup_brokerage_name(state: &AppState, user: &crate::auth::CurrentUser) -> String {

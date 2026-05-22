@@ -303,7 +303,8 @@ DEFINE FIELD OVERWRITE kind ON audit_event TYPE string
         "logout", "invite_sent", "invite_resent", "invite_cancelled",
         "invite_accepted", "admin_view",
         "document_deleted",
-        "profile_updated", "password_changed", "avatar_updated"
+        "profile_updated", "password_changed", "avatar_updated",
+        "brokerage_deleted"
     ];
 DEFINE FIELD OVERWRITE actor_email ON audit_event TYPE option<string>;
 DEFINE FIELD OVERWRITE actor       ON audit_event TYPE option<record<user>>;

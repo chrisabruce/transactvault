@@ -680,6 +680,69 @@ form .form-row { display: grid; gap: var(--sp-3); grid-template-columns: 1fr 1fr
     font-size: var(--fs-sm);
 }
 .alert.error   { background: var(--color-danger-soft); color: var(--color-danger); }
+
+/* Destructive-action surface: deep red border + soft tint so it can't
+   be mistaken for a normal panel. Used by the brokerage-delete page
+   and any future "danger zone" surfaces. */
+.danger-panel {
+    background: var(--color-danger-soft);
+    border: 2px solid var(--color-danger);
+    color: var(--color-ink);
+}
+.danger-panel h2 {
+    color: var(--color-danger);
+    font-weight: 700;
+}
+.danger-panel .danger-list {
+    margin: var(--sp-3) 0;
+    padding-left: 1.25rem;
+}
+.danger-panel .danger-list li {
+    margin-bottom: 0.25rem;
+}
+.danger-panel .danger-form {
+    margin-top: var(--sp-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-3);
+    max-width: 28rem;
+}
+.danger-panel .danger-form label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+.danger-panel .danger-form label > span {
+    color: var(--color-ink);
+    font-weight: 500;
+    font-size: var(--fs-sm);
+}
+.danger-panel .danger-form input {
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--color-danger);
+    border-radius: var(--radius);
+    background: var(--color-surface);
+    font-size: var(--fs-md);
+}
+.danger-panel .danger-form input:focus {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.18);
+}
+/* Danger-zone block at the bottom of /app/team for brokers. */
+.danger-zone {
+    margin-top: var(--sp-6);
+    padding: var(--sp-4) var(--sp-5);
+    border: 1px dashed var(--color-danger);
+    border-radius: var(--radius-lg);
+    background: rgba(220, 38, 38, 0.03);
+}
+.danger-zone h3 {
+    color: var(--color-danger);
+    margin: 0 0 var(--sp-2);
+    font-size: var(--fs-md);
+    font-weight: 700;
+}
+.danger-zone p { margin: 0 0 var(--sp-3); color: var(--color-muted); }
 .alert.success { background: var(--color-success-soft); color: var(--color-success-ink); }
 .alert.info    { background: var(--color-brand-soft); color: var(--color-brand-ink); }
 
@@ -2161,6 +2224,35 @@ progress.progress.small {
     color: var(--color-ink);
 }
 .admin-table tr:hover { background: var(--color-surface-alt); }
+.admin-table th.num, .admin-table td.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Sub-nav across the three admin pages — sits where the old single
+   cross-link button lived. Pill-style links, brand-colored active. */
+.admin-subnav {
+    display: inline-flex;
+    gap: var(--sp-1);
+    padding: 0.25rem;
+    background: var(--color-surface);
+    border: 1px solid var(--color-line);
+    border-radius: 999px;
+}
+.admin-subnav a {
+    padding: 0.4rem 0.85rem;
+    border-radius: 999px;
+    color: var(--color-muted);
+    text-decoration: none;
+    font-size: var(--fs-sm);
+    font-weight: 500;
+    transition: background var(--transition), color var(--transition);
+}
+.admin-subnav a:hover { color: var(--color-ink); background: var(--color-surface-alt); }
+.admin-subnav a.active {
+    background: var(--color-brand);
+    color: #fff;
+}
 .admin-table tr.row-warn { background: rgba(180, 83, 9, 0.04); }
 .admin-table tr.row-warn:hover { background: rgba(180, 83, 9, 0.08); }
 .admin-table .ua-cell {

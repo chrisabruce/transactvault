@@ -19,7 +19,7 @@ use crate::auth::CurrentUser;
 use crate::controllers::transactions::authorize_transaction;
 use crate::error::AppError;
 use crate::forms;
-use crate::models::{Document, NewDocument, Transaction};
+use crate::models::{Document, Transaction};
 use crate::state::AppState;
 use crate::storage::Storage;
 
@@ -120,32 +120,13 @@ pub async fn upload(
                     }
                 }
 
-                // Versioning: find the latest doc with the same filename +
-                // form code on this tx so we know what version number to
-                // assign and which prior row to RELATE `version_of` to.
-                let mut existing_q = state
-                    .db
-                    .query(
-                        "SELECT * FROM $t->has_document->document
-                         WHERE filename = $f AND form_code = $fc
-                         ORDER BY version DESC LIMIT 1",
-                    )
-                    .bind(("t", tx_id.clone()))
-                    .bind(("f", filename.clone()))
-                    .bind(("fc", form_code.clone()))
-                    .await?;
-                let previous: Option<Document> = existing_q.take(0)?;
-                let version = previous.as_ref().map(|p| p.version + 1).unwrap_or(1);
-
-                let storage_key =
-                    make_storage_key(&user.brokerage_id, &tx, &form_code, &filename);
+                let storage_key = make_storage_key(&user.brokerage_id, &tx, &form_code, &filename);
 
                 // Pipe the multipart field straight into S3 multipart
                 // upload — no Vec<u8> buffering, so a 100 MB upload stays
                 // O(part_size) in process memory regardless of total size.
-                let body_stream = (&mut field).map_err(|e| {
-                    std::io::Error::other(format!("multipart read: {e}"))
-                });
+                let body_stream =
+                    (&mut field).map_err(|e| std::io::Error::other(format!("multipart read: {e}")));
                 let mut reader = StreamReader::new(body_stream);
                 let size = state
                     .storage
@@ -163,22 +144,24 @@ pub async fn upload(
 
                 let signed = looks_signed(&filename, &content_type);
 
-                let new_doc: Option<Document> = state
-                    .db
-                    .create("document")
-                    .content(NewDocument {
-                        filename: filename.clone(),
-                        form_code: form_code.clone(),
-                        storage_key: storage_key.clone(),
-                        size_bytes: size as i64,
-                        content_type,
-                        signed,
-                        version,
-                    })
-                    .await?;
-                let doc = new_doc.ok_or_else(|| {
-                    AppError::Internal(anyhow::anyhow!("insert returned nothing"))
-                })?;
+                // Atomic version-lookup + create. Two concurrent uploads
+                // of the same filename / form_code used to both read
+                // "latest = v1" and both insert v2 — see the duplicate
+                // entries that started this fix. Wrapping the read +
+                // write in a SurrealDB transaction makes the engine
+                // serialize them: the second one reads v2 (the row the
+                // first just inserted) and gets v3 instead of a dup v2.
+                let (previous, doc) = create_versioned_document(
+                    &state,
+                    &tx_id,
+                    &filename,
+                    &form_code,
+                    &storage_key,
+                    size as i64,
+                    &content_type,
+                    signed,
+                )
+                .await?;
 
                 uploaded = Some(UploadedDoc { doc, previous });
             }
@@ -186,8 +169,8 @@ pub async fn upload(
         }
     }
 
-    let UploadedDoc { doc, previous } = uploaded
-        .ok_or_else(|| AppError::invalid("Please choose a file to upload."))?;
+    let UploadedDoc { doc, previous } =
+        uploaded.ok_or_else(|| AppError::invalid("Please choose a file to upload."))?;
 
     state
         .db
@@ -673,4 +656,70 @@ fn looks_signed(filename: &str, content_type: &str) -> bool {
 struct UploadedDoc {
     doc: Document,
     previous: Option<Document>,
+}
+
+/// Atomically determine the next version number and create the document
+/// row.
+///
+/// **Why a transaction.** Without one, two simultaneous uploads of the
+/// same `(transaction, filename, form_code)` would both read "latest =
+/// v1" from the prior-version SELECT and both insert a v2 — exactly the
+/// duplicate row symptom that triggered this code path. Wrapping the
+/// read + write in `BEGIN/COMMIT` forces SurrealDB to serialize them:
+/// the later transaction sees the earlier one's v2 row and assigns v3.
+///
+/// Returns `(previous, new)` so the caller can wire the `version_of`
+/// edge and post the audit comment exactly as before.
+#[allow(clippy::too_many_arguments)]
+async fn create_versioned_document(
+    state: &AppState,
+    tx_id: &RecordId,
+    filename: &str,
+    form_code: &str,
+    storage_key: &str,
+    size_bytes: i64,
+    content_type: &str,
+    signed: bool,
+) -> Result<(Option<Document>, Document), AppError> {
+    use surrealdb::types::SurrealValue;
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct VersionedCreate {
+        prev: Option<Document>,
+        new: Document,
+    }
+
+    let mut q = state
+        .db
+        .query(
+            r#"
+            BEGIN TRANSACTION;
+            LET $prev = (SELECT * FROM $t->has_document->document
+                         WHERE filename = $f AND form_code = $fc
+                         ORDER BY version DESC LIMIT 1)[0];
+            LET $v = IF $prev = NONE { 1 } ELSE { $prev.version + 1 };
+            LET $new = (CREATE document CONTENT {
+                filename: $f,
+                form_code: $fc,
+                storage_key: $key,
+                size_bytes: $size,
+                content_type: $ct,
+                signed: $signed,
+                version: $v,
+            })[0];
+            RETURN { prev: $prev, new: $new };
+            COMMIT TRANSACTION;
+            "#,
+        )
+        .bind(("t", tx_id.clone()))
+        .bind(("f", filename.to_string()))
+        .bind(("fc", form_code.to_string()))
+        .bind(("key", storage_key.to_string()))
+        .bind(("size", size_bytes))
+        .bind(("ct", content_type.to_string()))
+        .bind(("signed", signed))
+        .await?;
+    let result: Option<VersionedCreate> = q.take(0)?;
+    let result = result
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("versioned create returned nothing")))?;
+    Ok((result.prev, result.new))
 }

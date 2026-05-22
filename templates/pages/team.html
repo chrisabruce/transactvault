@@ -114,6 +114,17 @@
             </ul>
         </section>
     {% endif %}
+
+    {% if header.role.is_broker() %}
+        <section class="danger-zone" aria-label="Destructive actions">
+            <h3>Danger zone</h3>
+            <p>
+                Permanently delete this brokerage and every user, transaction, document, and
+                comment attached to it. This cannot be undone.
+            </p>
+            <a class="btn danger" href="/app/team/delete-brokerage">Delete brokerage…</a>
+        </section>
+    {% endif %}
 </main>
 
 <script>

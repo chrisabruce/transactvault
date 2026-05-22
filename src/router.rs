@@ -81,10 +81,12 @@ pub fn build(state: AppState) -> Router {
             post(members::cancel_invite),
         )
         .route("/app/team/{user_id}/role", post(members::change_role))
+        .route("/app/team/audit", get(members::audit_log))
         .route(
-            "/app/profile",
-            get(profile::show).post(profile::update),
+            "/app/team/delete-brokerage",
+            get(members::delete_brokerage_form).post(members::delete_brokerage),
         )
+        .route("/app/profile", get(profile::show).post(profile::update))
         .route("/app/profile/password", post(profile::change_password))
         .route("/app/profile/avatar", post(profile::upload_avatar))
         .route("/app/profile/avatar/delete", post(profile::delete_avatar))
@@ -92,6 +94,7 @@ pub fn build(state: AppState) -> Router {
 
     let admin_routes = Router::new()
         .route("/admin", get(admin::users))
+        .route("/admin/brokerages", get(admin::brokerages))
         .route("/admin/audit", get(admin::audit_log));
 
     Router::new()

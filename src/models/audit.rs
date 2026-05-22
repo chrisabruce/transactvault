@@ -51,6 +51,7 @@ impl AuditEvent {
             "profile_updated" => "Profile updated",
             "password_changed" => "Password changed",
             "avatar_updated" => "Avatar updated",
+            "brokerage_deleted" => "Brokerage deleted",
             _ => "Event",
         }
     }
@@ -60,7 +61,8 @@ impl AuditEvent {
         match self.kind.as_str() {
             "verify_success" | "login_success" | "invite_accepted" | "signup_pending" => "ok",
             "logout" | "invite_sent" | "invite_resent" | "admin_view" => "neutral",
-            "login_failure" | "verify_failure" | "invite_cancelled" | "document_deleted" => "fail",
+            "login_failure" | "verify_failure" | "invite_cancelled" | "document_deleted"
+            | "brokerage_deleted" => "fail",
             _ => "blocked",
         }
     }

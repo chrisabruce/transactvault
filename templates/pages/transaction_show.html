@@ -391,10 +391,29 @@
         ));
     }
 
+    // Per-item in-flight guard. If the user drops a second file on the
+    // same row while the first upload is still going (including the
+    // window between "bytes done" and "server responded"), the second
+    // drop is rejected with a small flash. This is what previously
+    // caused duplicate v2 rows: the server was still processing the
+    // first POST, the alert nudged the user to retry, and two writes
+    // raced through the versioning logic.
+    const uploadingItems = new Set();
+
     function startUpload(item, file) {
         const url = item.dataset.uploadUrl;
         const itemId = item.dataset.itemId;
         const formCode = item.dataset.formCode;
+
+        if (uploadingItems.has(itemId)) {
+            const flash = document.createElement('p');
+            flash.className = 'upload-status';
+            flash.textContent = 'Already uploading — please wait.';
+            item.appendChild(flash);
+            setTimeout(() => flash.remove(), 1800);
+            return;
+        }
+        uploadingItems.add(itemId);
 
         const overlay = document.createElement('div');
         overlay.className = 'upload-overlay';
@@ -419,7 +438,21 @@
             if (bar) bar.value = pct;
             if (txt) txt.textContent = pct + '%';
         });
+        // Bytes finished arriving at the server — but the server is
+        // still running DB writes (version lookup, RELATE edges, audit
+        // comment). The previous "stuck at 100%" report came from this
+        // window. Swap to an indeterminate "Processing…" so the user
+        // doesn't assume the upload is frozen and retry.
+        xhr.upload.addEventListener('load', () => {
+            const txt = overlay.querySelector('.upload-pct');
+            const bar = overlay.querySelector('.upload-progress');
+            if (txt) txt.textContent = '';
+            const status = overlay.querySelector('.upload-status');
+            if (status) status.textContent = 'Processing on server…';
+            if (bar) bar.removeAttribute('value'); // indeterminate
+        });
         xhr.addEventListener('load', () => {
+            uploadingItems.delete(itemId);
             if (xhr.status >= 200 && xhr.status < 400) {
                 window.location.reload();
             } else {
@@ -428,8 +461,13 @@
             }
         });
         xhr.addEventListener('error', () => {
+            uploadingItems.delete(itemId);
             overlay.remove();
             alert('Upload failed: network error.');
+        });
+        xhr.addEventListener('abort', () => {
+            uploadingItems.delete(itemId);
+            overlay.remove();
         });
         xhr.send(fd);
     }

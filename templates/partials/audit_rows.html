@@ -1,0 +1,15 @@
+{% for e in events %}
+    <tr>
+        <td><time datetime="{{ e.at }}">{{ e.at.format("%b %-d %H:%M:%S") }}</time></td>
+        <td><span class="audit-pill {{ e.kind_class() }}">{{ e.kind_label() }}</span></td>
+        <td>{% match e.actor_email %}{% when Some with (em) %}<code>{{ em }}</code>{% when None %}—{% endmatch %}</td>
+        <td><code>{% match e.ip %}{% when Some with (ip) %}{{ ip }}{% when None %}—{% endmatch %}</code></td>
+        <td class="ua-cell">{% match e.user_agent %}{% when Some with (ua) %}<small>{{ ua }}</small>{% when None %}—{% endmatch %}</td>
+        <td>{% match e.detail %}{% when Some with (d) %}{{ d }}{% when None %}—{% endmatch %}</td>
+    </tr>
+{% endfor %}
+{% if has_next_page %}
+    <tr class="audit-sentinel" data-audit-sentinel="{{ next_url }}" aria-hidden="true">
+        <td colspan="6"><span class="loader">Loading more…</span></td>
+    </tr>
+{% endif %}

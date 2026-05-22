@@ -82,6 +82,11 @@ impl Document {
 }
 
 #[derive(Debug, Clone, Serialize, SurrealValue)]
+/// Legacy insert struct from before the documents.rs upload handler
+/// switched to a transactional `CREATE … CONTENT` query. Kept on the
+/// model so external callers (admin tools, future bulk-import paths)
+/// have a stable shape to construct against.
+#[allow(dead_code)]
 pub struct NewDocument {
     pub filename: String,
     pub form_code: String,

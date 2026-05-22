@@ -176,7 +176,8 @@ impl Mailer {
              automatically. You can also reply directly to {inviter_email} if you have questions.\n\n\
              — The TransactVault team\n",
         );
-        self.send_with_reply(to, inviter_email, &subject, html, text).await;
+        self.send_with_reply(to, inviter_email, &subject, html, text)
+            .await;
     }
 
     /// Internal: same as `send`, but with a per-message `Reply-To` override.

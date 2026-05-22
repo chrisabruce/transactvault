@@ -5,10 +5,10 @@
 //! change a teammate's role do it from the team page.
 
 use axum::Form;
+use axum::body::Body;
 use axum::extract::{Multipart, Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse, Redirect, Response};
-use axum::body::Body;
 use bytes::Bytes;
 use serde::Deserialize;
 
@@ -51,14 +51,11 @@ pub async fn update(
 ) -> Result<Response, AppError> {
     let name = input.name.trim().to_string();
     if name.is_empty() {
-        return Ok(render_profile(
-            &state,
-            &user,
-            Some("Name can't be empty."),
-            None,
-        )
-        .await?
-        .into_response());
+        return Ok(
+            render_profile(&state, &user, Some("Name can't be empty."), None)
+                .await?
+                .into_response(),
+        );
     }
 
     state
@@ -129,14 +126,11 @@ pub async fn change_password(
 
     let ok = verify_password(&input.current_password, &hash).await?;
     if !ok {
-        return Ok(render_profile(
-            &state,
-            &user,
-            None,
-            Some("Current password is incorrect."),
-        )
-        .await?
-        .into_response());
+        return Ok(
+            render_profile(&state, &user, None, Some("Current password is incorrect."))
+                .await?
+                .into_response(),
+        );
     }
 
     let new_hash = hash_password(&input.new_password).await?;
@@ -181,10 +175,7 @@ pub async fn upload_avatar(
         if field.name().unwrap_or("") != "avatar" {
             continue;
         }
-        content_type = field
-            .content_type()
-            .unwrap_or("image/png")
-            .to_string();
+        content_type = field.content_type().unwrap_or("image/png").to_string();
         let buf = field
             .bytes()
             .await
@@ -299,9 +290,7 @@ pub async fn serve_avatar(
         .bind(("u", user.user_id.clone()))
         .await?;
     let row: Option<Row> = q.take(0).ok().flatten();
-    let storage_key = row
-        .and_then(|r| r.storage_key)
-        .ok_or(AppError::NotFound)?;
+    let storage_key = row.and_then(|r| r.storage_key).ok_or(AppError::NotFound)?;
 
     let bytes = state
         .storage

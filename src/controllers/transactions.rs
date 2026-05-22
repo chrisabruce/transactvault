@@ -426,10 +426,7 @@ fn derive_active_filter(status: &str, attention_on: bool) -> &'static str {
 /// the common truthy spellings users (or links from the dashboard) might
 /// hand us.
 fn is_truthy(v: &Option<String>) -> bool {
-    matches!(
-        v.as_deref(),
-        Some("1" | "true" | "on" | "yes")
-    )
+    matches!(v.as_deref(), Some("1" | "true" | "on" | "yes"))
 }
 
 /// Build the canonical list URL for a given (filter, page, sort) tuple.
@@ -824,10 +821,7 @@ pub async fn update(
         )
         .bind(("t", tx_id.clone()))
         .bind(("address", property_address))
-        .bind((
-            "city",
-            input.city.unwrap_or_default().trim().to_string(),
-        ))
+        .bind(("city", input.city.unwrap_or_default().trim().to_string()))
         .bind((
             "apn",
             input
@@ -881,10 +875,7 @@ pub async fn update(
 /// Mirrors the in-template `compliance.is_locked()`; we recompute here
 /// because the edit endpoints don't build a `CompliancePanel`. An empty
 /// checklist is *not* locked — there's nothing to approve.
-async fn transaction_fully_approved(
-    state: &AppState,
-    tx_id: &RecordId,
-) -> Result<bool, AppError> {
+async fn transaction_fully_approved(state: &AppState, tx_id: &RecordId) -> Result<bool, AppError> {
     #[derive(serde::Deserialize, SurrealValue)]
     struct Row {
         total: i64,

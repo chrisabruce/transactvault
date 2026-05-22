@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% block title %}Brokerages — Admin — {{ app_name }}{% endblock %}
+{% block body_class %}page-app page-admin{% endblock %}
+
+{% block body %}
+{% include "components/app_header.html" %}
+
+<main class="app-main">
+    <header class="page-title">
+        <section>
+            <h1>Admin · Brokerages</h1>
+            <p class="subtitle">Per-brokerage storage and transaction totals.</p>
+        </section>
+        <nav class="admin-subnav" aria-label="Admin sections">
+            <a href="/admin">Users</a>
+            <a href="/admin/brokerages" class="active" aria-current="page">Brokerages</a>
+            <a href="/admin/audit">Audit log</a>
+        </nav>
+    </header>
+
+    <section class="stat-grid" aria-label="System totals">
+        <article class="stat-card">
+            <p class="label">Brokerages</p>
+            <p class="value">{{ total_brokerages_display }}</p>
+        </article>
+        <article class="stat-card">
+            <p class="label">Transactions</p>
+            <p class="value">{{ total_transactions_display }}</p>
+        </article>
+        <article class="stat-card">
+            <p class="label">Documents</p>
+            <p class="value">{{ total_documents_display }}</p>
+        </article>
+        <article class="stat-card">
+            <p class="label">Total storage</p>
+            <p class="value">{{ total_storage_display }}</p>
+        </article>
+    </section>
+
+    {% if rows.is_empty() %}
+        <section class="panel">
+            <section class="empty-state">
+                <h3>No brokerages yet</h3>
+                <p>The first signup will create the first brokerage.</p>
+            </section>
+        </section>
+    {% else %}
+        <section class="panel admin-table-wrap">
+            <table class="admin-table">
+                <thead>
+                    <tr>
+                        <th scope="col">Brokerage</th>
+                        <th scope="col" class="num">Transactions</th>
+                        <th scope="col" class="num">Documents</th>
+                        <th scope="col" class="num">Storage</th>
+                        <th scope="col">Created</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for r in rows %}
+                        <tr>
+                            <td>{{ r.name }}</td>
+                            <td class="num">{{ r.tx_count_display }}</td>
+                            <td class="num">{{ r.document_count_display }}</td>
+                            <td class="num">{{ r.storage_display }}</td>
+                            <td>
+                                <time datetime="{{ r.created_at }}">{{ r.created_at.format("%b %-d, %Y") }}</time>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </section>
+    {% endif %}
+</main>
+{% endblock %}
