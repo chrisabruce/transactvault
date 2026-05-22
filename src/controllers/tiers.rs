@@ -122,6 +122,11 @@ pub async fn create(
     // Stripe first — if it fails the tier never lands in the DB, which
     // keeps the two systems consistent. The Stripe wrapper is a no-op
     // when STRIPE_SECRET_KEY is empty, returning `None` IDs.
+    //
+    // Use `.context()` (not `anyhow!("…: {e}")`) so the Stripe SDK
+    // error stays attached as the `.source()` cause — otherwise the
+    // root error message is collapsed into a string and we lose the
+    // actual reason Stripe rejected the call.
     let sync = state
         .stripe
         .sync_tier(
@@ -132,7 +137,7 @@ pub async fn create(
             parsed.overage_fee_cents_per_tx,
         )
         .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("stripe sync: {e}")))?;
+        .map_err(|e| AppError::Internal(e.context("stripe sync (create)")))?;
 
     let _: Option<Tier> = state
         .db
@@ -220,7 +225,7 @@ pub async fn update(
                 parsed.overage_fee_cents_per_tx,
             )
             .await
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("stripe sync: {e}")))?;
+            .map_err(|e| AppError::Internal(e.context("stripe sync (update)")))?;
         (sync.product_id, sync.price_id, sync.overage_price_id)
     } else {
         (

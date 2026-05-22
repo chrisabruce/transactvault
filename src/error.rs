@@ -52,10 +52,13 @@ impl IntoResponse for AppError {
             AppError::Validation(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
             other => {
-                // Use {:?} so the full error chain (cause/source) prints,
-                // not just the top-level Display message — surrealdb and
-                // askama errors hide the most useful detail in their source.
-                tracing::error!(error = ?other, error_display = %other, "internal server error");
+                // Walk the full `.source()` chain into one string so the
+                // log shows what actually failed at the bottom (e.g. the
+                // Stripe API error body, not just our anyhow context).
+                // JSON tracing collapses multi-line Debug, which would
+                // otherwise hide the chain past the first message.
+                let chain = error_chain(other);
+                tracing::error!(error_chain = %chain, "internal server error");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "Something went wrong. Please try again.".to_string(),
@@ -83,4 +86,19 @@ fn html_escape(input: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
+}
+
+/// Render an error and every cause from `.source()` as a single line:
+/// `outer -> middle -> root`. JSON tracing serializes `?` Debug fields
+/// onto one line and silently drops anything past the first message —
+/// this helper guarantees the bottom-of-stack reason (the part that
+/// usually says *why* something failed) makes it into the log.
+fn error_chain(err: &(dyn std::error::Error + 'static)) -> String {
+    let mut parts: Vec<String> = vec![err.to_string()];
+    let mut cur = err.source();
+    while let Some(src) = cur {
+        parts.push(src.to_string());
+        cur = src.source();
+    }
+    parts.join(" -> ")
 }

@@ -78,6 +78,12 @@ impl Stripe {
             return Ok(TierSyncResult::default());
         };
 
+        // Stripe rejects empty-string fields with
+        // `Empty strings are not allowed for parameter: description`.
+        // Treat a blank textarea as "no description" and omit the
+        // field entirely on the wire.
+        let description_opt = Some(description.trim()).filter(|s| !s.is_empty());
+
         // Product: create or update in place. We keep the same Product
         // across price changes so Stripe Dashboard shows continuous
         // revenue per tier, not a fresh product per price bump.
@@ -91,14 +97,14 @@ impl Stripe {
                 // SDK quirk: `UpdateProduct::description` is owned `String`
                 // while `CreateProduct::description` is `&str`. We absorb
                 // that asymmetry here so callers can pass `&str` to both.
-                upd.description = Some(description.to_string());
+                upd.description = description_opt.map(str::to_string);
                 Product::update(client, &pid, upd)
                     .await
                     .context("Stripe Product::update")?
             }
             None => {
                 let mut create = CreateProduct::new(name);
-                create.description = Some(description);
+                create.description = description_opt;
                 Product::create(client, create)
                     .await
                     .context("Stripe Product::create")?
