@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+
+{% block title %}{% match existing %}{% when Some with (t) %}Edit {{ t.name }}{% when None %}New tier{% endmatch %} — Admin — {{ app_name }}{% endblock %}
+{% block body_class %}page-app page-admin{% endblock %}
+
+{% block body %}
+{% include "components/app_header.html" %}
+
+<main class="app-main">
+    <header class="page-title">
+        <section>
+            <h1>
+                {% match existing %}{% when Some with (t) %}Edit “{{ t.name }}”{% when None %}New tier{% endmatch %}
+            </h1>
+            <p class="subtitle">
+                {% match existing %}{% when Some with (_) %}
+                    Saving creates a new Stripe Price; existing subscribers stay on their current Price until next renewal.
+                {% when None %}
+                    Creates a Stripe Product + recurring monthly Price (and a metered Price if you enable overage billing).
+                {% endmatch %}
+            </p>
+        </section>
+        <a class="btn ghost" href="/admin/tiers">Back to tiers</a>
+    </header>
+
+    {% if !stripe_enabled %}
+        <p class="alert info" role="status">
+            Stripe is currently disabled. You can save the tier locally, but it won't be selectable on the Subscribe flow until <code>STRIPE_SECRET_KEY</code> is set and the tier is re-saved.
+        </p>
+    {% endif %}
+
+    {% match error %}{% when Some with (msg) %}
+        <p class="alert error" role="alert">{{ msg }}</p>
+    {% when None %}{% endmatch %}
+
+    <section class="panel">
+        <form method="post"
+              action="{% match existing %}{% when Some with (t) %}/admin/tiers/{{ t.url_key() }}/edit{% when None %}/admin/tiers/new{% endmatch %}"
+              class="stacked-form">
+
+            <div class="form-row">
+                <label>
+                    <span>Slug</span>
+                    <input type="text"
+                           name="slug"
+                           value="{% match existing %}{% when Some with (t) %}{{ t.slug }}{% when None %}{% endmatch %}"
+                           pattern="[a-z0-9_-]+"
+                           required
+                           placeholder="starter">
+                    <small class="meta">Lowercase, no spaces. Used in URLs; can't be changed after Stripe sync.</small>
+                </label>
+                <label>
+                    <span>Display name</span>
+                    <input type="text" name="name"
+                           value="{% match existing %}{% when Some with (t) %}{{ t.name }}{% when None %}{% endmatch %}"
+                           required placeholder="Starter">
+                </label>
+            </div>
+
+            <label>
+                <span>Description</span>
+                <textarea name="description" rows="2" placeholder="One-line marketing description shown on the pricing page.">{% match existing %}{% when Some with (t) %}{{ t.description }}{% when None %}{% endmatch %}</textarea>
+            </label>
+
+            <label>
+                <span>Feature bullets</span>
+                <textarea name="feature_bullets" rows="4" placeholder="One per line.">{% match existing %}{% when Some with (t) %}{% for b in t.feature_bullets %}{{ b }}
+{% endfor %}{% when None %}{% endmatch %}</textarea>
+                <small class="meta">One bullet per line. Renders as a list on the pricing page.</small>
+            </label>
+
+            <div class="form-row">
+                <label>
+                    <span>Price (USD / month)</span>
+                    <input type="number" name="price_dollars" step="0.01" min="0"
+                           value="{% match existing %}{% when Some with (t) %}{{ t.price_cents / 100 }}{% when None %}0{% endmatch %}"
+                           required>
+                    <small class="meta">Enter dollars; we'll convert to cents.</small>
+                </label>
+                <label>
+                    <span>Sort order</span>
+                    <input type="number" name="sort_order" step="1"
+                           value="{% match existing %}{% when Some with (t) %}{{ t.sort_order }}{% when None %}0{% endmatch %}">
+                    <small class="meta">Lower numbers appear first on the pricing page.</small>
+                </label>
+            </div>
+
+            <div class="form-row">
+                <label>
+                    <span>User limit</span>
+                    <input type="number" name="user_limit" step="1" min="-1"
+                           value="{% match existing %}{% when Some with (t) %}{{ t.user_limit }}{% when None %}-1{% endmatch %}"
+                           required>
+                    <small class="meta"><code>-1</code> means unlimited.</small>
+                </label>
+                <label>
+                    <span>Transactions / month</span>
+                    <input type="number" name="transaction_limit" step="1" min="-1"
+                           value="{% match existing %}{% when Some with (t) %}{{ t.transaction_limit }}{% when None %}-1{% endmatch %}"
+                           required>
+                    <small class="meta"><code>-1</code> means unlimited (resets monthly with billing period).</small>
+                </label>
+            </div>
+
+            <label>
+                <span>Overage fee per transaction (cents) — optional</span>
+                <input type="number" name="overage_fee_cents_per_tx" step="1" min="0"
+                       value="{% match existing %}{% when Some with (t) %}{% match t.overage_fee_cents_per_tx %}{% when Some with (n) %}{{ n }}{% when None %}{% endmatch %}{% when None %}{% endmatch %}"
+                       placeholder="leave empty to hard-block at limit">
+                <small class="meta">If set, exceeding the transaction limit is allowed and billed at this rate via Stripe metered usage. Leave empty to refuse new transactions past the limit.</small>
+            </label>
+
+            <div class="form-row">
+                <label class="checkbox">
+                    <input type="checkbox" name="is_active" value="1"
+                           {% match existing %}{% when Some with (t) %}{% if t.is_active %}checked{% endif %}{% when None %}checked{% endmatch %}>
+                    <span>Visible on the public pricing page</span>
+                </label>
+                {% match existing %}{% when Some with (t) %}
+                    <label class="checkbox">
+                        <input type="checkbox" name="is_archived" value="1"{% if t.is_archived %} checked{% endif %}>
+                        <span>Archived (existing subs keep paying; can't be picked by new brokerages)</span>
+                    </label>
+                {% when None %}{% endmatch %}
+            </div>
+
+            <button type="submit" class="btn">
+                {% match existing %}{% when Some with (_) %}Save changes{% when None %}Create tier{% endmatch %}
+            </button>
+        </form>
+    </section>
+</main>
+{% endblock %}

@@ -52,6 +52,8 @@ impl AuditEvent {
             "password_changed" => "Password changed",
             "avatar_updated" => "Avatar updated",
             "brokerage_deleted" => "Brokerage deleted",
+            "tier_created" => "Tier created",
+            "tier_updated" => "Tier updated",
             _ => "Event",
         }
     }

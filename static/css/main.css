@@ -2253,6 +2253,14 @@ progress.progress.small {
     background: var(--color-brand);
     color: #fff;
 }
+
+/* Used by admin pages that need a small right-aligned action button
+   block beneath the page-title row (Tiers list "+ New tier"). */
+.page-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin: 0 0 var(--sp-4);
+}
 .admin-table tr.row-warn { background: rgba(180, 83, 9, 0.04); }
 .admin-table tr.row-warn:hover { background: rgba(180, 83, 9, 0.08); }
 .admin-table .ua-cell {

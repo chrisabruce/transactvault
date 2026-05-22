@@ -57,6 +57,7 @@ pub struct Config {
 
     pub rustfs: RustFsConfig,
     pub email: EmailConfig,
+    pub stripe: StripeConfig,
 }
 
 /// S3-compatible object storage settings (RustFS by default).
@@ -81,6 +82,33 @@ pub struct EmailConfig {
 impl EmailConfig {
     pub fn is_enabled(&self) -> bool {
         !self.api_key.is_empty()
+    }
+}
+
+/// Stripe settings. An empty `secret_key` disables the Stripe client —
+/// tier writes still happen locally but Product/Price sync is skipped
+/// and Checkout endpoints will refuse with a clear error. Set this
+/// **once** before brokers start subscribing; flipping it on later
+/// won't backfill Stripe IDs onto existing tiers (you'd need to
+/// re-save each tier from the admin UI).
+#[derive(Debug, Clone)]
+pub struct StripeConfig {
+    pub secret_key: String,
+    /// `whsec_…` from the Stripe Dashboard. Required to verify
+    /// incoming webhook payloads; if empty, webhook handler returns
+    /// 400 to avoid mistakenly trusting unsigned requests. Read by
+    /// the Phase 2 webhook endpoint.
+    #[allow(dead_code)]
+    pub webhook_secret: String,
+    /// Free-trial length on Checkout, in days. `0` disables the trial
+    /// (Checkout charges the card immediately). Read by the Phase 2
+    /// Subscribe flow.
+    pub trial_days: u32,
+}
+
+impl StripeConfig {
+    pub fn is_enabled(&self) -> bool {
+        !self.secret_key.is_empty()
     }
 }
 
@@ -152,6 +180,13 @@ impl Config {
                     "TransactVault <no-reply@transactvault.example>",
                 ),
                 reply_to: env::var("RESEND_REPLY_TO").ok().filter(|s| !s.is_empty()),
+            },
+            stripe: StripeConfig {
+                secret_key: env_or("STRIPE_SECRET_KEY", ""),
+                webhook_secret: env_or("STRIPE_WEBHOOK_SECRET", ""),
+                trial_days: env_or("STRIPE_TRIAL_DAYS", "14")
+                    .parse()
+                    .context("STRIPE_TRIAL_DAYS must be a non-negative integer")?,
             },
         })
     }

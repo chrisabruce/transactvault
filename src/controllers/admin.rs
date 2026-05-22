@@ -299,9 +299,14 @@ const AUDIT_KIND_OPTIONS: &[&str] = &[
     "password_changed",
     "avatar_updated",
     "brokerage_deleted",
+    "tier_created",
+    "tier_updated",
 ];
 
-async fn lookup_brokerage_name(state: &AppState, user: &crate::auth::CurrentUser) -> String {
+pub(crate) async fn lookup_brokerage_name(
+    state: &AppState,
+    user: &crate::auth::CurrentUser,
+) -> String {
     let brokerage: Option<crate::models::Brokerage> = state
         .db
         .select(user.brokerage_id.clone())

@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+
+{% block title %}Tiers — Admin — {{ app_name }}{% endblock %}
+{% block body_class %}page-app page-admin{% endblock %}
+
+{% block body %}
+{% include "components/app_header.html" %}
+
+<main class="app-main">
+    <header class="page-title">
+        <section>
+            <h1>Admin · Tiers</h1>
+            <p class="subtitle">Pricing plans synced to Stripe. Changes to price-cents create a new Stripe Price; existing subscribers stay on their current Price until next renewal.</p>
+        </section>
+        <nav class="admin-subnav" aria-label="Admin sections">
+            <a href="/admin">Users</a>
+            <a href="/admin/brokerages">Brokerages</a>
+            <a href="/admin/tiers" class="active" aria-current="page">Tiers</a>
+            <a href="/admin/audit">Audit log</a>
+        </nav>
+    </header>
+
+    {% if !stripe_enabled %}
+        <p class="alert info" role="status">
+            <strong>Stripe is disabled.</strong> Set <code>STRIPE_SECRET_KEY</code> in the environment to enable Product/Price sync. Tiers can still be created and edited in the database — they just won't be selectable on the Subscribe flow until Stripe is wired up and each tier is re-saved.
+        </p>
+    {% endif %}
+
+    {% match flash %}{% when Some with (msg) %}
+        <p class="alert success" role="status">{{ msg }}</p>
+    {% when None %}{% endmatch %}
+
+    <section class="page-actions">
+        <a class="btn" href="/admin/tiers/new">+ New tier</a>
+    </section>
+
+    {% if tiers.is_empty() %}
+        <section class="panel">
+            <section class="empty-state">
+                <h3>No tiers yet</h3>
+                <p>Create your first pricing tier to make subscriptions available.</p>
+                <a class="btn" href="/admin/tiers/new">Create first tier</a>
+            </section>
+        </section>
+    {% else %}
+        <section class="panel admin-table-wrap">
+            <table class="admin-table">
+                <thead>
+                    <tr>
+                        <th scope="col">Tier</th>
+                        <th scope="col" class="num">Price / mo</th>
+                        <th scope="col" class="num">Users</th>
+                        <th scope="col" class="num">Transactions</th>
+                        <th scope="col" class="num">Overage</th>
+                        <th scope="col">State</th>
+                        <th scope="col">Stripe</th>
+                        <th scope="col"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for t in tiers %}
+                        <tr>
+                            <td>
+                                <strong>{{ t.name }}</strong>
+                                <small class="meta"><code>{{ t.slug }}</code></small>
+                            </td>
+                            <td class="num">{{ t.price_display() }}</td>
+                            <td class="num">{{ t.user_limit_display() }}</td>
+                            <td class="num">{{ t.transaction_limit_display() }}</td>
+                            <td class="num">
+                                {% match t.overage_fee_cents_per_tx %}{% when Some with (cents) %}
+                                    {{ cents }}¢ / tx
+                                {% when None %}
+                                    <span class="meta">Block</span>
+                                {% endmatch %}
+                            </td>
+                            <td>
+                                {% if t.is_archived %}
+                                    <span class="chip status-withdrawn">Archived</span>
+                                {% else if t.is_active %}
+                                    <span class="chip status-active">Active</span>
+                                {% else %}
+                                    <span class="chip status-pending">Hidden</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% match t.stripe_price_id %}{% when Some with (id) %}
+                                    <code class="meta">{{ id }}</code>
+                                {% when None %}
+                                    <span class="meta">— not synced —</span>
+                                {% endmatch %}
+                            </td>
+                            <td>
+                                <a class="btn small secondary" href="/admin/tiers/{{ t.url_key() }}/edit">Edit</a>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </section>
+    {% endif %}
+</main>
+{% endblock %}

@@ -120,8 +120,66 @@ DEFINE TABLE OVERWRITE brokerage SCHEMAFULL;
 DEFINE FIELD OVERWRITE name       ON brokerage TYPE string ASSERT string::len($value) >= 1;
 DEFINE FIELD OVERWRITE city       ON brokerage TYPE option<string>;
 DEFINE FIELD OVERWRITE state      ON brokerage TYPE string DEFAULT "CA";
-DEFINE FIELD OVERWRITE plan       ON brokerage TYPE string DEFAULT "trial"
-    ASSERT $value IN ["trial", "starter", "growth", "scale", "enterprise"];
+-- `plan` carries the tier slug the brokerage is subscribed to (e.g.
+-- "starter", "pro"). Tiers are admin-managed now, so the old strict
+-- ASSERT is gone — validation lives at the app layer against the
+-- `tier` table.
+DEFINE FIELD OVERWRITE plan       ON brokerage TYPE string DEFAULT "trial";
+-- Stripe wiring. Set at first subscribe; persists across re-subs so
+-- we keep one Customer object per brokerage and Stripe's invoice
+-- history stays continuous.
+DEFINE FIELD OVERWRITE stripe_customer_id     ON brokerage TYPE option<string>;
+DEFINE FIELD OVERWRITE stripe_subscription_id ON brokerage TYPE option<string>;
+-- Mirror of the Stripe subscription state. Source of truth is Stripe;
+-- webhooks keep this current.
+--   trialing      — inside the 14-day free trial, no card charge yet
+--   active        — paid, in good standing
+--   past_due      — payment failed; Stripe will retry
+--   canceling     — user clicked cancel, still inside the paid window
+--                   (`cancel_at` set); read/write still allowed
+--   wind_down     — paid window ended; read-only 60-day grace before
+--                   admin-driven purge; `wind_down_purge_at` set
+--   none          — never subscribed
+DEFINE FIELD OVERWRITE subscription_status    ON brokerage TYPE option<string>;
+DEFINE FIELD OVERWRITE current_period_end     ON brokerage TYPE option<datetime>;
+DEFINE FIELD OVERWRITE cancel_at              ON brokerage TYPE option<datetime>;
+DEFINE FIELD OVERWRITE wind_down_purge_at     ON brokerage TYPE option<datetime>;
+
+-- ----------------------------------------------------------------------------
+-- Tier — pricing plan definitions managed from the super-admin UI.
+-- Each tier mirrors a Stripe Product + Price pair; the slug is the
+-- stable identifier referenced from `brokerage.plan`. Price changes
+-- create a new Stripe Price (Prices are immutable); the old one stays
+-- attached to existing subscribers until they next renew.
+-- ----------------------------------------------------------------------------
+DEFINE TABLE OVERWRITE tier SCHEMAFULL;
+DEFINE FIELD OVERWRITE slug                    ON tier TYPE string
+    ASSERT string::len($value) >= 1 AND $value = string::lowercase($value);
+DEFINE FIELD OVERWRITE name                    ON tier TYPE string ASSERT string::len($value) >= 1;
+DEFINE FIELD OVERWRITE description             ON tier TYPE string DEFAULT "";
+DEFINE FIELD OVERWRITE feature_bullets         ON tier TYPE array<string> DEFAULT [];
+DEFINE FIELD OVERWRITE price_cents             ON tier TYPE int DEFAULT 0 ASSERT $value >= 0;
+DEFINE FIELD OVERWRITE stripe_product_id       ON tier TYPE option<string>;
+DEFINE FIELD OVERWRITE stripe_price_id         ON tier TYPE option<string>;
+DEFINE FIELD OVERWRITE stripe_overage_price_id ON tier TYPE option<string>;
+-- `-1` means unlimited; `0` and positive ints are real caps. Limits
+-- reset monthly with the billing period (transactions); user_limit
+-- is a steady-state cap.
+DEFINE FIELD OVERWRITE user_limit              ON tier TYPE int DEFAULT -1;
+DEFINE FIELD OVERWRITE transaction_limit       ON tier TYPE int DEFAULT -1;
+-- `None` means hard-block at the transaction limit; `Some(n)` means
+-- allow over and bill `n` cents per overage transaction via Stripe
+-- metered usage.
+DEFINE FIELD OVERWRITE overage_fee_cents_per_tx ON tier TYPE option<int>
+    ASSERT $value = NONE OR $value >= 0;
+DEFINE FIELD OVERWRITE is_active               ON tier TYPE bool DEFAULT true;
+DEFINE FIELD OVERWRITE is_archived             ON tier TYPE bool DEFAULT false;
+DEFINE FIELD OVERWRITE sort_order              ON tier TYPE int DEFAULT 0;
+DEFINE FIELD OVERWRITE created_at              ON tier TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE updated_at              ON tier TYPE datetime DEFAULT time::now() VALUE time::now();
+
+DEFINE INDEX OVERWRITE idx_tier_slug   ON tier FIELDS slug UNIQUE;
+DEFINE INDEX OVERWRITE idx_tier_active ON tier FIELDS is_active, is_archived;
 DEFINE FIELD OVERWRITE created_at ON brokerage TYPE datetime DEFAULT time::now();
 DEFINE FIELD OVERWRITE updated_at ON brokerage TYPE datetime DEFAULT time::now() VALUE time::now();
 
@@ -304,7 +362,8 @@ DEFINE FIELD OVERWRITE kind ON audit_event TYPE string
         "invite_accepted", "admin_view",
         "document_deleted",
         "profile_updated", "password_changed", "avatar_updated",
-        "brokerage_deleted"
+        "brokerage_deleted",
+        "tier_created", "tier_updated"
     ];
 DEFINE FIELD OVERWRITE actor_email ON audit_event TYPE option<string>;
 DEFINE FIELD OVERWRITE actor       ON audit_event TYPE option<record<user>>;

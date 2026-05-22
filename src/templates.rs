@@ -672,6 +672,31 @@ pub struct AdminAuditPage<'a> {
 }
 
 #[derive(Template)]
+#[template(path = "pages/admin_tiers.html")]
+pub struct AdminTiersPage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+    pub signed_in: bool,
+    pub header: AppHeader<'a>,
+    pub tiers: Vec<crate::models::Tier>,
+    pub stripe_enabled: bool,
+    pub flash: Option<&'a str>,
+}
+
+#[derive(Template)]
+#[template(path = "pages/admin_tier_edit.html")]
+pub struct AdminTierEditPage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+    pub signed_in: bool,
+    pub header: AppHeader<'a>,
+    /// `None` when rendering the "new tier" form; `Some` when editing.
+    pub existing: Option<crate::models::Tier>,
+    pub stripe_enabled: bool,
+    pub error: Option<&'a str>,
+}
+
+#[derive(Template)]
 #[template(path = "pages/admin_brokerages.html")]
 pub struct AdminBrokeragesPage<'a> {
     pub app_name: &'a str,

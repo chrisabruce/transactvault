@@ -9,6 +9,7 @@ pub mod checklist;
 pub mod comment;
 pub mod document;
 pub mod invitation;
+pub mod tier;
 pub mod transaction;
 pub mod user;
 
@@ -20,6 +21,9 @@ pub use document::Document;
 #[allow(unused_imports)]
 pub use document::NewDocument;
 pub use invitation::{Invitation, NewInvitation};
+#[allow(unused_imports)]
+pub use tier::NewTier;
+pub use tier::Tier;
 pub use transaction::{
     NewTransaction, SalesType, SpecialSalesCondition, Transaction, TransactionStatus,
     TransactionType,

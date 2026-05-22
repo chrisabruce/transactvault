@@ -23,6 +23,7 @@ mod router;
 mod security;
 mod state;
 mod storage;
+mod stripe;
 mod templates;
 
 use crate::config::Config;
@@ -75,8 +76,9 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let mailer = email::Mailer::new(&config.email);
+    let stripe_client = stripe::Stripe::new(&config.stripe);
 
-    let state = AppState::new(db, storage, mailer, config.clone());
+    let state = AppState::new(db, storage, mailer, stripe_client, config.clone());
     let app = router::build(state);
 
     let addr: SocketAddr = format!("{}:{}", config.host, config.port).parse()?;

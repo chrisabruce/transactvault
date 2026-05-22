@@ -37,6 +37,11 @@ async-stream = "0.3"
 tokio-util = { version = "0.7", features = ["io"] }
 rust-s3 = { version = "0.37", default-features = false, features = ["tokio-rustls-tls"] }
 resend-rs = { version = "0.25", default-features = false, features = ["rustls-tls"] }
+# `async-stripe` 0.x. We pick exactly the features we use to keep
+# compile time + dep tree minimal: billing (Product / Price /
+# Subscription / Invoice), checkout (Session), webhook-events (signed
+# event parsing), and runtime-tokio-rustls (no native-tls).
+async-stripe = { version = "0.41", default-features = false, features = ["runtime-tokio-hyper-rustls", "billing", "checkout", "connect", "webhook-events"] }
 bytes = "1"
 sha2 = "0.10"
 hmac = "0.12"

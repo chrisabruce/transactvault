@@ -9,6 +9,7 @@ use crate::config::Config;
 use crate::email::Mailer;
 use crate::security::RateLimiter;
 use crate::storage::Storage;
+use crate::stripe::Stripe;
 
 /// Type alias for the single-engine SurrealDB connection handle.
 pub type Db = Surreal<Any>;
@@ -20,6 +21,7 @@ pub struct AppState {
     pub db: Db,
     pub storage: Storage,
     pub mailer: Mailer,
+    pub stripe: Stripe,
     pub config: Arc<Config>,
     /// Per-IP token-bucket limiter shared across the whole app. Keyed by
     /// `"<scope>:<ip>"` so different scopes (signup, login, …) live in
@@ -28,11 +30,12 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(db: Db, storage: Storage, mailer: Mailer, config: Config) -> Self {
+    pub fn new(db: Db, storage: Storage, mailer: Mailer, stripe: Stripe, config: Config) -> Self {
         Self {
             db,
             storage,
             mailer,
+            stripe,
             config: Arc::new(config),
             rate_limiter: RateLimiter::new(),
         }

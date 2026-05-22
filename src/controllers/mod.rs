@@ -9,6 +9,7 @@ pub mod health;
 pub mod marketing;
 pub mod members;
 pub mod profile;
+pub mod tiers;
 pub mod transactions;
 
 use askama::Template;
