@@ -40,10 +40,30 @@ pub async fn pricing(
     let rows: Vec<Tier> = q.take(0).unwrap_or_default();
 
     let signed_in = user.is_some();
+
+    // For signed-in brokers, look up their current plan so we can
+    // mark the matching tier "Current plan" and disable the CTA —
+    // clicking Subscribe again is just confusion + a wasted Stripe
+    // round-trip. Failures are silent: visitors with no resolvable
+    // brokerage see the same view as anonymous visitors.
+    let current_plan = match user.as_ref() {
+        Some(u) => {
+            let b: Option<crate::models::Brokerage> =
+                state.db.select(u.brokerage_id.clone()).await.ok().flatten();
+            b.map(|b| b.plan)
+        }
+        None => None,
+    };
+
     let tiers: Vec<PricingTierView> = rows
         .into_iter()
         .map(|t| {
-            let (href, label) = if signed_in {
+            let is_current = current_plan.as_deref() == Some(&t.slug);
+            let (href, label) = if is_current {
+                // Disabled-style "Current plan" — empty href stops the
+                // anchor from doing anything; CSS dims it.
+                ("#".to_string(), "Current plan")
+            } else if signed_in {
                 (format!("/app/subscribe/{}", t.slug), "Subscribe")
             } else {
                 (format!("/signup?plan={}", t.slug), "Start free trial")
@@ -52,6 +72,7 @@ pub async fn pricing(
                 tier: t,
                 subscribe_href: href,
                 button_label: label,
+                is_current,
             }
         })
         .collect();

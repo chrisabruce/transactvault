@@ -39,6 +39,39 @@
         </article>
     </section>
 
+    {% if !pending.is_empty() %}
+        <section class="panel danger-panel" aria-label="Pending deletion">
+            <h2>Pending deletion ({{ pending.len() }})</h2>
+            <p>These brokerages have been in wind-down past their 60-day grace window. Confirm with the broker before purging, then click <strong>Delete brokerage</strong> on the row below to remove every transaction, document, and user.</p>
+            <table class="admin-table">
+                <thead>
+                    <tr>
+                        <th scope="col">Brokerage</th>
+                        <th scope="col" class="num">Transactions</th>
+                        <th scope="col" class="num">Documents</th>
+                        <th scope="col" class="num">Storage</th>
+                        <th scope="col">Grace ended</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for r in pending %}
+                        <tr>
+                            <td>{{ r.name }}</td>
+                            <td class="num">{{ r.tx_count_display }}</td>
+                            <td class="num">{{ r.document_count_display }}</td>
+                            <td class="num">{{ r.storage_display }}</td>
+                            <td>
+                                {% match r.purge_due_at %}{% when Some with (d) %}
+                                    <time datetime="{{ d }}">{{ d.format("%b %-d, %Y") }}</time>
+                                {% when None %}—{% endmatch %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </section>
+    {% endif %}
+
     {% if rows.is_empty() %}
         <section class="panel">
             <section class="empty-state">

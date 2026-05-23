@@ -13,8 +13,9 @@ use stripe::{
     BillingPortalSession, CheckoutSession, CheckoutSessionMode, Client, CreateBillingPortalSession,
     CreateCheckoutSession, CreateCheckoutSessionLineItems, CreateCheckoutSessionSubscriptionData,
     CreateCustomer, CreatePrice, CreatePriceRecurring, CreatePriceRecurringInterval,
-    CreatePriceRecurringUsageType, CreateProduct, Currency, Customer, CustomerId, IdOrCreate,
-    Price, Product, ProductId, UpdateProduct,
+    CreatePriceRecurringUsageType, CreateProduct, CreateUsageRecord, Currency, Customer,
+    CustomerId, IdOrCreate, Price, Product, ProductId, Subscription, SubscriptionId, UpdateProduct,
+    UsageRecord, UsageRecordAction,
 };
 
 use crate::config::StripeConfig;
@@ -287,6 +288,59 @@ impl Stripe {
             .await
             .context("Stripe BillingPortalSession::create")?;
         Ok(session.url)
+    }
+
+    /// Report metered usage for a brokerage that's exceeded its
+    /// tier's transaction limit. Resolves the subscription's metered
+    /// item (the one created from `tier.stripe_overage_price_id`) and
+    /// POSTs `{quantity, action=increment}` so Stripe aggregates at
+    /// billing-period end. No-op when the subscription has no
+    /// metered item, when Stripe is disabled, or when the lookup
+    /// fails — overage reporting is best-effort and shouldn't block
+    /// the user-facing create.
+    pub async fn report_overage_usage(
+        &self,
+        subscription_id: &str,
+        quantity: u64,
+    ) -> anyhow::Result<()> {
+        let Some(client) = self.client.as_ref() else {
+            return Ok(());
+        };
+        let sub_id: SubscriptionId = subscription_id
+            .parse()
+            .with_context(|| format!("invalid subscription id: {subscription_id}"))?;
+        let sub = Subscription::retrieve(client, &sub_id, &[])
+            .await
+            .context("Stripe Subscription::retrieve")?;
+
+        // Pick the first metered item — there should only be one per
+        // our Checkout configuration (recurring + optional overage).
+        let metered_item = sub.items.data.iter().find(|it| {
+            it.price
+                .as_ref()
+                .and_then(|p| p.recurring.as_ref())
+                .map(|r| matches!(r.usage_type, stripe::RecurringUsageType::Metered))
+                .unwrap_or(false)
+        });
+        let Some(item) = metered_item else {
+            tracing::debug!(subscription = %subscription_id, "no metered subscription item — skipping overage report");
+            return Ok(());
+        };
+
+        let mut params = CreateUsageRecord {
+            quantity,
+            action: Some(UsageRecordAction::Increment),
+            timestamp: None, // "now" — Stripe stamps with current time.
+        };
+        // SDK quirk: the default action is Increment server-side too,
+        // but spelling it out keeps the intent self-documenting on
+        // log lines that include the params object.
+        params.action = Some(UsageRecordAction::Increment);
+
+        UsageRecord::create(client, &item.id, params)
+            .await
+            .context("Stripe UsageRecord::create")?;
+        Ok(())
     }
 
     /// Archive a Product in Stripe (sets `active=false`). Existing

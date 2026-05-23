@@ -1,3 +1,14 @@
+{% match header.banner %}{% when Some with (b) %}
+<aside class="app-banner {{ b.level.as_css() }}" role="status">
+    <p>{{ b.message }}</p>
+    {% match b.action_href %}{% when Some with (href) %}
+        {% match b.action_label %}{% when Some with (label) %}
+            <a href="{{ href }}">{{ label }}</a>
+        {% when None %}{% endmatch %}
+    {% when None %}{% endmatch %}
+</aside>
+{% when None %}{% endmatch %}
+
 <header class="app-header">
     <nav aria-label="App">
         <a href="/app" class="brand-mark" aria-label="{{ app_name }} home">

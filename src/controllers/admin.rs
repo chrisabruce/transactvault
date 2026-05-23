@@ -94,11 +94,18 @@ pub async fn users(
     let total = rows.len();
     let verified_count = rows.iter().filter(|r| r.email_verified).count();
     let unverified_count = total - verified_count;
-    let brokerage_name = lookup_brokerage_name(&state, &user).await;
+    let info = crate::billing::header_info_for_user(&state, &user).await;
 
-    let header = AppHeader::new(&user.name, &user.email, user.role, &brokerage_name, "admin")
-        .with_super_admin(true)
-        .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar);
+    let header = AppHeader::new(
+        &user.name,
+        &user.email,
+        user.role,
+        &info.brokerage_name,
+        "admin",
+    )
+    .with_super_admin(true)
+    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
+    .with_banner(info.banner);
     render(&AdminUsersPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
@@ -144,6 +151,8 @@ pub async fn brokerages(
                 name,
                 created_at,
                 is_complimentary,
+                subscription_status,
+                wind_down_purge_at,
                 count((SELECT id FROM $parent.id->has_transaction->transaction)) AS tx_count,
                 count((SELECT id FROM $parent.id->has_transaction->transaction->has_document->document)) AS doc_count,
                 math::sum((SELECT VALUE size_bytes FROM $parent.id->has_transaction->transaction->has_document->document)) AS bytes_used
@@ -160,6 +169,10 @@ pub async fn brokerages(
         created_at: DateTime<Utc>,
         #[serde(default)]
         is_complimentary: bool,
+        #[serde(default)]
+        subscription_status: Option<String>,
+        #[serde(default)]
+        wind_down_purge_at: Option<DateTime<Utc>>,
         tx_count: Option<i64>,
         doc_count: Option<i64>,
         bytes_used: Option<i64>,
@@ -172,6 +185,8 @@ pub async fn brokerages(
     let mut total_tx: u64 = 0;
     let mut total_docs: u64 = 0;
     let mut total_bytes: u64 = 0;
+    let now = Utc::now();
+    let mut pending: Vec<AdminBrokerageRow> = Vec::new();
     let rows: Vec<AdminBrokerageRow> = raw
         .into_iter()
         .map(|r| {
@@ -181,7 +196,12 @@ pub async fn brokerages(
             total_tx += tx;
             total_docs += docs;
             total_bytes += bytes;
-            AdminBrokerageRow {
+            // Brokerages whose 60-day grace has elapsed are eligible
+            // for manual purge — split them into a separate list so
+            // they stand out from healthy accounts.
+            let purge_due = r.subscription_status.as_deref() == Some("wind_down")
+                && r.wind_down_purge_at.map(|d| d <= now).unwrap_or(false);
+            let row = AdminBrokerageRow {
                 key: crate::db::record_key(&r.id),
                 name: r.name,
                 created_at: r.created_at,
@@ -189,14 +209,26 @@ pub async fn brokerages(
                 document_count_display: docs.to_formatted_string(&Locale::en),
                 storage_display: format_size(bytes, DECIMAL),
                 is_complimentary: r.is_complimentary,
+                purge_due_at: r.wind_down_purge_at,
+            };
+            if purge_due {
+                pending.push(row.clone());
             }
+            row
         })
         .collect();
 
-    let brokerage_name = lookup_brokerage_name(&state, &user).await;
-    let header = AppHeader::new(&user.name, &user.email, user.role, &brokerage_name, "admin")
-        .with_super_admin(true)
-        .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar);
+    let info = crate::billing::header_info_for_user(&state, &user).await;
+    let header = AppHeader::new(
+        &user.name,
+        &user.email,
+        user.role,
+        &info.brokerage_name,
+        "admin",
+    )
+    .with_super_admin(true)
+    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
+    .with_banner(info.banner);
 
     let total_brokerages = rows.len() as u64;
     render(&AdminBrokeragesPage {
@@ -205,6 +237,7 @@ pub async fn brokerages(
         signed_in: true,
         header,
         rows,
+        pending,
         total_brokerages_display: total_brokerages.to_formatted_string(&Locale::en),
         total_transactions_display: total_tx.to_formatted_string(&Locale::en),
         total_documents_display: total_docs.to_formatted_string(&Locale::en),
@@ -267,11 +300,18 @@ pub async fn audit_log(
         });
     }
 
-    let brokerage_name = lookup_brokerage_name(&state, &user).await;
+    let info = crate::billing::header_info_for_user(&state, &user).await;
 
-    let header = AppHeader::new(&user.name, &user.email, user.role, &brokerage_name, "admin")
-        .with_super_admin(true)
-        .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar);
+    let header = AppHeader::new(
+        &user.name,
+        &user.email,
+        user.role,
+        &info.brokerage_name,
+        "admin",
+    )
+    .with_super_admin(true)
+    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
+    .with_banner(info.banner);
     render(&AdminAuditPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
@@ -313,19 +353,6 @@ const AUDIT_KIND_OPTIONS: &[&str] = &[
     "brokerage_comp_granted",
     "brokerage_comp_revoked",
 ];
-
-pub(crate) async fn lookup_brokerage_name(
-    state: &AppState,
-    user: &crate::auth::CurrentUser,
-) -> String {
-    let brokerage: Option<crate::models::Brokerage> = state
-        .db
-        .select(user.brokerage_id.clone())
-        .await
-        .ok()
-        .flatten();
-    brokerage.map(|b| b.name).unwrap_or_default()
-}
 
 /// Toggle the `is_complimentary` flag on a brokerage. Super-admin only.
 /// Grants (or revokes) free unlimited access — bypasses Stripe and the

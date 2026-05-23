@@ -5,6 +5,7 @@
 //! then looks up the user and their brokerage membership via graph traversal.
 
 use axum::extract::FromRequestParts;
+use axum::http::Method;
 use axum::http::request::Parts;
 use serde::Deserialize;
 use surrealdb::types::{RecordId, SurrealValue};
@@ -71,15 +72,38 @@ impl FromRequestParts<AppState> for CurrentUser {
 
         let role = Role::parse(&membership.role).ok_or(AppError::Forbidden)?;
 
-        Ok(CurrentUser {
+        let current = CurrentUser {
             user_id,
             brokerage_id: membership.brokerage,
             email: profile.email,
             name: profile.name,
             role,
             has_avatar: profile.avatar_storage_key.is_some(),
-        })
+        };
+
+        // Subscription gate. Reads stay open so a brokerage in
+        // wind-down can still export their data during the grace
+        // period; writes (anything mutating data) get blocked. Scoped
+        // to `/app/*` so admin routes — which go through `SuperAdmin`
+        // wrapping `CurrentUser` — aren't affected by their own
+        // brokerage's billing state.
+        if is_app_write(parts) {
+            crate::billing::assert_brokerage_writable(state, &current).await?;
+        }
+
+        Ok(current)
     }
+}
+
+/// True when the request is a write under `/app/*`. Used by the
+/// subscription gate to skip reads (export-friendly during grace)
+/// and to leave `/admin/*` + public routes alone.
+fn is_app_write(parts: &Parts) -> bool {
+    let writing = matches!(
+        parts.method,
+        Method::POST | Method::PUT | Method::PATCH | Method::DELETE
+    );
+    writing && parts.uri.path().starts_with("/app/")
 }
 
 /// Optional variant — used on pages that change their shape when signed in

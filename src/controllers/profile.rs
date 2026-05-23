@@ -327,7 +327,8 @@ async fn render_profile(
         "profile",
     )
     .with_super_admin(crate::controllers::is_super_admin(state, user))
-    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar);
+    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
+    .with_banner(crate::billing::banner_for(&brokerage));
 
     render(&ProfilePage {
         app_name: &state.config.app_name,

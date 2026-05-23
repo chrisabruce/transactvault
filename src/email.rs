@@ -213,6 +213,81 @@ impl Mailer {
             Err(err) => tracing::warn!(%to, %subject, error = %err, "email send failed"),
         }
     }
+
+    /// Notify a broker that their tier's monthly price has changed.
+    /// The new amount applies on the next billing cycle, so this is
+    /// purely informational — Stripe handles the proration when their
+    /// subscription renews.
+    pub async fn send_price_change(
+        &self,
+        to: &str,
+        broker_name: &str,
+        tier_name: &str,
+        old_price_display: &str,
+        new_price_display: &str,
+        app_url: &str,
+    ) {
+        let subject = format!("Update to your {tier_name} plan pricing");
+        let html = format!(
+            "<!doctype html><html><body style=\"font-family:system-ui,sans-serif;color:#0f172a;\
+                                                 max-width:560px;margin:0 auto;padding:1rem\">\
+               <p>Hi {name},</p>\
+               <p>We're writing to let you know that the price of the <strong>{tier}</strong> plan is changing.</p>\
+               <p style=\"font-size:1.1em\"><span style=\"color:#475569;text-decoration:line-through\">{old}/mo</span> &rarr; <strong>{new}/mo</strong></p>\
+               <p>Your current billing cycle is unaffected — the new rate applies on your next renewal.</p>\
+               <p>If you'd like to switch plans or cancel, you can do that any time from <a href=\"{app_url}/app/billing/portal\">Manage subscription</a>.</p>\
+               <p>— The TransactVault team</p>\
+             </body></html>",
+            name = html_escape(broker_name),
+            tier = html_escape(tier_name),
+            old = html_escape(old_price_display),
+            new = html_escape(new_price_display),
+            app_url = app_url,
+        );
+        let text = format!(
+            "Hi {broker_name},\n\n\
+             The price of the {tier_name} plan is changing.\n\
+             {old_price_display}/mo -> {new_price_display}/mo\n\n\
+             Your current billing cycle is unaffected — the new rate applies on your next renewal.\n\
+             Manage subscription: {app_url}/app/billing/portal\n\n\
+             — The TransactVault team\n",
+        );
+        self.send(to, &subject, html, text).await;
+    }
+
+    /// Friendly reminder that the broker's free trial ends in a few
+    /// days. Triggered by Stripe's `customer.subscription.trial_will_end`
+    /// webhook (3 days before the trial actually ends).
+    pub async fn send_trial_ending(
+        &self,
+        to: &str,
+        broker_name: &str,
+        trial_end_display: &str,
+        app_url: &str,
+    ) {
+        let subject = "Your TransactVault trial ends soon".to_string();
+        let html = format!(
+            "<!doctype html><html><body style=\"font-family:system-ui,sans-serif;color:#0f172a;\
+                                                 max-width:560px;margin:0 auto;padding:1rem\">\
+               <p>Hi {name},</p>\
+               <p>Just a heads-up — your free trial ends on <strong>{when}</strong>. After that, your card will be charged for the first paid month.</p>\
+               <p>If you'd like to switch plans or cancel before then, you can do that from <a href=\"{app_url}/app/billing/portal\">Manage subscription</a>.</p>\
+               <p>No action needed if you want to continue — we'll keep things running.</p>\
+               <p>— The TransactVault team</p>\
+             </body></html>",
+            name = html_escape(broker_name),
+            when = html_escape(trial_end_display),
+            app_url = app_url,
+        );
+        let text = format!(
+            "Hi {broker_name},\n\n\
+             Your free trial ends on {trial_end_display}. After that, your card will be charged for the first paid month.\n\n\
+             Manage subscription: {app_url}/app/billing/portal\n\n\
+             No action needed if you want to continue.\n\n\
+             — The TransactVault team\n",
+        );
+        self.send(to, &subject, html, text).await;
+    }
 }
 
 fn html_escape(s: &str) -> String {

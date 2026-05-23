@@ -460,6 +460,33 @@ a.btn {
     transition: transform var(--transition), border-color var(--transition), box-shadow var(--transition);
 }
 .plan-card:hover { transform: translateY(-3px); box-shadow: var(--shadow); }
+
+/* "Current plan" callout on the pricing grid — green border + pill
+   in the heading so the broker can tell at a glance which one is
+   theirs. CTA is rendered as a dimmed span (not an anchor) so the
+   tier they're already on doesn't pretend to be clickable. */
+.plan-card.current {
+    border-color: var(--color-success);
+    box-shadow: 0 0 0 1px var(--color-success);
+}
+.plan-card .badge.current {
+    margin-inline-start: 0.5rem;
+    padding: 0.1rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    background: var(--color-success-soft);
+    color: var(--color-success-ink);
+    vertical-align: 0.15em;
+}
+.btn.disabled,
+.btn[aria-disabled="true"] {
+    opacity: 0.55;
+    cursor: not-allowed;
+    pointer-events: none;
+}
 .plan-card.popular {
     border-color: var(--color-brand);
     box-shadow: 0 0 0 3px var(--color-brand-soft), var(--shadow-lg);
@@ -680,6 +707,41 @@ form .form-row { display: grid; gap: var(--sp-3); grid-template-columns: 1fr 1fr
     font-size: var(--fs-sm);
 }
 .alert.error   { background: var(--color-danger-soft); color: var(--color-danger); }
+
+/* In-app subscription banner. Rendered above the app header on every
+   authenticated page when the brokerage is in a non-trivial billing
+   state (past_due / canceling / wind_down). */
+.app-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--sp-3);
+    padding: 0.75rem 1.25rem;
+    border-bottom: 1px solid transparent;
+    font-size: var(--fs-sm);
+}
+.app-banner p { margin: 0; }
+.app-banner a {
+    color: inherit;
+    text-decoration: underline;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.app-banner.info {
+    background: var(--color-brand-soft);
+    color: var(--color-brand-ink);
+    border-bottom-color: var(--color-brand);
+}
+.app-banner.warn {
+    background: var(--color-warn-soft);
+    color: var(--color-warn);
+    border-bottom-color: var(--color-warn);
+}
+.app-banner.danger {
+    background: var(--color-danger-soft);
+    color: var(--color-danger);
+    border-bottom-color: var(--color-danger);
+}
 
 /* Destructive-action surface: deep red border + soft tint so it can't
    be mistaken for a normal panel. Used by the brokerage-delete page

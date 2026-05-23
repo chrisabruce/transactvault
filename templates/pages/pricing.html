@@ -41,9 +41,9 @@
         {% else %}
             <section class="pricing-grid">
                 {% for view in tiers %}
-                    <article class="plan-card">
+                    <article class="plan-card{% if view.is_current %} current{% endif %}">
                         <header>
-                            <h3>{{ view.tier.name }}</h3>
+                            <h3>{{ view.tier.name }}{% if view.is_current %} <span class="badge current">Current</span>{% endif %}</h3>
                             {% if !view.tier.description.is_empty() %}
                                 <p class="plan-best">{{ view.tier.description }}</p>
                             {% endif %}
@@ -55,7 +55,11 @@
                                 <li>{{ bullet }}</li>
                             {% endfor %}
                         </ul>
-                        <a class="btn secondary" href="{{ view.subscribe_href }}">{{ view.button_label }}</a>
+                        {% if view.is_current %}
+                            <span class="btn secondary disabled" aria-disabled="true">{{ view.button_label }}</span>
+                        {% else %}
+                            <a class="btn secondary" href="{{ view.subscribe_href }}">{{ view.button_label }}</a>
+                        {% endif %}
                     </article>
                 {% endfor %}
             </section>

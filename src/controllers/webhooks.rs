@@ -52,6 +52,9 @@ pub async fn stripe(State(state): State<AppState>, headers: HeaderMap, body: Byt
         | stripe::EventType::CustomerSubscriptionDeleted => {
             handle_subscription(&state, &event).await
         }
+        stripe::EventType::CustomerSubscriptionTrialWillEnd => {
+            handle_trial_will_end(&state, &event).await
+        }
         stripe::EventType::InvoicePaymentFailed => {
             handle_invoice_payment_failed(&state, &event).await
         }
@@ -182,6 +185,60 @@ async fn handle_invoice_payment_failed(
         customer = %customer_id,
         "Brokerage marked past_due from invoice.payment_failed"
     );
+    Ok(())
+}
+
+/// Stripe fires this 3 days before a trial ends. Email the broker(s)
+/// so they aren't surprised by the first charge.
+async fn handle_trial_will_end(state: &AppState, event: &stripe::Event) -> anyhow::Result<()> {
+    let stripe::EventObject::Subscription(ref sub) = event.data.object else {
+        return Ok(());
+    };
+    let customer_id = sub.customer.id().to_string();
+    let Some(brokerage) = find_brokerage_by_customer(state, &customer_id).await? else {
+        tracing::warn!(
+            customer = %customer_id,
+            "trial_will_end matched no brokerage row"
+        );
+        return Ok(());
+    };
+
+    // Format the trial-end date once for both subject and body.
+    let trial_end_display = sub
+        .trial_end
+        .and_then(ts_to_dt)
+        .map(|d| d.format("%B %-d, %Y").to_string())
+        .unwrap_or_else(|| "soon".to_string());
+
+    // Send to every broker on the account — coordinators and agents
+    // don't manage billing, so we skip them.
+    let mut q = state
+        .db
+        .query(
+            "SELECT email, name FROM (SELECT VALUE in FROM works_at
+             WHERE out = $b AND role = 'broker')",
+        )
+        .bind(("b", brokerage.id.clone()))
+        .await?;
+    use surrealdb::types::SurrealValue;
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct Row {
+        email: String,
+        name: String,
+    }
+    let brokers: Vec<Row> = q.take(0).unwrap_or_default();
+
+    for b in brokers {
+        state
+            .mailer
+            .send_trial_ending(
+                &b.email,
+                &b.name,
+                &trial_end_display,
+                &state.config.base_url,
+            )
+            .await;
+    }
     Ok(())
 }
 

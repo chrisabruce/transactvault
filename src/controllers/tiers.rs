@@ -19,7 +19,6 @@ use surrealdb::types::RecordId;
 
 use crate::audit;
 use crate::auth::middleware::SuperAdmin;
-use crate::controllers::admin::lookup_brokerage_name;
 use crate::controllers::render;
 use crate::error::AppError;
 use crate::models::{NewTier, Tier};
@@ -36,10 +35,17 @@ pub async fn list(
         .await?;
     let tiers: Vec<Tier> = q.take(0).unwrap_or_default();
 
-    let brokerage_name = lookup_brokerage_name(&state, &user).await;
-    let header = AppHeader::new(&user.name, &user.email, user.role, &brokerage_name, "admin")
-        .with_super_admin(true)
-        .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar);
+    let info = crate::billing::header_info_for_user(&state, &user).await;
+    let header = AppHeader::new(
+        &user.name,
+        &user.email,
+        user.role,
+        &info.brokerage_name,
+        "admin",
+    )
+    .with_super_admin(true)
+    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
+    .with_banner(info.banner);
 
     render(&AdminTiersPage {
         app_name: &state.config.app_name,
@@ -248,6 +254,12 @@ pub async fn update(
         }
     }
 
+    // Snapshot the email-relevant fields before the `.bind` calls
+    // below move the rest of `parsed` into the query.
+    let price_changed = parsed.price_cents != existing.price_cents;
+    let old_price_cents = existing.price_cents;
+    let new_price_cents = parsed.price_cents;
+
     state
         .db
         .query(
@@ -296,7 +308,88 @@ pub async fn update(
     )
     .await;
 
+    // Email subscribed brokers when the monthly price changed. Stripe
+    // applies the new amount on the next renewal — this notice is the
+    // "their card just got more expensive" beat we promised in the
+    // Phase-1 product spec.
+    if price_changed {
+        notify_brokers_of_price_change(
+            &state,
+            &existing.slug,
+            &existing.name,
+            old_price_cents,
+            new_price_cents,
+        )
+        .await;
+    }
+
     Ok(Redirect::to("/admin/tiers?flash=updated").into_response())
+}
+
+/// Send a price-change email to every broker on a tier. Fire-and-forget
+/// — failures are logged inside the mailer; we don't fail the admin
+/// save just because Resend hiccuped.
+async fn notify_brokers_of_price_change(
+    state: &AppState,
+    tier_slug: &str,
+    tier_name: &str,
+    old_price_cents: i64,
+    new_price_cents: i64,
+) {
+    use surrealdb::types::SurrealValue;
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct BrokerRow {
+        email: String,
+        name: String,
+    }
+    let mut q = match state
+        .db
+        .query(
+            "SELECT email, name FROM user
+             WHERE id IN (
+                SELECT VALUE in FROM works_at
+                WHERE role = 'broker' AND out IN (
+                    SELECT VALUE id FROM brokerage WHERE plan = $slug
+                )
+             )",
+        )
+        .bind(("slug", tier_slug.to_string()))
+        .await
+    {
+        Ok(q) => q,
+        Err(e) => {
+            tracing::warn!(error = %e, tier = %tier_slug, "price change: broker lookup failed");
+            return;
+        }
+    };
+    let brokers: Vec<BrokerRow> = q.take(0).unwrap_or_default();
+
+    let old_display = format_dollars(old_price_cents);
+    let new_display = format_dollars(new_price_cents);
+    for b in brokers {
+        state
+            .mailer
+            .send_price_change(
+                &b.email,
+                &b.name,
+                tier_name,
+                &old_display,
+                &new_display,
+                &state.config.base_url,
+            )
+            .await;
+    }
+}
+
+fn format_dollars(cents: i64) -> String {
+    let cents = cents.max(0);
+    let dollars = cents / 100;
+    let frac = cents % 100;
+    if frac == 0 {
+        format!("${dollars}")
+    } else {
+        format!("${dollars}.{frac:02}")
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -398,10 +491,17 @@ async fn render_edit(
     existing: Option<Tier>,
     error: Option<&str>,
 ) -> Result<Html<String>, AppError> {
-    let brokerage_name = lookup_brokerage_name(state, user).await;
-    let header = AppHeader::new(&user.name, &user.email, user.role, &brokerage_name, "admin")
-        .with_super_admin(true)
-        .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar);
+    let info = crate::billing::header_info_for_user(state, user).await;
+    let header = AppHeader::new(
+        &user.name,
+        &user.email,
+        user.role,
+        &info.brokerage_name,
+        "admin",
+    )
+    .with_super_admin(true)
+    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
+    .with_banner(info.banner);
     render(&AdminTierEditPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,

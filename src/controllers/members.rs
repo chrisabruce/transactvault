@@ -31,7 +31,8 @@ pub async fn list(
 
     let header = AppHeader::new(&user.name, &user.email, user.role, &brokerage.name, "team")
         .with_super_admin(crate::controllers::is_super_admin(&state, &user))
-        .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar);
+        .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
+        .with_banner(crate::billing::banner_for(&brokerage));
     render(&TeamPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
@@ -62,7 +63,8 @@ pub async fn invite(
     let brokerage = load_brokerage(&state, &user).await?;
     let header = AppHeader::new(&user.name, &user.email, user.role, &brokerage.name, "team")
         .with_super_admin(crate::controllers::is_super_admin(&state, &user))
-        .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar);
+        .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
+        .with_banner(crate::billing::banner_for(&brokerage));
 
     let email = input.email.trim().to_ascii_lowercase();
     let role = match input.role.as_str() {
@@ -474,7 +476,8 @@ pub async fn audit_log(
     let brokerage = load_brokerage(&state, &user).await?;
     let header = AppHeader::new(&user.name, &user.email, user.role, &brokerage.name, "audit")
         .with_super_admin(crate::controllers::is_super_admin(&state, &user))
-        .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar);
+        .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
+        .with_banner(crate::billing::banner_for(&brokerage));
 
     Ok(render(&BrokerageAuditPage {
         app_name: &state.config.app_name,
@@ -774,7 +777,8 @@ async fn render_delete_page(
     let brokerage_name = brokerage.name.clone();
     let header = AppHeader::new(&user.name, &user.email, user.role, &brokerage.name, "team")
         .with_super_admin(crate::controllers::is_super_admin(state, user))
-        .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar);
+        .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
+        .with_banner(crate::billing::banner_for(&brokerage));
 
     render(&BrokerageDeletePage {
         app_name: &state.config.app_name,

@@ -293,7 +293,8 @@ pub async fn list(
         "transactions",
     )
     .with_super_admin(crate::controllers::is_super_admin(&state, &user))
-    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar);
+    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
+    .with_banner(crate::billing::banner_for(&brokerage));
     let active_filter = derive_active_filter(&status_filter, attention_on);
 
     render(&TransactionsListPage {
@@ -488,7 +489,8 @@ pub async fn new_form(
         "transactions",
     )
     .with_super_admin(crate::controllers::is_super_admin(&state, &user))
-    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar);
+    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
+    .with_banner(crate::billing::banner_for(&brokerage));
     render(&TransactionNewPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
@@ -583,6 +585,11 @@ pub async fn create(
 
     let price_cents = parse_price_cents(input.sales_price.as_deref().unwrap_or(""));
 
+    // Tier-based usage enforcement. Either allows the create, allows
+    // with metered overage (Stripe usage POST is best-effort below),
+    // or returns a 400 with a friendly "limit reached" message.
+    let decision = crate::billing::enforce_transaction_limit(&state, &user).await?;
+
     let new_tx = NewTransaction {
         property_address,
         city: input.city.unwrap_or_default().trim().to_string(),
@@ -623,6 +630,24 @@ pub async fn create(
 
     seed_default_checklist(&state, &tx.id, tx_type, condition, sales).await?;
 
+    // If this transaction pushed the brokerage over the monthly cap
+    // and the tier opts into metered overage, fire-and-forget a
+    // Stripe usage record. Failures are logged but don't fail the
+    // create — usage reconciliation can happen at the end of the
+    // billing period if Stripe was unreachable now.
+    if let crate::billing::LimitDecision::AllowedAsOverage {
+        stripe_subscription_id,
+    } = decision
+        && let Some(sub_id) = stripe_subscription_id
+        && let Err(e) = state.stripe.report_overage_usage(&sub_id, 1).await
+    {
+        tracing::warn!(
+            error = %e,
+            subscription = %sub_id,
+            "metered overage usage report failed (will retry at period end)"
+        );
+    }
+
     let key = crate::db::record_key(&tx.id);
     Ok(Redirect::to(&format!("/app/transactions/{key}")))
 }
@@ -654,7 +679,8 @@ pub async fn show(
         "transactions",
     )
     .with_super_admin(crate::controllers::is_super_admin(&state, &user))
-    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar);
+    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
+    .with_banner(crate::billing::banner_for(&brokerage));
     let tx_key = crate::db::record_key(&tx.id);
     let can_review = user.role.can_review();
     render(&TransactionShowPage {
@@ -737,7 +763,8 @@ pub async fn edit_form(
         "transactions",
     )
     .with_super_admin(crate::controllers::is_super_admin(&state, &user))
-    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar);
+    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
+    .with_banner(crate::billing::banner_for(&brokerage));
     let tx_key = crate::db::record_key(&tx.id);
     render(&TransactionEditPage {
         app_name: &state.config.app_name,
@@ -1128,7 +1155,8 @@ pub async fn search(
         "search",
     )
     .with_super_admin(crate::controllers::is_super_admin(&state, &user))
-    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar);
+    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
+    .with_banner(crate::billing::banner_for(&brokerage));
     render(&SearchPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,

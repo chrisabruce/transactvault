@@ -52,9 +52,14 @@ pub struct PricingTierView {
     /// Where the "Start free trial" / "Subscribe" button points.
     /// Signed-out visitors get `/signup?plan={slug}`; signed-in users
     /// get `/app/subscribe/{slug}` so they skip the signup form and
-    /// land on Stripe Checkout directly.
+    /// land on Stripe Checkout directly. `#` when this is the user's
+    /// current plan (button is dimmed and inert).
     pub subscribe_href: String,
     pub button_label: &'static str,
+    /// True when this tier matches the signed-in user's
+    /// `brokerage.plan`. Drives the "Current plan" pill on the card
+    /// and the disabled-style CTA.
+    pub is_current: bool,
 }
 
 /// Public brand book at `/brand` — the canonical guide for designers,
@@ -146,6 +151,10 @@ pub struct AppHeader<'a> {
     /// Whether the user has uploaded an avatar — drives the
     /// `<img>` vs initials choice in the header.
     pub has_avatar: bool,
+    /// Optional subscription-status banner — `past_due`, `canceling`,
+    /// `wind_down`. Rendered above the page header by the partial in
+    /// `components/app_header.html`.
+    pub banner: Option<crate::billing::SubscriptionBanner>,
 }
 
 impl<'a> AppHeader<'a> {
@@ -166,6 +175,7 @@ impl<'a> AppHeader<'a> {
             is_super_admin: false,
             user_key: String::new(),
             has_avatar: false,
+            banner: None,
         }
     }
 
@@ -183,6 +193,14 @@ impl<'a> AppHeader<'a> {
     pub fn with_avatar(mut self, user_key: String, has_avatar: bool) -> Self {
         self.user_key = user_key;
         self.has_avatar = has_avatar;
+        self
+    }
+
+    /// Attach the subscription banner returned by
+    /// [`crate::billing::header_info_for_user`] so the page renders the
+    /// "card failed / canceling / wind-down" strip.
+    pub fn with_banner(mut self, banner: Option<crate::billing::SubscriptionBanner>) -> Self {
+        self.banner = banner;
         self
     }
 }
@@ -650,6 +668,10 @@ pub struct AdminBrokeragesPage<'a> {
     pub signed_in: bool,
     pub header: AppHeader<'a>,
     pub rows: Vec<AdminBrokerageRow>,
+    /// Brokerages past their 60-day wind-down purge window. Rendered
+    /// as a separate "pending deletion" section above the main list so
+    /// super-admins can act on them.
+    pub pending: Vec<AdminBrokerageRow>,
     /// Pre-formatted totals (humansized + thousands-separated) so the
     /// template stays presentation-only.
     pub total_brokerages_display: String,
@@ -674,6 +696,10 @@ pub struct AdminBrokerageRow {
     /// Mirrors `brokerage.is_complimentary`. Drives the "Comp" badge
     /// + toggle-button label.
     pub is_complimentary: bool,
+    /// When the row appears in the "pending deletion" list, this is
+    /// the timestamp the 60-day grace ended (so the template can
+    /// render "wind-down ended N days ago").
+    pub purge_due_at: Option<DateTime<Utc>>,
 }
 
 /// Cross-brokerage user view used by the admin dashboard. Hydrated from a
