@@ -26,7 +26,6 @@ use crate::state::AppState;
 /// Visual prominence of an in-app banner. Maps onto CSS classes in
 /// `main.css` (`.app-banner.info`, `.warn`, `.danger`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // `Info` is reserved for trial-ending nudges.
 pub enum BannerLevel {
     Info,
     Warn,
@@ -241,6 +240,15 @@ fn build_banner(b: &Brokerage) -> Option<SubscriptionBanner> {
         return None;
     }
     match b.subscription_status.as_deref() {
+        // Never subscribed yet. Surface the subscribe CTA at the top
+        // of every authenticated page — without this, the broker has
+        // to remember `/pricing` exists and there's no in-app nudge.
+        None | Some("" | "none") => Some(SubscriptionBanner {
+            level: BannerLevel::Info,
+            message: "Pick a plan to start your 14-day free trial. We'll only charge your card after the trial ends.".into(),
+            action_label: Some("View plans"),
+            action_href: Some("/pricing"),
+        }),
         Some("past_due") => Some(SubscriptionBanner {
             level: BannerLevel::Danger,
             message: "Your last payment failed. Update your card to keep working.".into(),

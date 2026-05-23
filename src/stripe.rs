@@ -10,7 +10,8 @@ use std::collections::HashMap;
 
 use anyhow::Context;
 use stripe::{
-    BillingPortalSession, CheckoutSession, CheckoutSessionMode, Client, CreateBillingPortalSession,
+    BillingPortalSession, CheckoutSession, CheckoutSessionMode,
+    CheckoutSessionPaymentMethodCollection, Client, CreateBillingPortalSession,
     CreateCheckoutSession, CreateCheckoutSessionLineItems, CreateCheckoutSessionSubscriptionData,
     CreateCustomer, CreatePrice, CreatePriceRecurring, CreatePriceRecurringInterval,
     CreatePriceRecurringUsageType, CreateProduct, CreateUsageRecord, Currency, Customer,
@@ -245,6 +246,15 @@ impl Stripe {
         params.line_items = Some(line_items);
         params.success_url = Some(success_url);
         params.cancel_url = Some(cancel_url);
+        // Force the broker to enter a card even when the subscription
+        // starts in a trial. Stripe's default (`if_required`) would
+        // skip card collection for a trialing subscription — fine if
+        // you want frictionless signups, but it leaves us with a
+        // payment-less trial that can quietly lapse into `incomplete`
+        // when the trial ends. Requiring the card upfront gives us a
+        // single moment of friction in exchange for a clean
+        // trial→active transition.
+        params.payment_method_collection = Some(CheckoutSessionPaymentMethodCollection::Always);
 
         if trial_days > 0 {
             params.subscription_data = Some(CreateCheckoutSessionSubscriptionData {
