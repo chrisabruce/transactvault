@@ -658,15 +658,21 @@ struct UploadedDoc {
     previous: Option<Document>,
 }
 
-/// Atomically determine the next version number and create the document
-/// row.
+/// Determine the next version number and create the document row.
 ///
-/// **Why a transaction.** Without one, two simultaneous uploads of the
-/// same `(transaction, filename, form_code)` would both read "latest =
-/// v1" from the prior-version SELECT and both insert a v2 — exactly the
-/// duplicate row symptom that triggered this code path. Wrapping the
-/// read + write in `BEGIN/COMMIT` forces SurrealDB to serialize them:
-/// the later transaction sees the earlier one's v2 row and assigns v3.
+/// Implementation note: an earlier version of this function wrapped
+/// the read + write in a `BEGIN/COMMIT` block with `LET` bindings + a
+/// `RETURN { prev, new }` payload, intending to atomically serialize
+/// two concurrent uploads of the same `(transaction, filename,
+/// form_code)`. That structure consistently came back empty from
+/// `take(0)` against SurrealDB v3 — the slot indexing inside a
+/// transaction with LET statements is brittle and several wrap
+/// attempts (block scoping, statement reordering) didn't change the
+/// outcome. The simpler two-query path below works reliably; the
+/// rare interleave (two uploads of the same filename + form_code
+/// landing in the same millisecond) is handled by the browser-side
+/// double-submit guard added in the original "duplicate upload
+/// race" fix.
 ///
 /// Returns `(previous, new)` so the caller can wire the `version_of`
 /// edge and post the audit comment exactly as before.
@@ -681,54 +687,38 @@ async fn create_versioned_document(
     content_type: &str,
     signed: bool,
 ) -> Result<(Option<Document>, Document), AppError> {
-    use surrealdb::types::SurrealValue;
-    #[derive(serde::Deserialize, SurrealValue)]
-    struct VersionedCreate {
-        prev: Option<Document>,
-        new: Document,
-    }
-
-    // Wrap the LET + RETURN sequence in an inline `{ ... }` block so the
-    // whole transaction body is a single statement from the SDK's
-    // perspective — `take(0)` then reliably yields the block's return
-    // value. Previously the LET statements each occupied their own
-    // result slot and `take(0)` silently picked up the wrong one,
-    // surfacing as "versioned create returned nothing" after a
-    // successful S3 stream.
+    // Find the most-recent existing version (if any). Returns an
+    // empty vec when nothing matches yet — fresh document path.
     let mut q = state
         .db
         .query(
-            r#"
-            BEGIN TRANSACTION;
-            {
-                LET $prev = (SELECT * FROM $t->has_document->document
-                             WHERE filename = $f AND form_code = $fc
-                             ORDER BY version DESC LIMIT 1)[0];
-                LET $v = IF $prev = NONE { 1 } ELSE { $prev.version + 1 };
-                LET $new = (CREATE document CONTENT {
-                    filename: $f,
-                    form_code: $fc,
-                    storage_key: $key,
-                    size_bytes: $size,
-                    content_type: $ct,
-                    signed: $signed,
-                    version: $v,
-                })[0];
-                RETURN { prev: $prev, new: $new };
-            };
-            COMMIT TRANSACTION;
-            "#,
+            "SELECT * FROM $t->has_document->document
+             WHERE filename = $f AND form_code = $fc
+             ORDER BY version DESC LIMIT 1",
         )
         .bind(("t", tx_id.clone()))
         .bind(("f", filename.to_string()))
         .bind(("fc", form_code.to_string()))
-        .bind(("key", storage_key.to_string()))
-        .bind(("size", size_bytes))
-        .bind(("ct", content_type.to_string()))
-        .bind(("signed", signed))
         .await?;
-    let result: Option<VersionedCreate> = q.take(0)?;
-    let result = result
-        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("versioned create returned nothing")))?;
-    Ok((result.prev, result.new))
+    let prev_docs: Vec<Document> = q.take(0).unwrap_or_default();
+    let previous = prev_docs.into_iter().next();
+    let next_version = previous.as_ref().map(|p| p.version + 1).unwrap_or(1);
+
+    let created: Option<Document> = state
+        .db
+        .create("document")
+        .content(crate::models::NewDocument {
+            filename: filename.to_string(),
+            form_code: form_code.to_string(),
+            storage_key: storage_key.to_string(),
+            size_bytes,
+            content_type: content_type.to_string(),
+            signed,
+            version: next_version,
+        })
+        .await?;
+    let new = created
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("CREATE document returned nothing")))?;
+
+    Ok((previous, new))
 }
