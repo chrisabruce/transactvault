@@ -65,6 +65,12 @@ DEFINE FIELD OVERWRITE category  ON document TYPE option<string>;
 DEFINE TABLE OVERWRITE user SCHEMAFULL;
 DEFINE FIELD OVERWRITE email_verified ON user TYPE option<bool>;
 
+DEFINE TABLE OVERWRITE brokerage SCHEMAFULL;
+-- New super-admin-toggle field. Existing brokerage rows predate it,
+-- so relax to `option<bool>` here, backfill to `false` in MIGRATE,
+-- then lock to `bool DEFAULT false` in LOCK.
+DEFINE FIELD OVERWRITE is_complimentary ON brokerage TYPE option<bool>;
+
 -- ============================================================================
 -- Phase 2 — migrate: rewrite legacy values onto the new vocabulary and
 -- backfill every newly-required field for existing rows.
@@ -107,6 +113,10 @@ UPDATE document UNSET category;
 -- treat them as already verified — they've been using the system, so
 -- bouncing them now would be a worse experience than a small data drift.
 UPDATE user SET email_verified = true WHERE email_verified = NONE;
+
+-- brokerage.is_complimentary: brand-new field; existing brokerages
+-- default to "not complimentary" so paid + trial flows are unaffected.
+UPDATE brokerage SET is_complimentary = false WHERE is_complimentary = NONE;
 
 -- ============================================================================
 -- Phase 3 — lock: re-DEFINE every relaxed field with its final type,
