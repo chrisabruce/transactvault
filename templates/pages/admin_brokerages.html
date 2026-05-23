@@ -97,7 +97,7 @@
                     {% for r in rows %}
                         <tr>
                             <td>
-                                {{ r.name }}
+                                <a href="/admin/brokerages/{{ r.key }}">{{ r.name }}</a>
                                 {% if r.is_complimentary %}
                                     <span class="badge comp" title="Complimentary access granted by admin">Comp</span>
                                 {% endif %}

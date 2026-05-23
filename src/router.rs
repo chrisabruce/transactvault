@@ -102,6 +102,10 @@ pub fn build(state: AppState) -> Router {
         .route("/admin", get(admin::users))
         .route("/admin/brokerages", get(admin::brokerages))
         .route(
+            "/admin/brokerages/{key}",
+            get(admin::brokerage_detail),
+        )
+        .route(
             "/admin/brokerages/{key}/comp",
             post(admin::toggle_brokerage_comp),
         )

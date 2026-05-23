@@ -21,7 +21,8 @@ use crate::error::AppError;
 use crate::models::Brokerage;
 use crate::state::AppState;
 use crate::templates::{
-    AdminAuditPage, AdminBrokerageRow, AdminBrokeragesPage, AdminUser, AdminUsersPage, AppHeader,
+    AdminAuditPage, AdminBrokerageMember, AdminBrokerageRow, AdminBrokeragesPage, AdminUser,
+    AdminUsersPage, AppHeader,
 };
 
 #[derive(Debug, Deserialize)]
@@ -242,6 +243,133 @@ pub async fn brokerages(
         total_transactions_display: total_tx.to_formatted_string(&Locale::en),
         total_documents_display: total_docs.to_formatted_string(&Locale::en),
         total_storage_display: format_size(total_bytes, DECIMAL),
+    })
+}
+
+/// Deep-dive on a single brokerage. Built for super-admins
+/// troubleshooting Stripe sync — surfaces every field on the
+/// `brokerage` row, the resolved tier, all members, and recent
+/// audit events whose actor belongs to this brokerage.
+pub async fn brokerage_detail(
+    State(state): State<AppState>,
+    SuperAdmin(user): SuperAdmin,
+    Path(key): Path<String>,
+) -> Result<Html<String>, AppError> {
+    use chrono::{DateTime, Utc};
+    use surrealdb::types::SurrealValue;
+
+    let id = surrealdb::types::RecordId::new("brokerage", key.as_str());
+    let brokerage: Option<Brokerage> = state.db.select(id.clone()).await?;
+    let brokerage = brokerage.ok_or(AppError::NotFound)?;
+
+    audit::record(
+        &state.db,
+        "admin_view",
+        Some(user.user_id.clone()),
+        Some(user.email.clone()),
+        None,
+        None,
+        Some(format!("brokerage_detail {key}")),
+    )
+    .await;
+
+    // Resolve the tier the brokerage's `plan` slug points at, if any.
+    // Brand-new brokerages have `plan='trial'` and no matching tier.
+    let mut tq = state
+        .db
+        .query("SELECT * FROM tier WHERE slug = $s LIMIT 1")
+        .bind(("s", brokerage.plan.clone()))
+        .await?;
+    let tier: Option<crate::models::Tier> = tq.take(0)?;
+
+    // Members on the brokerage — same shape we use elsewhere, but
+    // with the role included so the admin can see who's the broker.
+    let mut mq = state
+        .db
+        .query(
+            "SELECT in.email AS email, in.name AS name, in.id AS user_id, role
+             FROM works_at WHERE out = $b
+             ORDER BY role ASC",
+        )
+        .bind(("b", id.clone()))
+        .await?;
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct MemberRow {
+        email: String,
+        name: String,
+        user_id: surrealdb::types::RecordId,
+        role: String,
+    }
+    let member_rows: Vec<MemberRow> = mq.take(0).unwrap_or_default();
+    let members: Vec<AdminBrokerageMember> = member_rows
+        .into_iter()
+        .map(|m| AdminBrokerageMember {
+            user_key: crate::db::record_key(&m.user_id),
+            email: m.email,
+            name: m.name,
+            role: m.role,
+        })
+        .collect();
+
+    // Recent audit events whose actor is currently a member of this
+    // brokerage. Useful for "what happened after the broker hit
+    // Subscribe" — login_success, admin_view, comp toggles, etc.
+    let mut aq = state
+        .db
+        .query(
+            "SELECT * FROM audit_event
+             WHERE actor IN (SELECT VALUE in FROM works_at WHERE out = $b)
+             ORDER BY at DESC LIMIT 100",
+        )
+        .bind(("b", id.clone()))
+        .await?;
+    let recent_events: Vec<crate::models::AuditEvent> = aq.take(0).unwrap_or_default();
+
+    let info = crate::billing::header_info_for_user(&state, &user).await;
+    let header = AppHeader::new(
+        &user.name,
+        &user.email,
+        user.role,
+        &info.brokerage_name,
+        "admin",
+    )
+    .with_super_admin(true)
+    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
+    .with_banner(info.banner);
+
+    // Pre-format every timestamp so the template is purely
+    // presentational. `None` stays as the empty Option — the
+    // template renders an em-dash.
+    let fmt = |d: Option<DateTime<Utc>>| d.map(|d| d.format("%b %-d, %Y %H:%M UTC").to_string());
+
+    render(&crate::templates::AdminBrokerageDetailPage {
+        app_name: &state.config.app_name,
+        base_url: &state.config.base_url,
+        signed_in: true,
+        header,
+        brokerage_key: key,
+        brokerage_name: brokerage.name.clone(),
+        plan_slug: brokerage.plan.clone(),
+        is_complimentary: brokerage.is_complimentary,
+        city: brokerage.city.clone(),
+        state_code: brokerage.state.clone(),
+        stripe_customer_id: brokerage.stripe_customer_id.clone(),
+        stripe_subscription_id: brokerage.stripe_subscription_id.clone(),
+        subscription_status: brokerage
+            .subscription_status
+            .clone()
+            .unwrap_or_else(|| "(none)".into()),
+        current_period_end_display: fmt(brokerage.current_period_end),
+        cancel_at_display: fmt(brokerage.cancel_at),
+        wind_down_purge_at_display: fmt(brokerage.wind_down_purge_at),
+        created_at_display: fmt(Some(brokerage.created_at)).unwrap_or_default(),
+        updated_at_display: fmt(Some(brokerage.updated_at)).unwrap_or_default(),
+        tier_name: tier.as_ref().map(|t| t.name.clone()),
+        tier_price_display: tier.as_ref().map(|t| t.price_display()),
+        tier_transaction_limit_display: tier.as_ref().map(|t| t.transaction_limit_display()),
+        tier_user_limit_display: tier.as_ref().map(|t| t.user_limit_display()),
+        members,
+        recent_events,
     })
 }
 

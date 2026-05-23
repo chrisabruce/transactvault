@@ -680,6 +680,49 @@ pub struct AdminBrokeragesPage<'a> {
     pub total_storage_display: String,
 }
 
+/// Single-brokerage deep-dive page used by super-admins to debug
+/// Stripe sync, billing state, and membership. Every Stripe field on
+/// the row is exposed; timestamps are pre-formatted by the
+/// controller so the template stays purely presentational.
+#[derive(Template)]
+#[template(path = "pages/admin_brokerage_detail.html")]
+pub struct AdminBrokerageDetailPage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+    pub signed_in: bool,
+    pub header: AppHeader<'a>,
+    pub brokerage_key: String,
+    pub brokerage_name: String,
+    pub plan_slug: String,
+    pub is_complimentary: bool,
+    pub city: Option<String>,
+    pub state_code: String,
+    pub stripe_customer_id: Option<String>,
+    pub stripe_subscription_id: Option<String>,
+    pub subscription_status: String,
+    pub current_period_end_display: Option<String>,
+    pub cancel_at_display: Option<String>,
+    pub wind_down_purge_at_display: Option<String>,
+    pub created_at_display: String,
+    pub updated_at_display: String,
+    /// Resolved from `brokerage.plan` slug → `tier` row. `None` when
+    /// the brokerage hasn't subscribed yet (default `plan='trial'`).
+    pub tier_name: Option<String>,
+    pub tier_price_display: Option<String>,
+    pub tier_transaction_limit_display: Option<String>,
+    pub tier_user_limit_display: Option<String>,
+    pub members: Vec<AdminBrokerageMember>,
+    pub recent_events: Vec<AuditEvent>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AdminBrokerageMember {
+    pub user_key: String,
+    pub email: String,
+    pub name: String,
+    pub role: String,
+}
+
 /// One row on the brokerages admin page: name + already-human-formatted
 /// counts and byte size, so the template doesn't have to call
 /// `humansize` / `num-format` directly.

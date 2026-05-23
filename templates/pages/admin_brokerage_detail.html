@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+
+{% block title %}{{ brokerage_name }} — Admin — {{ app_name }}{% endblock %}
+{% block body_class %}page-app page-admin{% endblock %}
+
+{% block body %}
+{% include "components/app_header.html" %}
+
+<main class="app-main">
+    <header class="page-title">
+        <section>
+            <h1>{{ brokerage_name }}{% if is_complimentary %} <span class="badge comp">Comp</span>{% endif %}</h1>
+            <p class="subtitle">
+                <a href="/admin/brokerages">← All brokerages</a>
+                · key <code>{{ brokerage_key }}</code>
+            </p>
+        </section>
+        <nav class="admin-subnav" aria-label="Admin sections">
+            <a href="/admin">Users</a>
+            <a href="/admin/brokerages" class="active" aria-current="page">Brokerages</a>
+            <a href="/admin/tiers">Tiers</a>
+            <a href="/admin/audit">Audit log</a>
+        </nav>
+    </header>
+
+    <section class="panel">
+        <h2>Account</h2>
+        <dl class="kv-list">
+            <dt>Name</dt><dd>{{ brokerage_name }}</dd>
+            <dt>City</dt><dd>{% match city %}{% when Some with (c) %}{{ c }}{% when None %}—{% endmatch %}</dd>
+            <dt>State</dt><dd>{{ state_code }}</dd>
+            <dt>Created</dt><dd>{{ created_at_display }}</dd>
+            <dt>Updated</dt><dd>{{ updated_at_display }}</dd>
+            <dt>Complimentary</dt><dd>{% if is_complimentary %}Yes{% else %}No{% endif %}</dd>
+        </dl>
+        <form method="post" action="/admin/brokerages/{{ brokerage_key }}/comp" class="inline-form">
+            <button type="submit" class="btn small {% if is_complimentary %}danger{% else %}secondary{% endif %}">
+                {% if is_complimentary %}Revoke comp access{% else %}Grant comp access{% endif %}
+            </button>
+        </form>
+    </section>
+
+    <section class="panel">
+        <h2>Stripe billing</h2>
+        <dl class="kv-list">
+            <dt>Plan slug</dt><dd><code>{{ plan_slug }}</code></dd>
+            <dt>Resolved tier</dt>
+            <dd>
+                {% match tier_name %}{% when Some with (n) %}
+                    {{ n }} —
+                    {% match tier_price_display %}{% when Some with (p) %}{{ p }}/mo{% when None %}{% endmatch %}
+                    ·
+                    {% match tier_transaction_limit_display %}{% when Some with (t) %}{{ t }}{% when None %}{% endmatch %}
+                    ·
+                    {% match tier_user_limit_display %}{% when Some with (u) %}{{ u }} users{% when None %}{% endmatch %}
+                {% when None %}<em>no matching tier (default trial)</em>{% endmatch %}
+            </dd>
+            <dt>Subscription status</dt><dd><code>{{ subscription_status }}</code></dd>
+            <dt>Stripe Customer</dt>
+            <dd>
+                {% match stripe_customer_id %}{% when Some with (id) %}
+                    <code>{{ id }}</code>
+                    <a class="external" href="https://dashboard.stripe.com/customers/{{ id }}" target="_blank" rel="noopener">View in Stripe ↗</a>
+                {% when None %}<em>not set — broker hasn't started Checkout</em>{% endmatch %}
+            </dd>
+            <dt>Stripe Subscription</dt>
+            <dd>
+                {% match stripe_subscription_id %}{% when Some with (id) %}
+                    <code>{{ id }}</code>
+                    <a class="external" href="https://dashboard.stripe.com/subscriptions/{{ id }}" target="_blank" rel="noopener">View in Stripe ↗</a>
+                {% when None %}<em>not set — webhook hasn't fired (or signature was rejected)</em>{% endmatch %}
+            </dd>
+            <dt>Current period end</dt><dd>{% match current_period_end_display %}{% when Some with (d) %}{{ d }}{% when None %}—{% endmatch %}</dd>
+            <dt>Cancel at</dt><dd>{% match cancel_at_display %}{% when Some with (d) %}{{ d }}{% when None %}—{% endmatch %}</dd>
+            <dt>Wind-down purge at</dt><dd>{% match wind_down_purge_at_display %}{% when Some with (d) %}{{ d }}{% when None %}—{% endmatch %}</dd>
+        </dl>
+    </section>
+
+    <section class="panel">
+        <h2>Members ({{ members.len() }})</h2>
+        {% if members.is_empty() %}
+            <p class="empty-state">No members on this brokerage.</p>
+        {% else %}
+            <table class="admin-table">
+                <thead>
+                    <tr>
+                        <th scope="col">Name</th>
+                        <th scope="col">Email</th>
+                        <th scope="col">Role</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for m in members %}
+                        <tr>
+                            <td>{{ m.name }}</td>
+                            <td>{{ m.email }}</td>
+                            <td><code>{{ m.role }}</code></td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% endif %}
+    </section>
+
+    <section class="panel">
+        <h2>Recent activity ({{ recent_events.len() }})</h2>
+        {% if recent_events.is_empty() %}
+            <p class="empty-state">No audit events for members of this brokerage yet.</p>
+        {% else %}
+            <table class="admin-table">
+                <thead>
+                    <tr>
+                        <th scope="col">When</th>
+                        <th scope="col">Event</th>
+                        <th scope="col">Actor</th>
+                        <th scope="col">Detail</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for e in recent_events %}
+                        <tr>
+                            <td><time datetime="{{ e.at }}">{{ e.at.format("%b %-d, %Y %H:%M UTC") }}</time></td>
+                            <td><span class="audit-pill {{ e.kind_class() }}">{{ e.kind_label() }}</span></td>
+                            <td>{% match e.actor_email %}{% when Some with (a) %}{{ a }}{% when None %}—{% endmatch %}</td>
+                            <td>{% match e.detail %}{% when Some with (d) %}{{ d }}{% when None %}—{% endmatch %}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% endif %}
+    </section>
+</main>
+{% endblock %}

@@ -2378,6 +2378,37 @@ progress.progress.small {
 .audit-pill.blocked { background: var(--color-warn-soft);    color: var(--color-warn); }
 .audit-pill.neutral { background: var(--color-brand-soft);   color: var(--color-brand-ink); }
 
+/* Key/value list used on admin detail pages. Two-column grid so
+   labels right-align against their values without a literal table. */
+.kv-list {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.4rem var(--sp-3);
+    margin: 0 0 var(--sp-3);
+    font-size: var(--fs-sm);
+}
+.kv-list dt {
+    color: var(--color-muted);
+    font-weight: 600;
+}
+.kv-list dd {
+    margin: 0;
+    word-break: break-all;
+}
+.kv-list code {
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 0.78rem;
+}
+.kv-list em {
+    color: var(--color-muted);
+    font-style: italic;
+}
+a.external {
+    margin-inline-start: 0.5rem;
+    font-size: var(--fs-xs);
+    color: var(--color-brand-ink);
+}
+
 /* --------------------------------------------------------------------------
    Misc
    -------------------------------------------------------------------------- */

@@ -249,6 +249,37 @@ fn build_banner(b: &Brokerage) -> Option<SubscriptionBanner> {
             action_label: Some("View plans"),
             action_href: Some("/pricing"),
         }),
+        // Inside the free trial. The countdown reassures the broker
+        // they're set up correctly and the card hasn't been hit yet,
+        // and doubles as a webhook smoke test — if someone just paid
+        // and isn't seeing this, the subscription event didn't reach
+        // us.
+        Some("trialing") => {
+            let now = Utc::now();
+            let (days_left, on_date) = match b.current_period_end {
+                Some(end) => {
+                    let diff = end.signed_duration_since(now).num_days().max(0);
+                    (Some(diff), Some(end.format("%B %-d").to_string()))
+                }
+                None => (None, None),
+            };
+            let message = match (days_left, on_date) {
+                (Some(0), Some(date)) => format!(
+                    "Your free trial ends today ({date}). Your card will be charged for the first paid month."
+                ),
+                (Some(n), Some(date)) => format!(
+                    "Free trial — {n} day{plural} left (charges start {date}).",
+                    plural = if n == 1 { "" } else { "s" }
+                ),
+                _ => "You're on a free trial. We'll email you before the first charge.".into(),
+            };
+            Some(SubscriptionBanner {
+                level: BannerLevel::Info,
+                message,
+                action_label: Some("Manage subscription"),
+                action_href: Some("/app/billing/portal"),
+            })
+        }
         Some("past_due") => Some(SubscriptionBanner {
             level: BannerLevel::Danger,
             message: "Your last payment failed. Update your card to keep working.".into(),
