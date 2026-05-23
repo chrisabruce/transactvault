@@ -7,16 +7,18 @@
 //! mounted under `/admin/*` so it's obvious in routing tables that
 //! authorization is privileged.
 
-use axum::extract::{Query, State};
-use axum::response::Html;
+use axum::extract::{Path, Query, State};
+use axum::response::{Html, Redirect};
 use humansize::{DECIMAL, format_size};
 use num_format::{Locale, ToFormattedString};
 use serde::Deserialize;
+use surrealdb::types::RecordId;
 
 use crate::audit;
 use crate::auth::middleware::SuperAdmin;
 use crate::controllers::render;
 use crate::error::AppError;
+use crate::models::Brokerage;
 use crate::state::AppState;
 use crate::templates::{
     AdminAuditPage, AdminBrokerageRow, AdminBrokeragesPage, AdminUser, AdminUsersPage, AppHeader,
@@ -127,7 +129,7 @@ pub async fn brokerages(
     .await;
 
     use chrono::{DateTime, Utc};
-    use surrealdb::types::SurrealValue;
+    use surrealdb::types::{RecordId, SurrealValue};
 
     // One SurrealQL query gets us name + tx count + total bytes per
     // brokerage. `math::sum` returns `NONE` when its set is empty
@@ -138,8 +140,10 @@ pub async fn brokerages(
         .query(
             r#"
             SELECT
+                id,
                 name,
                 created_at,
+                is_complimentary,
                 count((SELECT id FROM $parent.id->has_transaction->transaction)) AS tx_count,
                 count((SELECT id FROM $parent.id->has_transaction->transaction->has_document->document)) AS doc_count,
                 math::sum((SELECT VALUE size_bytes FROM $parent.id->has_transaction->transaction->has_document->document)) AS bytes_used
@@ -151,8 +155,11 @@ pub async fn brokerages(
 
     #[derive(Debug, serde::Deserialize, SurrealValue)]
     struct Row {
+        id: RecordId,
         name: String,
         created_at: DateTime<Utc>,
+        #[serde(default)]
+        is_complimentary: bool,
         tx_count: Option<i64>,
         doc_count: Option<i64>,
         bytes_used: Option<i64>,
@@ -175,11 +182,13 @@ pub async fn brokerages(
             total_docs += docs;
             total_bytes += bytes;
             AdminBrokerageRow {
+                key: crate::db::record_key(&r.id),
                 name: r.name,
                 created_at: r.created_at,
                 tx_count_display: tx.to_formatted_string(&Locale::en),
                 document_count_display: docs.to_formatted_string(&Locale::en),
                 storage_display: format_size(bytes, DECIMAL),
+                is_complimentary: r.is_complimentary,
             }
         })
         .collect();
@@ -301,6 +310,8 @@ const AUDIT_KIND_OPTIONS: &[&str] = &[
     "brokerage_deleted",
     "tier_created",
     "tier_updated",
+    "brokerage_comp_granted",
+    "brokerage_comp_revoked",
 ];
 
 pub(crate) async fn lookup_brokerage_name(
@@ -314,4 +325,43 @@ pub(crate) async fn lookup_brokerage_name(
         .ok()
         .flatten();
     brokerage.map(|b| b.name).unwrap_or_default()
+}
+
+/// Toggle the `is_complimentary` flag on a brokerage. Super-admin only.
+/// Grants (or revokes) free unlimited access — bypasses Stripe and the
+/// Phase-3/4 billing gates. Redirects back to the list view.
+pub async fn toggle_brokerage_comp(
+    State(state): State<AppState>,
+    SuperAdmin(admin): SuperAdmin,
+    Path(key): Path<String>,
+) -> Result<Redirect, AppError> {
+    let id = RecordId::new("brokerage", key.as_str());
+    let brokerage: Option<Brokerage> = state.db.select(id.clone()).await?;
+    let brokerage = brokerage.ok_or(AppError::NotFound)?;
+
+    let new_value = !brokerage.is_complimentary;
+    state
+        .db
+        .query("UPDATE $id SET is_complimentary = $v")
+        .bind(("id", id))
+        .bind(("v", new_value))
+        .await?;
+
+    let kind = if new_value {
+        "brokerage_comp_granted"
+    } else {
+        "brokerage_comp_revoked"
+    };
+    audit::record(
+        &state.db,
+        kind,
+        Some(admin.user_id.clone()),
+        Some(admin.email.clone()),
+        None,
+        None,
+        Some(format!("brokerage={} ({})", brokerage.name, key)),
+    )
+    .await;
+
+    Ok(Redirect::to("/admin/brokerages?flash=comp_toggled"))
 }

@@ -144,6 +144,12 @@ DEFINE FIELD OVERWRITE subscription_status    ON brokerage TYPE option<string>;
 DEFINE FIELD OVERWRITE current_period_end     ON brokerage TYPE option<datetime>;
 DEFINE FIELD OVERWRITE cancel_at              ON brokerage TYPE option<datetime>;
 DEFINE FIELD OVERWRITE wind_down_purge_at     ON brokerage TYPE option<datetime>;
+-- Super-admin override. When true, the brokerage skips every billing
+-- gate: no Stripe Subscribe is required, transaction/user limits are
+-- ignored, and the read-only wind_down gate doesn't apply. Toggled
+-- from /admin/brokerages by a super-admin; audited as
+-- `brokerage_comp_granted` / `brokerage_comp_revoked`.
+DEFINE FIELD OVERWRITE is_complimentary       ON brokerage TYPE bool DEFAULT false;
 
 -- ----------------------------------------------------------------------------
 -- Tier — pricing plan definitions managed from the super-admin UI.
@@ -363,7 +369,8 @@ DEFINE FIELD OVERWRITE kind ON audit_event TYPE string
         "document_deleted",
         "profile_updated", "password_changed", "avatar_updated",
         "brokerage_deleted",
-        "tier_created", "tier_updated"
+        "tier_created", "tier_updated",
+        "brokerage_comp_granted", "brokerage_comp_revoked"
     ];
 DEFINE FIELD OVERWRITE actor_email ON audit_event TYPE option<string>;
 DEFINE FIELD OVERWRITE actor       ON audit_event TYPE option<record<user>>;

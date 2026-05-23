@@ -534,10 +534,29 @@ pub async fn create(
     user: CurrentUser,
     Form(input): Form<CreateInput>,
 ) -> Result<Redirect, AppError> {
-    let property_address = input.property_address.trim().to_string();
-    if property_address.is_empty() {
-        return Err(AppError::invalid("Property address is required."));
-    }
+    // Land deals frequently have an APN but no street address (raw
+    // parcels, off-grid lots). Accept either, but require at least
+    // one. The schema still asserts `property_address` is non-empty,
+    // so when only the APN is given we synthesize a placeholder
+    // address from it — that keeps list/search/export rendering
+    // unchanged without forcing the user to type a fake street.
+    let address_input = input.property_address.trim().to_string();
+    let apn_input = input
+        .apn
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
+    let property_address = match (address_input.is_empty(), &apn_input) {
+        (false, _) => address_input,
+        (true, Some(apn)) => format!("APN {apn}"),
+        (true, None) => {
+            return Err(AppError::invalid(
+                "Enter a property address or an APN — at least one is required.",
+            ));
+        }
+    };
 
     // Parse and validate the dropdowns. Falling back to sensible defaults
     // means a malformed POST still creates *something* the UI can correct.
@@ -567,10 +586,7 @@ pub async fn create(
     let new_tx = NewTransaction {
         property_address,
         city: input.city.unwrap_or_default().trim().to_string(),
-        apn: input
-            .apn
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty()),
+        apn: apn_input,
         postal_code: input
             .postal_code
             .map(|p| p.trim().to_string())
@@ -754,10 +770,27 @@ pub async fn update(
         ));
     }
 
-    let property_address = input.property_address.trim().to_string();
-    if property_address.is_empty() {
-        return Err(AppError::invalid("Property address is required."));
-    }
+    // Same "address OR APN" rule as create. Synthesize an `APN …`
+    // placeholder for the address when only the APN is given so the
+    // schema's non-empty ASSERT stays satisfied and the list/search
+    // views keep working.
+    let address_input = input.property_address.trim().to_string();
+    let apn_input = input
+        .apn
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
+    let property_address = match (address_input.is_empty(), &apn_input) {
+        (false, _) => address_input,
+        (true, Some(apn)) => format!("APN {apn}"),
+        (true, None) => {
+            return Err(AppError::invalid(
+                "Enter a property address or an APN — at least one is required.",
+            ));
+        }
+    };
 
     // Parse new dropdown values, falling back to the existing record's
     // values when an input is missing/unknown — this keeps "disabled"
@@ -822,13 +855,7 @@ pub async fn update(
         .bind(("t", tx_id.clone()))
         .bind(("address", property_address))
         .bind(("city", input.city.unwrap_or_default().trim().to_string()))
-        .bind((
-            "apn",
-            input
-                .apn
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty()),
-        ))
+        .bind(("apn", apn_input))
         .bind((
             "postal",
             input

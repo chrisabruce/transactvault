@@ -1823,6 +1823,16 @@ select:disabled {
     display: grid;
     gap: var(--sp-4);
 }
+.tx-form .field-hint {
+    margin: -0.25rem 0 var(--sp-3);
+    font-size: var(--fs-xs);
+    color: var(--color-muted);
+}
+.tx-form .field-hint em {
+    font-style: normal;
+    font-weight: 600;
+    color: var(--color-ink);
+}
 .tx-form legend {
     font-size: var(--fs-sm);
     font-weight: 700;
@@ -2227,6 +2237,24 @@ progress.progress.small {
 .admin-table th.num, .admin-table td.num {
     text-align: right;
     font-variant-numeric: tabular-nums;
+}
+.admin-table th.actions, .admin-table td.actions {
+    text-align: right;
+    white-space: nowrap;
+}
+.admin-table .inline-form { display: inline; margin: 0; }
+.admin-table .badge.comp {
+    display: inline-block;
+    margin-inline-start: 0.4rem;
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 0.1rem 0.5rem;
+    border-radius: 999px;
+    background: var(--color-success-soft);
+    color: var(--color-success-ink);
+    vertical-align: 0.1em;
 }
 
 /* Sub-nav across the three admin pages — sits where the old single

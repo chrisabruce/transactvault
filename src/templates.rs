@@ -663,11 +663,17 @@ pub struct AdminBrokeragesPage<'a> {
 /// `humansize` / `num-format` directly.
 #[derive(Debug, Clone)]
 pub struct AdminBrokerageRow {
+    /// URL-safe brokerage key (e.g. `k02yhbjnyg9bv3s8kxsb`). Used by
+    /// the template to POST to `/admin/brokerages/{key}/comp`.
+    pub key: String,
     pub name: String,
     pub created_at: DateTime<Utc>,
     pub tx_count_display: String,
     pub storage_display: String,
     pub document_count_display: String,
+    /// Mirrors `brokerage.is_complimentary`. Drives the "Comp" badge
+    /// + toggle-button label.
+    pub is_complimentary: bool,
 }
 
 /// Cross-brokerage user view used by the admin dashboard. Hydrated from a

@@ -54,6 +54,8 @@ impl AuditEvent {
             "brokerage_deleted" => "Brokerage deleted",
             "tier_created" => "Tier created",
             "tier_updated" => "Tier updated",
+            "brokerage_comp_granted" => "Comp access granted",
+            "brokerage_comp_revoked" => "Comp access revoked",
             _ => "Event",
         }
     }

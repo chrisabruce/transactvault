@@ -56,17 +56,38 @@
                         <th scope="col" class="num">Documents</th>
                         <th scope="col" class="num">Storage</th>
                         <th scope="col">Created</th>
+                        <th scope="col">Billing</th>
+                        <th scope="col" class="actions"><span class="visually-hidden">Actions</span></th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for r in rows %}
                         <tr>
-                            <td>{{ r.name }}</td>
+                            <td>
+                                {{ r.name }}
+                                {% if r.is_complimentary %}
+                                    <span class="badge comp" title="Complimentary access granted by admin">Comp</span>
+                                {% endif %}
+                            </td>
                             <td class="num">{{ r.tx_count_display }}</td>
                             <td class="num">{{ r.document_count_display }}</td>
                             <td class="num">{{ r.storage_display }}</td>
                             <td>
                                 <time datetime="{{ r.created_at }}">{{ r.created_at.format("%b %-d, %Y") }}</time>
+                            </td>
+                            <td>
+                                {% if r.is_complimentary %}
+                                    Complimentary
+                                {% else %}
+                                    Standard
+                                {% endif %}
+                            </td>
+                            <td class="actions">
+                                <form method="post" action="/admin/brokerages/{{ r.key }}/comp" class="inline-form">
+                                    <button type="submit" class="btn small {% if r.is_complimentary %}danger{% else %}secondary{% endif %}">
+                                        {% if r.is_complimentary %}Revoke comp{% else %}Grant comp{% endif %}
+                                    </button>
+                                </form>
                             </td>
                         </tr>
                     {% endfor %}

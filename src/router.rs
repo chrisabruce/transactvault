@@ -98,6 +98,10 @@ pub fn build(state: AppState) -> Router {
     let admin_routes = Router::new()
         .route("/admin", get(admin::users))
         .route("/admin/brokerages", get(admin::brokerages))
+        .route(
+            "/admin/brokerages/{key}/comp",
+            post(admin::toggle_brokerage_comp),
+        )
         .route("/admin/tiers", get(tiers::list))
         .route("/admin/tiers/new", get(tiers::new_form).post(tiers::create))
         .route(

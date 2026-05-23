@@ -63,6 +63,13 @@ pub async fn subscribe(
     let brokerage: Option<Brokerage> = state.db.select(user.brokerage_id.clone()).await?;
     let brokerage = brokerage.ok_or(AppError::NotFound)?;
 
+    // Comp accounts have unconditional free access — no Stripe needed.
+    // Bounce them straight into the app so they don't pay for what
+    // they already have.
+    if brokerage.is_complimentary {
+        return Ok(Redirect::to("/app?flash=complimentary"));
+    }
+
     // Block duplicate subscriptions. The webhook is the source of
     // truth, but checking here keeps us from starting a second
     // Checkout Session that would just confuse the user.

@@ -37,6 +37,12 @@ pub struct Brokerage {
     /// brokerage is flagged for admin-driven purge (60-day grace).
     #[serde(default)]
     pub wind_down_purge_at: Option<DateTime<Utc>>,
+    /// Super-admin override granting unlimited free access. When true,
+    /// the brokerage bypasses every billing gate (no Stripe Subscribe
+    /// required, no tx/user-limit enforcement, no wind_down read-only).
+    /// Toggled from `/admin/brokerages`.
+    #[serde(default)]
+    pub is_complimentary: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
