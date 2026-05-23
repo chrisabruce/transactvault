@@ -9,8 +9,10 @@ pub mod health;
 pub mod marketing;
 pub mod members;
 pub mod profile;
+pub mod subscribe;
 pub mod tiers;
 pub mod transactions;
+pub mod webhooks;
 
 use askama::Template;
 use axum::response::Html;

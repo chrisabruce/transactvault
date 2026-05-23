@@ -688,25 +688,34 @@ async fn create_versioned_document(
         new: Document,
     }
 
+    // Wrap the LET + RETURN sequence in an inline `{ ... }` block so the
+    // whole transaction body is a single statement from the SDK's
+    // perspective — `take(0)` then reliably yields the block's return
+    // value. Previously the LET statements each occupied their own
+    // result slot and `take(0)` silently picked up the wrong one,
+    // surfacing as "versioned create returned nothing" after a
+    // successful S3 stream.
     let mut q = state
         .db
         .query(
             r#"
             BEGIN TRANSACTION;
-            LET $prev = (SELECT * FROM $t->has_document->document
-                         WHERE filename = $f AND form_code = $fc
-                         ORDER BY version DESC LIMIT 1)[0];
-            LET $v = IF $prev = NONE { 1 } ELSE { $prev.version + 1 };
-            LET $new = (CREATE document CONTENT {
-                filename: $f,
-                form_code: $fc,
-                storage_key: $key,
-                size_bytes: $size,
-                content_type: $ct,
-                signed: $signed,
-                version: $v,
-            })[0];
-            RETURN { prev: $prev, new: $new };
+            {
+                LET $prev = (SELECT * FROM $t->has_document->document
+                             WHERE filename = $f AND form_code = $fc
+                             ORDER BY version DESC LIMIT 1)[0];
+                LET $v = IF $prev = NONE { 1 } ELSE { $prev.version + 1 };
+                LET $new = (CREATE document CONTENT {
+                    filename: $f,
+                    form_code: $fc,
+                    storage_key: $key,
+                    size_bytes: $size,
+                    content_type: $ct,
+                    signed: $signed,
+                    version: $v,
+                })[0];
+                RETURN { prev: $prev, new: $new };
+            };
             COMMIT TRANSACTION;
             "#,
         )

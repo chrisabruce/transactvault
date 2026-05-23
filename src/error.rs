@@ -93,7 +93,7 @@ fn html_escape(input: &str) -> String {
 /// onto one line and silently drops anything past the first message —
 /// this helper guarantees the bottom-of-stack reason (the part that
 /// usually says *why* something failed) makes it into the log.
-fn error_chain(err: &(dyn std::error::Error + 'static)) -> String {
+pub(crate) fn error_chain(err: &(dyn std::error::Error + 'static)) -> String {
     let mut parts: Vec<String> = vec![err.to_string()];
     let mut cur = err.source();
     while let Some(src) = cur {

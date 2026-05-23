@@ -95,14 +95,11 @@ impl EmailConfig {
 pub struct StripeConfig {
     pub secret_key: String,
     /// `whsec_…` from the Stripe Dashboard. Required to verify
-    /// incoming webhook payloads; if empty, webhook handler returns
-    /// 400 to avoid mistakenly trusting unsigned requests. Read by
-    /// the Phase 2 webhook endpoint.
-    #[allow(dead_code)]
+    /// incoming webhook payloads; if empty, the webhook handler
+    /// returns 400 to avoid mistakenly trusting unsigned requests.
     pub webhook_secret: String,
     /// Free-trial length on Checkout, in days. `0` disables the trial
-    /// (Checkout charges the card immediately). Read by the Phase 2
-    /// Subscribe flow.
+    /// (Checkout charges the card immediately).
     pub trial_days: u32,
 }
 

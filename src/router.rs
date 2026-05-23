@@ -14,8 +14,8 @@ use tower_http::trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse, Tr
 use tracing::Level;
 
 use crate::controllers::{
-    admin, auth, checklists, comments, documents, health, marketing, members, profile, tiers,
-    transactions,
+    admin, auth, checklists, comments, documents, health, marketing, members, profile, subscribe,
+    tiers, transactions, webhooks,
 };
 use crate::state::AppState;
 
@@ -91,7 +91,9 @@ pub fn build(state: AppState) -> Router {
         .route("/app/profile/password", post(profile::change_password))
         .route("/app/profile/avatar", post(profile::upload_avatar))
         .route("/app/profile/avatar/delete", post(profile::delete_avatar))
-        .route("/app/users/{key}/avatar", get(profile::serve_avatar));
+        .route("/app/users/{key}/avatar", get(profile::serve_avatar))
+        .route("/app/subscribe/{slug}", get(subscribe::subscribe))
+        .route("/app/billing/portal", get(subscribe::portal));
 
     let admin_routes = Router::new()
         .route("/admin", get(admin::users))
@@ -108,6 +110,7 @@ pub fn build(state: AppState) -> Router {
         .merge(public)
         .merge(app)
         .merge(admin_routes)
+        .route("/webhooks/stripe", post(webhooks::stripe))
         .route("/healthcheck", get(health::healthcheck))
         .nest_service("/static", ServeDir::new("static"))
         .layer(CookieManagerLayer::new())

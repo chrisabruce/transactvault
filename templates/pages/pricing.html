@@ -13,10 +13,10 @@
     "name": "{{ app_name }}",
     "description": "Transaction management software for real estate brokerages.",
     "offers": [
-        {% for plan in plans %}{
+        {% for view in tiers %}{
             "@type": "Offer",
-            "name": "{{ plan.name }}",
-            "price": "{{ plan.price_monthly }}",
+            "name": "{{ view.tier.name }}",
+            "price": "{{ view.tier.price_cents / 100 }}",
             "priceCurrency": "USD"
         }{% if !loop.last %},{% endif %}{% endfor %}
     ]
@@ -34,24 +34,32 @@
             <p>Flat monthly pricing that scales with how many transactions your brokerage closes. Every plan includes three years of compliant storage, full audit trail, and unlimited team members.</p>
         </header>
 
-        <section class="pricing-grid">
-            {% for plan in plans %}
-                <article class="plan-card{% if plan.popular %} popular{% endif %}">
-                    <header>
-                        <h3>{{ plan.name }}</h3>
-                        <p class="plan-best">{{ plan.best_for }}</p>
-                    </header>
-                    <p class="price">${{ plan.price_monthly }}<small>/month</small></p>
-                    <p class="plan-limit">{{ plan.limit }}</p>
-                    <ul class="plan-features" role="list">
-                        {% for feature in plan.features %}
-                            <li>{{ feature }}</li>
-                        {% endfor %}
-                    </ul>
-                    <a class="btn{% if !plan.popular %} secondary{% endif %}" href="/signup?plan={{ plan.slug }}">Start free trial</a>
-                </article>
-            {% endfor %}
-        </section>
+        {% if tiers.is_empty() %}
+            <section class="pricing-grid">
+                <p class="empty-state">Plans coming soon. <a href="/signup">Sign up</a> to be notified the moment they launch.</p>
+            </section>
+        {% else %}
+            <section class="pricing-grid">
+                {% for view in tiers %}
+                    <article class="plan-card">
+                        <header>
+                            <h3>{{ view.tier.name }}</h3>
+                            {% if !view.tier.description.is_empty() %}
+                                <p class="plan-best">{{ view.tier.description }}</p>
+                            {% endif %}
+                        </header>
+                        <p class="price">{{ view.tier.price_display() }}<small>/month</small></p>
+                        <p class="plan-limit">{{ view.tier.transaction_limit_display() }}{% if view.tier.user_limit >= 0 %} · {{ view.tier.user_limit_display() }} users{% endif %}</p>
+                        <ul class="plan-features" role="list">
+                            {% for bullet in view.tier.feature_bullets %}
+                                <li>{{ bullet }}</li>
+                            {% endfor %}
+                        </ul>
+                        <a class="btn secondary" href="{{ view.subscribe_href }}">{{ view.button_label }}</a>
+                    </article>
+                {% endfor %}
+            </section>
+        {% endif %}
 
         <section class="pricing-assurances" aria-label="Your guarantees">
             <article>

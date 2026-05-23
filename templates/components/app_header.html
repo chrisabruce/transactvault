@@ -42,6 +42,11 @@
                    {% if header.active_nav == "profile" %}aria-current="page"{% endif %}>
                     Profile &amp; password
                 </a>
+                {% if header.role.is_broker() %}
+                    <a class="user-menu-item" href="/app/billing/portal" role="menuitem">
+                        Manage subscription
+                    </a>
+                {% endif %}
                 <form method="post" action="/logout" class="user-menu-form">
                     <button type="submit" class="user-menu-item" role="menuitem">Sign out</button>
                 </form>

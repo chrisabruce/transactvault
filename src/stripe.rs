@@ -6,11 +6,15 @@
 //! [`Stripe::is_enabled`] before attempting sync and surface a clear
 //! warning to the admin when the client is dormant.
 
+use std::collections::HashMap;
+
 use anyhow::Context;
 use stripe::{
-    Client, CreatePrice, CreatePriceRecurring, CreatePriceRecurringInterval,
-    CreatePriceRecurringUsageType, CreateProduct, Currency, IdOrCreate, Price, Product, ProductId,
-    UpdateProduct,
+    BillingPortalSession, CheckoutSession, CheckoutSessionMode, Client, CreateBillingPortalSession,
+    CreateCheckoutSession, CreateCheckoutSessionLineItems, CreateCheckoutSessionSubscriptionData,
+    CreateCustomer, CreatePrice, CreatePriceRecurring, CreatePriceRecurringInterval,
+    CreatePriceRecurringUsageType, CreateProduct, Currency, Customer, CustomerId, IdOrCreate,
+    Price, Product, ProductId, UpdateProduct,
 };
 
 use crate::config::StripeConfig;
@@ -20,11 +24,9 @@ use crate::config::StripeConfig;
 #[derive(Clone)]
 pub struct Stripe {
     client: Option<Client>,
-    /// Carried so we don't have to plumb `Config` separately when we
-    /// later read `trial_days` from the Checkout path. Used by the
-    /// Phase-2 Subscribe handler.
-    #[allow(dead_code)]
-    pub trial_days: u32,
+    /// `whsec_…` from the Stripe Dashboard. Empty means the webhook
+    /// endpoint refuses every request because we can't verify it.
+    webhook_secret: String,
 }
 
 /// Outcome of a tier sync — what we got back from Stripe so the
@@ -46,12 +48,24 @@ impl Stripe {
         };
         Self {
             client,
-            trial_days: cfg.trial_days,
+            webhook_secret: cfg.webhook_secret.clone(),
         }
     }
 
     pub fn is_enabled(&self) -> bool {
         self.client.is_some()
+    }
+
+    /// Verify a webhook payload + signature against the configured
+    /// `STRIPE_WEBHOOK_SECRET` and parse it as a Stripe `Event`. The
+    /// `payload` MUST be the raw request body — re-serializing the
+    /// JSON would change the bytes and break the HMAC.
+    pub fn parse_webhook(&self, payload: &str, signature: &str) -> anyhow::Result<stripe::Event> {
+        if self.webhook_secret.is_empty() {
+            anyhow::bail!("STRIPE_WEBHOOK_SECRET unset — refusing to trust webhook");
+        }
+        stripe::Webhook::construct_event(payload, signature, &self.webhook_secret)
+            .map_err(|e| anyhow::anyhow!("webhook signature invalid: {e}"))
     }
 
     /// Ensure a Stripe Product + recurring Price exist for the given
@@ -152,6 +166,127 @@ impl Stripe {
             price_id: Some(price.id.to_string()),
             overage_price_id,
         })
+    }
+
+    /// Find-or-create a Stripe Customer for a brokerage. If we already
+    /// stored a `cus_…` ID on the row we reuse it so the brokerage's
+    /// invoice history stays continuous across re-subscribes.
+    pub async fn ensure_customer(
+        &self,
+        existing_customer_id: Option<&str>,
+        email: &str,
+        name: &str,
+        brokerage_record_key: &str,
+    ) -> anyhow::Result<String> {
+        let Some(client) = self.client.as_ref() else {
+            anyhow::bail!("Stripe disabled");
+        };
+        if let Some(id) = existing_customer_id
+            && !id.is_empty()
+        {
+            return Ok(id.to_string());
+        }
+        let mut params = CreateCustomer::new();
+        params.email = Some(email);
+        params.name = Some(name);
+        let mut meta = HashMap::new();
+        meta.insert("brokerage_id".to_string(), brokerage_record_key.to_string());
+        params.metadata = Some(meta);
+        let cust = Customer::create(client, params)
+            .await
+            .context("Stripe Customer::create")?;
+        Ok(cust.id.to_string())
+    }
+
+    /// Create a Subscription Checkout Session for the given Customer
+    /// and tier price(s). Returns the `https://checkout.stripe.com/...`
+    /// URL to redirect the browser to. The optional `overage_price_id`
+    /// is added as a second line item — Stripe will keep it on the
+    /// resulting Subscription and bill metered usage we POST later.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_subscription_checkout(
+        &self,
+        customer_id: &str,
+        price_id: &str,
+        overage_price_id: Option<&str>,
+        trial_days: u32,
+        success_url: &str,
+        cancel_url: &str,
+        brokerage_record_key: &str,
+    ) -> anyhow::Result<String> {
+        let Some(client) = self.client.as_ref() else {
+            anyhow::bail!("Stripe disabled");
+        };
+
+        let customer: CustomerId = customer_id
+            .parse()
+            .with_context(|| format!("invalid customer id: {customer_id}"))?;
+
+        let mut line_items = vec![CreateCheckoutSessionLineItems {
+            price: Some(price_id.to_string()),
+            quantity: Some(1),
+            ..Default::default()
+        }];
+        if let Some(op) = overage_price_id {
+            // Metered Prices: omit `quantity` — Stripe rejects an
+            // explicit quantity on metered line items because usage
+            // is reported via `subscription_item.usage_records`.
+            line_items.push(CreateCheckoutSessionLineItems {
+                price: Some(op.to_string()),
+                quantity: None,
+                ..Default::default()
+            });
+        }
+
+        let mut params = CreateCheckoutSession::new();
+        params.mode = Some(CheckoutSessionMode::Subscription);
+        params.customer = Some(customer);
+        params.line_items = Some(line_items);
+        params.success_url = Some(success_url);
+        params.cancel_url = Some(cancel_url);
+
+        if trial_days > 0 {
+            params.subscription_data = Some(CreateCheckoutSessionSubscriptionData {
+                trial_period_days: Some(trial_days),
+                ..Default::default()
+            });
+        }
+
+        // Carried back on the resulting `customer.subscription.created`
+        // webhook so we can map the Stripe subscription onto the
+        // right brokerage row even before Checkout completes.
+        let mut metadata = HashMap::new();
+        metadata.insert("brokerage_id".to_string(), brokerage_record_key.to_string());
+        params.metadata = Some(metadata);
+
+        let session = CheckoutSession::create(client, params)
+            .await
+            .context("Stripe CheckoutSession::create")?;
+        session
+            .url
+            .ok_or_else(|| anyhow::anyhow!("Stripe returned no checkout URL"))
+    }
+
+    /// Create a Stripe Customer Portal session — the broker uses
+    /// this to update payment methods, cancel, or download invoices.
+    /// Returns the one-shot URL we redirect them to.
+    pub async fn create_portal_session(
+        &self,
+        customer_id: &str,
+        return_url: &str,
+    ) -> anyhow::Result<String> {
+        let Some(client) = self.client.as_ref() else {
+            anyhow::bail!("Stripe disabled");
+        };
+        let customer: CustomerId = customer_id
+            .parse()
+            .with_context(|| format!("invalid customer id: {customer_id}"))?;
+        let mut params = CreateBillingPortalSession::new(customer);
+        params.return_url = Some(return_url);
+        let session = BillingPortalSession::create(client, params)
+            .await
+            .context("Stripe BillingPortalSession::create")?;
+        Ok(session.url)
     }
 
     /// Archive a Product in Stripe (sets `active=false`). Existing

@@ -36,7 +36,25 @@ pub struct PricingPage<'a> {
     pub app_name: &'a str,
     pub base_url: &'a str,
     pub signed_in: bool,
-    pub plans: &'a [PricingPlan],
+    /// Selectable tiers loaded from the DB at request time. Ordered by
+    /// `sort_order` then `price_cents`. Empty when the admin hasn't
+    /// created any tiers yet — the template falls back to a friendly
+    /// "Plans coming soon" message.
+    pub tiers: Vec<PricingTierView>,
+}
+
+/// Per-tier render data for the public pricing grid. Wraps the [`Tier`]
+/// row with the pre-computed CTA URL so the template doesn't have to
+/// know whether the visitor is signed in.
+#[derive(Debug, Clone)]
+pub struct PricingTierView {
+    pub tier: crate::models::Tier,
+    /// Where the "Start free trial" / "Subscribe" button points.
+    /// Signed-out visitors get `/signup?plan={slug}`; signed-in users
+    /// get `/app/subscribe/{slug}` so they skip the signup form and
+    /// land on Stripe Checkout directly.
+    pub subscribe_href: String,
+    pub button_label: &'static str,
 }
 
 /// Public brand book at `/brand` — the canonical guide for designers,
@@ -49,78 +67,6 @@ pub struct BrandPage<'a> {
     pub base_url: &'a str,
     pub signed_in: bool,
 }
-
-#[derive(Debug, Clone)]
-pub struct PricingPlan {
-    pub slug: &'static str,
-    pub name: &'static str,
-    pub price_monthly: u32,
-    pub limit: &'static str,
-    pub best_for: &'static str,
-    pub features: &'static [&'static str],
-    pub popular: bool,
-}
-
-/// Static catalogue used on the marketing pricing page. Keep this array in
-/// sync with the plan `ASSERT` in `db/schema.surql`.
-pub const PRICING_PLANS: &[PricingPlan] = &[
-    PricingPlan {
-        slug: "starter",
-        name: "Starter",
-        price_monthly: 149,
-        limit: "Up to 25 transactions / month",
-        best_for: "Solo agents & small teams",
-        features: &[
-            "Full transaction management",
-            "Checklist & compliance workflow",
-            "3-year compliant storage",
-            "Email support",
-        ],
-        popular: false,
-    },
-    PricingPlan {
-        slug: "growth",
-        name: "Growth",
-        price_monthly: 299,
-        limit: "Up to 100 transactions / month",
-        best_for: "Typical brokerages",
-        features: &[
-            "Everything in Starter",
-            "Priority support",
-            "Unlimited team members",
-            "Custom checklist templates",
-        ],
-        popular: true,
-    },
-    PricingPlan {
-        slug: "scale",
-        name: "Scale",
-        price_monthly: 499,
-        limit: "Up to 250 transactions / month",
-        best_for: "Growing & mid-size offices",
-        features: &[
-            "Everything in Growth",
-            "Advanced search & reporting",
-            "Audit-ready export tooling",
-            "Dedicated onboarding",
-        ],
-        popular: false,
-    },
-    PricingPlan {
-        slug: "enterprise",
-        name: "Enterprise",
-        price_monthly: 799,
-        limit: "Unlimited transactions",
-        best_for: "Large & multi-office brokerages",
-        features: &[
-            "Everything in Scale",
-            "Dedicated support contact",
-            "Custom compliance policies",
-            "Multi-office visibility",
-        ],
-        popular: false,
-    },
-];
 
 // ---------------------------------------------------------------------------
 // Auth
