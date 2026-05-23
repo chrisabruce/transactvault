@@ -6,6 +6,9 @@
 use std::time::Duration;
 
 use axum::Router;
+use axum::extract::Request;
+use axum::middleware::{Next, from_fn};
+use axum::response::Response;
 use axum::routing::{get, post};
 use tower_cookies::CookieManagerLayer;
 use tower_http::compression::CompressionLayer;
@@ -129,6 +132,14 @@ pub fn build(state: AppState) -> Router {
                 .on_response(DefaultOnResponse::new().level(Level::INFO))
                 .on_failure(DefaultOnFailure::new().level(Level::ERROR)),
         )
+        // Safety-net 5xx logger. `AppError::IntoResponse` already logs
+        // every internal error it produces, but any response with a
+        // 5xx status — including ones synthesized by middleware, body
+        // limits, or an extractor rejection we forgot to handle —
+        // should leave a breadcrumb. Without this layer the previous
+        // upload bug returned a "naked" 500 to the browser and we had
+        // to guess at the cause; now every 5xx surfaces here at least.
+        .layer(from_fn(log_5xx))
         // Catch panics inside handlers so they surface in the logs as
         // tracing errors instead of disappearing into Axum's default
         // empty-500 fallback. Without this layer, a panic in any
@@ -144,6 +155,28 @@ pub fn build(state: AppState) -> Router {
             axum::http::StatusCode::GATEWAY_TIMEOUT,
             Duration::from_secs(60),
         ))
+}
+
+/// Catch-all 5xx logger. Wraps every handler so a server-error
+/// response is guaranteed to leave a tracing record, even if it was
+/// produced by an extractor rejection, a middleware layer, or some
+/// future code path that bypasses [`crate::error::AppError`]. Logs
+/// the method + path + status so the breadcrumb is enough to start
+/// diagnosing without a panic backtrace.
+async fn log_5xx(req: Request, next: Next) -> Response {
+    let method = req.method().clone();
+    let uri = req.uri().clone();
+    let response = next.run(req).await;
+    let status = response.status();
+    if status.is_server_error() {
+        tracing::error!(
+            %status,
+            %method,
+            %uri,
+            "5xx response leaving the server"
+        );
+    }
+    response
 }
 
 /// Panic handler for `CatchPanicLayer`. Logs the panic payload + the
