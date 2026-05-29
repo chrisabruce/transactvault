@@ -35,6 +35,30 @@ pub struct CarForm {
     pub allows_multiple: bool,
 }
 
+impl CarForm {
+    /// For the main contract forms only, the mandatory disclosures CAR
+    /// bundles automatically. Rendered as a second line under the
+    /// contract on the checklist so agents know those forms are
+    /// already covered. Empty for every non-contract form — the
+    /// template only shows the line when this is non-empty.
+    pub fn includes(&self) -> &'static str {
+        match self.code {
+            "RLA" => "Includes AD, MLSA, BCA, PRBS, FHDA, SA & CCPA",
+            "RPA" => "Includes AD, FRR-PA, BIA, PRBS, FHDA, BHIA, WFA & CCPA",
+            "RIPA" => "Includes AD, BIA, PRBS, FHDA, BHIA, WFA & CCPA",
+            "VLL" => "Includes AD, SLVA, MLSA, BCA, PRBS & CCPA",
+            "VLPA" => "Includes AD, FRR-PA, BVLIA, PRBS, FHDA, WFA & CCPA",
+            "CLA" => "Includes AD, MLSA, BCA, PRBS & CCPA",
+            "CPA" => "Includes AD, FRR-PA, BIA, PRBS, FHDA, BHIA, WFA & CCPA",
+            "BLA" => "Includes AD, PRBS & CCPA",
+            "BPA" => "Includes AD, PRBS, FHDA, BHIA, WFA & CCPA",
+            "LL" => "Includes RPOD, RPOA, FHDA & CCPA",
+            "RLMM" => "Includes BBD, TFHD, RCJC, TRPR & FHDA",
+            _ => "",
+        }
+    }
+}
+
 /// One section in a checklist — these match the headings in CAR's printed
 /// transaction checklists exactly.
 ///
@@ -78,89 +102,30 @@ impl FormGroup {
         FormGroup::ReleaseDisclosures,
     ];
 
-    pub fn label(self) -> &'static str {
+    /// Canonical (group name, sort order) for the DB forms engine. The
+    /// in-memory engine splits contracts into singular/plural variants
+    /// (a presentational nicety that depends on transaction type, so a
+    /// form can't belong to a fixed one); the DB model collapses each
+    /// pair into a single "Listing Contracts" / "Purchase Contracts"
+    /// group so every form maps to exactly one `form_group`.
+    pub fn seed_group(self) -> (&'static str, i64) {
         match self {
-            FormGroup::MlsDataSheets => "MLS Data Sheets",
-            FormGroup::ListingContract => "Listing Contract",
-            FormGroup::ListingContracts => "Listing Contracts",
-            FormGroup::PurchaseContract => "Purchase Contract",
-            FormGroup::PurchaseContracts => "Purchase Contracts",
-            FormGroup::MandatoryDisclosures => "Mandatory Disclosures",
-            FormGroup::AdditionalDisclosures => "Additional Disclosures",
-            FormGroup::EscrowDocuments => "Escrow Documents",
-            FormGroup::ReportsCertificatesClearances => "Reports, Certificates & Clearances",
-            FormGroup::ReleaseDisclosures => "Release Disclosures",
+            FormGroup::MlsDataSheets => ("MLS Data Sheets", 0),
+            FormGroup::ListingContract | FormGroup::ListingContracts => ("Listing Contracts", 1),
+            FormGroup::PurchaseContract | FormGroup::PurchaseContracts => ("Purchase Contracts", 2),
+            FormGroup::MandatoryDisclosures => ("Mandatory Disclosures", 3),
+            FormGroup::AdditionalDisclosures => ("Additional Disclosures", 4),
+            FormGroup::EscrowDocuments => ("Escrow Documents", 5),
+            FormGroup::ReportsCertificatesClearances => ("Reports, Certificates & Clearances", 6),
+            FormGroup::ReleaseDisclosures => ("Release Disclosures", 7),
         }
     }
 
-    /// Stable string slug used for storage and parameterised URLs.
-    pub fn slug(self) -> &'static str {
-        match self {
-            FormGroup::MlsDataSheets => "mls",
-            FormGroup::ListingContract => "listing_contract",
-            FormGroup::ListingContracts => "listing_contracts",
-            FormGroup::PurchaseContract => "purchase_contract",
-            FormGroup::PurchaseContracts => "purchase_contracts",
-            FormGroup::MandatoryDisclosures => "mandatory",
-            FormGroup::AdditionalDisclosures => "additional",
-            FormGroup::EscrowDocuments => "escrow",
-            FormGroup::ReportsCertificatesClearances => "reports",
-            FormGroup::ReleaseDisclosures => "release",
-        }
-    }
-
-    /// Parse a slug back to a group, accepting both the current set and
-    /// the legacy slugs that pre-date this refactor so existing rows
-    /// render without a DB migration.
-    ///
-    /// Legacy mappings:
-    /// - `"contracts"` → `ListingContract` (imperfect: pre-split rows
-    ///   didn't store listing-vs-purchase. Controllers that have access
-    ///   to the row's `form_code` should call [`migrate_legacy_slug`]
-    ///   for a more accurate split.)
-    /// - `"special"`, `"if_applicable"` → `AdditionalDisclosures`.
-    pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "mls" => Some(Self::MlsDataSheets),
-            "listing_contract" => Some(Self::ListingContract),
-            "listing_contracts" => Some(Self::ListingContracts),
-            "purchase_contract" => Some(Self::PurchaseContract),
-            "purchase_contracts" => Some(Self::PurchaseContracts),
-            "mandatory" => Some(Self::MandatoryDisclosures),
-            "additional" => Some(Self::AdditionalDisclosures),
-            "escrow" => Some(Self::EscrowDocuments),
-            "reports" => Some(Self::ReportsCertificatesClearances),
-            "release" => Some(Self::ReleaseDisclosures),
-            // Legacy fallbacks (TODO: drop after a prod migration runs).
-            "contracts" => Some(Self::ListingContract),
-            "special" | "if_applicable" => Some(Self::AdditionalDisclosures),
-            _ => None,
-        }
-    }
-}
-
-/// Resolve a legacy `group_slug` to a current canonical slug given the
-/// row's `form_code`. Use this when reading old DB rows so the
-/// listing-vs-purchase split is correct (the bare `FormGroup::parse`
-/// can't do that without context).
-///
-/// Returns the input unchanged if it's already canonical.
-#[allow(dead_code)]
-pub fn migrate_legacy_slug(slug: &str, form_code: Option<&str>) -> Option<&'static str> {
-    match slug {
-        "contracts" => {
-            let code = form_code.unwrap_or("").to_ascii_uppercase();
-            Some(match code.as_str() {
-                "RPA" | "RIPA" => "purchase_contracts",
-                "MHPA" => "purchase_contracts",
-                "VLPA" | "CPA" | "BPA" | "LR" => "purchase_contract",
-                "MHLA" => "listing_contracts",
-                _ => "listing_contract",
-            })
-        }
-        "special" | "if_applicable" => Some("additional"),
-        _ => None,
-    }
+    // Note: the old `label()` / `slug()` / `parse()` display helpers
+    // were removed in the DB-forms-engine cutover — checklist items now
+    // carry their group's display name + order directly (set by the
+    // seeder / resolver), so `FormGroup` survives only as the seed
+    // source (`seed_group`, `ORDERED`, `contract_group_for`).
 }
 
 /// Smart-defaults entry: which form, in which group, required-or-not.
@@ -2175,13 +2140,27 @@ pub const LIBRARY: &[CarForm] = &[
 /// per-combo defaults below split into "Listing" and "Purchase" arrays;
 /// [`SalesSide::Both`] unions them.
 #[derive(Clone, Copy)]
-enum SalesSide {
+pub enum SalesSide {
     Listing,
     Purchase,
     Both,
 }
 
-fn sales_side(sales: SalesType) -> SalesSide {
+impl SalesSide {
+    /// Stable slug stored in `form.applies_sides` and matched against
+    /// at checklist-resolution time. A `Both` deal stores `"both"`;
+    /// forms that appear on a merged listing+purchase checklist record
+    /// `"both"` alongside their single-side slug so they match.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SalesSide::Listing => "listing",
+            SalesSide::Purchase => "purchase",
+            SalesSide::Both => "both",
+        }
+    }
+}
+
+pub fn sales_side(sales: SalesType) -> SalesSide {
     match sales {
         // Pure listing-side deals
         SalesType::Listing | SalesType::LeaseLandlord => SalesSide::Listing,

@@ -18,109 +18,12 @@
 -- existing definitions (ASSERT clauses, defaults, types, etc.) instead of
 -- being ignored. The boot loop in `src/db/mod.rs` runs this on every start.
 --
--- Migration sequencing — three phases. Two earlier prod incidents made this
--- order necessary (rows missing `approval_status`, then missing
--- `email_verified`, both crashing reads with deserialize errors):
---
---   Phase 1 (RELAX):    DEFINE every new-or-newly-required field as
---                       `option<...>` first so existing rows that lack the
---                       field don't violate SCHEMAFULL.
---   Phase 2 (MIGRATE):  UPDATE rows to backfill the new fields and rewrite
---                       legacy enum values onto the new vocabulary.
---   Phase 3 (LOCK):     re-DEFINE the same fields with their final
---                       non-option types, defaults, and ASSERTs.
---
--- DEFAULT clauses apply only to NEW inserts in SurrealDB — they do not
--- retroactively populate existing rows. Phase 2 is what makes those rows
--- pass Phase 3's tighter ASSERTs.
--- ============================================================================
-
--- ============================================================================
--- Phase 1 — relax: declare every newly-required column as `option<...>` so
--- the bare DEFINE doesn't reject pre-existing rows that lack the field.
--- ============================================================================
-
-DEFINE TABLE OVERWRITE transaction SCHEMAFULL;
-DEFINE FIELD OVERWRITE status                  ON transaction TYPE option<string>;
-DEFINE FIELD OVERWRITE transaction_type        ON transaction TYPE option<string>;
-DEFINE FIELD OVERWRITE special_sales_condition ON transaction TYPE option<string>;
-DEFINE FIELD OVERWRITE sales_type              ON transaction TYPE option<string>;
-
-DEFINE TABLE OVERWRITE checklist_item SCHEMAFULL;
-DEFINE FIELD OVERWRITE group_slug      ON checklist_item TYPE option<string>;
-DEFINE FIELD OVERWRITE required        ON checklist_item TYPE option<bool>;
-DEFINE FIELD OVERWRITE approval_status ON checklist_item TYPE option<string>;
-DEFINE FIELD OVERWRITE reviewed_at     ON checklist_item TYPE option<datetime>;
-DEFINE FIELD OVERWRITE reviewed_by     ON checklist_item TYPE option<record<user>>;
--- Legacy fields kept temporarily so the MIGRATE phase can read them.
-DEFINE FIELD OVERWRITE completed       ON checklist_item TYPE option<bool>;
-DEFINE FIELD OVERWRITE completed_at    ON checklist_item TYPE option<datetime>;
-DEFINE FIELD OVERWRITE completed_by    ON checklist_item TYPE option<record<user>>;
-
-DEFINE TABLE OVERWRITE document SCHEMAFULL;
-DEFINE FIELD OVERWRITE form_code ON document TYPE option<string>;
--- Legacy field kept temporarily for MIGRATE.
-DEFINE FIELD OVERWRITE category  ON document TYPE option<string>;
-
-DEFINE TABLE OVERWRITE user SCHEMAFULL;
-DEFINE FIELD OVERWRITE email_verified ON user TYPE option<bool>;
-
-DEFINE TABLE OVERWRITE brokerage SCHEMAFULL;
--- New super-admin-toggle field. Existing brokerage rows predate it,
--- so relax to `option<bool>` here, backfill to `false` in MIGRATE,
--- then lock to `bool DEFAULT false` in LOCK.
-DEFINE FIELD OVERWRITE is_complimentary ON brokerage TYPE option<bool>;
-
--- ============================================================================
--- Phase 2 — migrate: rewrite legacy values onto the new vocabulary and
--- backfill every newly-required field for existing rows.
--- ============================================================================
-
--- transaction.status: old PoC enum -> new five-value enum.
-UPDATE transaction SET status = 'active'   WHERE status = 'open';
-UPDATE transaction SET status = 'pending'  WHERE status = 'under_contract';
-UPDATE transaction SET status = 'sold'     WHERE status = 'closed';
-UPDATE transaction SET status = 'canceled' WHERE status = 'cancelled';
-UPDATE transaction SET status = 'active'   WHERE status = NONE;
-
--- transaction: new required dropdowns get sensible defaults.
-UPDATE transaction SET transaction_type        = 'residential' WHERE transaction_type        = NONE;
-UPDATE transaction SET special_sales_condition = 'none'        WHERE special_sales_condition = NONE;
-UPDATE transaction SET sales_type              = 'listing'     WHERE sales_type              = NONE;
-
--- checklist_item: legacy `completed*` columns -> new `approval_status` /
--- `reviewed_*`. Then drop the old columns so the LOCK phase can remove
--- them from the schema.
-UPDATE checklist_item SET
-    approval_status = IF completed = true THEN 'approved' ELSE 'pending' END
-    WHERE approval_status = NONE;
-UPDATE checklist_item SET reviewed_at = completed_at WHERE reviewed_at = NONE;
-UPDATE checklist_item SET reviewed_by = completed_by WHERE reviewed_by = NONE;
-UPDATE checklist_item UNSET completed, completed_at, completed_by;
-
--- checklist_item: backfill grouping + required flags for legacy items.
-UPDATE checklist_item SET group_slug = 'additional' WHERE group_slug = NONE;
-UPDATE checklist_item SET required   = false        WHERE required   = NONE;
-
--- document.form_code: derived from the old `category` field; default to
--- `MISC` when neither is set. Then drop `category`.
-UPDATE document SET form_code = string::uppercase(category)
-    WHERE form_code = NONE AND category != NONE;
-UPDATE document SET form_code = 'MISC' WHERE form_code = NONE;
-UPDATE document UNSET category;
-
--- user.email_verified: legacy users predate the verification flow. We
--- treat them as already verified — they've been using the system, so
--- bouncing them now would be a worse experience than a small data drift.
-UPDATE user SET email_verified = true WHERE email_verified = NONE;
-
--- brokerage.is_complimentary: brand-new field; existing brokerages
--- default to "not complimentary" so paid + trial flows are unaffected.
-UPDATE brokerage SET is_complimentary = false WHERE is_complimentary = NONE;
-
--- ============================================================================
--- Phase 3 — lock: re-DEFINE every relaxed field with its final type,
--- default, and ASSERT. Then DEFINE the rest of the schema.
+-- This is a single-pass, fresh-load schema: the app is pre-production, so
+-- there is no legacy data to migrate. Each table is DEFINED once with its
+-- final types/defaults/ASSERTs. To wipe and reload, boot with
+-- `DEV_RESET_ON_BOOT=yes-destroy-all-data` (drops every table, then this
+-- script recreates them empty). If/when real data exists, reintroduce a
+-- relax → backfill → lock migration pass before tightening any field.
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
@@ -196,6 +99,65 @@ DEFINE FIELD OVERWRITE updated_at              ON tier TYPE datetime DEFAULT tim
 
 DEFINE INDEX OVERWRITE idx_tier_slug   ON tier FIELDS slug UNIQUE;
 DEFINE INDEX OVERWRITE idx_tier_active ON tier FIELDS is_active, is_archived;
+
+-- ----------------------------------------------------------------------------
+-- Forms engine — admin-managed CA/local form library + per-brokerage config.
+--
+-- Graph-modeled so a transaction's checklist resolves in one traversal:
+--   brokerage ->(uses_state, uses_locality)-> form_set
+--             -> has_group -> form_group -> has_form -> form
+-- minus  brokerage -> hides_form -> form
+-- plus   brokerage -> owns_form  -> form   (custom)
+--
+-- `form_set.scope` is "state" (e.g. California) or "local" (a city /
+-- municipality / board). Localities hang off their state via
+-- `has_locality`. Groups + forms carry their own sort order so the UI
+-- presents them grouped + ordered. `form.applies_*` are the dependency
+-- rules (which transaction type / side / special condition includes the
+-- form); empty array = applies to all.
+-- ----------------------------------------------------------------------------
+DEFINE TABLE OVERWRITE form_set SCHEMAFULL;
+DEFINE FIELD OVERWRITE scope      ON form_set TYPE string ASSERT $value IN ["state", "local"];
+DEFINE FIELD OVERWRITE name       ON form_set TYPE string ASSERT string::len($value) >= 1;
+DEFINE FIELD OVERWRITE is_active  ON form_set TYPE bool DEFAULT true;
+DEFINE FIELD OVERWRITE created_at ON form_set TYPE datetime DEFAULT time::now();
+DEFINE INDEX OVERWRITE idx_form_set_scope ON form_set FIELDS scope;
+
+DEFINE TABLE OVERWRITE form_group SCHEMAFULL;
+DEFINE FIELD OVERWRITE name       ON form_group TYPE string ASSERT string::len($value) >= 1;
+DEFINE FIELD OVERWRITE sort_order ON form_group TYPE int DEFAULT 0;
+DEFINE FIELD OVERWRITE created_at ON form_group TYPE datetime DEFAULT time::now();
+
+DEFINE TABLE OVERWRITE form SCHEMAFULL;
+DEFINE FIELD OVERWRITE code               ON form TYPE string;
+DEFINE FIELD OVERWRITE name               ON form TYPE string ASSERT string::len($value) >= 1;
+DEFINE FIELD OVERWRITE description         ON form TYPE string DEFAULT "";
+DEFINE FIELD OVERWRITE includes            ON form TYPE string DEFAULT "";
+DEFINE FIELD OVERWRITE form_order          ON form TYPE int DEFAULT 0;
+DEFINE FIELD OVERWRITE required            ON form TYPE bool DEFAULT false;
+DEFINE FIELD OVERWRITE allows_multiple     ON form TYPE bool DEFAULT false;
+-- Custom (brokerage-owned) forms carry their group inline rather than
+-- via a `has_form` edge from a set's group, since they don't belong to
+-- a shared form_set. Master/library forms leave these NONE and get
+-- their group through the `form_group -> has_form -> form` edge.
+DEFINE FIELD OVERWRITE group_name          ON form TYPE option<string>;
+DEFINE FIELD OVERWRITE group_order         ON form TYPE option<int>;
+-- Dependency rules. Empty array = applies regardless of that dimension.
+DEFINE FIELD OVERWRITE applies_types       ON form TYPE array<string> DEFAULT [];
+DEFINE FIELD OVERWRITE applies_sides       ON form TYPE array<string> DEFAULT [];
+DEFINE FIELD OVERWRITE applies_conditions  ON form TYPE array<string> DEFAULT [];
+DEFINE FIELD OVERWRITE is_active           ON form TYPE bool DEFAULT true;
+DEFINE FIELD OVERWRITE created_at          ON form TYPE datetime DEFAULT time::now();
+
+-- Form-engine graph edges.
+DEFINE TABLE OVERWRITE has_locality  SCHEMAFULL TYPE RELATION FROM form_set   TO form_set;
+DEFINE TABLE OVERWRITE has_group     SCHEMAFULL TYPE RELATION FROM form_set   TO form_group;
+DEFINE TABLE OVERWRITE has_form      SCHEMAFULL TYPE RELATION FROM form_group TO form;
+DEFINE TABLE OVERWRITE uses_state    SCHEMAFULL TYPE RELATION FROM brokerage  TO form_set;
+DEFINE TABLE OVERWRITE uses_locality SCHEMAFULL TYPE RELATION FROM brokerage  TO form_set;
+DEFINE TABLE OVERWRITE hides_form    SCHEMAFULL TYPE RELATION FROM brokerage  TO form;
+DEFINE TABLE OVERWRITE owns_form     SCHEMAFULL TYPE RELATION FROM brokerage  TO form;
+
 DEFINE FIELD OVERWRITE created_at ON brokerage TYPE datetime DEFAULT time::now();
 DEFINE FIELD OVERWRITE updated_at ON brokerage TYPE datetime DEFAULT time::now() VALUE time::now();
 
@@ -298,24 +260,13 @@ DEFINE TABLE OVERWRITE checklist_item SCHEMAFULL;
 DEFINE FIELD OVERWRITE title        ON checklist_item TYPE string
     ASSERT string::len($value) >= 1;
 DEFINE FIELD OVERWRITE form_code    ON checklist_item TYPE option<string>;
-DEFINE FIELD OVERWRITE group_slug   ON checklist_item TYPE string DEFAULT "additional"
-    ASSERT $value IN [
-        "mls",
-        -- New (May 2026) contract groups, split from the legacy
-        -- "contracts" bucket. Singular vs plural carries semantics:
-        -- plural variants are used by checklists that bundle two main
-        -- contracts (Residential Purchase = RPA + RIPA, Manufactured
-        -- Home = RLA + MHLA and RPA + MHPA).
-        "listing_contract", "listing_contracts",
-        "purchase_contract", "purchase_contracts",
-        "mandatory",
-        "additional",
-        "escrow", "reports", "release",
-        -- Legacy slugs from before the May-2026 refactor — kept in the
-        -- ASSERT so old persisted rows still satisfy the schema until a
-        -- prod migration sweeps them. New writes must not use these.
-        "contracts", "special", "if_applicable"
-    ];
+-- Data-driven grouping: the resolved form's group name (e.g.
+-- "Mandatory Disclosures", or a locality-labeled "Los Angeles —
+-- Mandatory Disclosures") plus its sort order, snapshotted onto the
+-- item at creation so the transaction view groups + orders without
+-- re-resolving the form library.
+DEFINE FIELD OVERWRITE group_name   ON checklist_item TYPE string DEFAULT "Additional Disclosures";
+DEFINE FIELD OVERWRITE group_order  ON checklist_item TYPE int DEFAULT 4;
 DEFINE FIELD OVERWRITE position        ON checklist_item TYPE int DEFAULT 0;
 DEFINE FIELD OVERWRITE required        ON checklist_item TYPE bool DEFAULT false;
 DEFINE FIELD OVERWRITE approval_status ON checklist_item TYPE string DEFAULT "pending"
@@ -378,7 +329,7 @@ DEFINE FIELD OVERWRITE kind ON audit_event TYPE string
         "invite_accepted", "admin_view",
         "document_deleted",
         "profile_updated", "password_changed", "avatar_updated",
-        "brokerage_deleted",
+        "brokerage_deleted", "transaction_deleted",
         "tier_created", "tier_updated",
         "brokerage_comp_granted", "brokerage_comp_revoked"
     ];
@@ -391,11 +342,3 @@ DEFINE FIELD OVERWRITE at          ON audit_event TYPE datetime DEFAULT time::no
 DEFINE INDEX OVERWRITE idx_audit_at   ON audit_event FIELDS at;
 DEFINE INDEX OVERWRITE idx_audit_kind ON audit_event FIELDS kind;
 DEFINE INDEX OVERWRITE idx_audit_ip   ON audit_event FIELDS ip;
-
--- ----------------------------------------------------------------------------
--- Migrations log
--- ----------------------------------------------------------------------------
-DEFINE TABLE OVERWRITE _migrations SCHEMAFULL;
-DEFINE FIELD OVERWRITE name       ON _migrations TYPE string;
-DEFINE FIELD OVERWRITE applied_at ON _migrations TYPE datetime DEFAULT time::now();
-DEFINE INDEX OVERWRITE idx_migration_name ON _migrations FIELDS name UNIQUE;

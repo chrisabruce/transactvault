@@ -16,6 +16,10 @@ use surrealdb::types::{RecordId, RecordIdKey};
 
 use crate::config::Config;
 
+pub mod forms;
+mod seed;
+pub use seed::seed_forms;
+
 /// Extract the key portion of a SurrealDB [`RecordId`] as a URL-safe
 /// string.
 ///
@@ -133,6 +137,10 @@ pub async fn reset_schema(db: &Surreal<Any>) -> anyhow::Result<()> {
     // Order: drop relation tables before the tables they reference, then
     // entity tables. SurrealDB doesn't enforce this ordering strictly, but
     // it makes intent obvious and avoids relying on quirks.
+    //
+    // This list must stay the inverse of every `DEFINE TABLE` in
+    // `db/schema.surql` — when you add a top-level table or edge there,
+    // add it here too or DEV_RESET will leave it (and its rows) behind.
     const RESET_QUERY: &str = "
         REMOVE TABLE IF EXISTS for_item;
         REMOVE TABLE IF EXISTS uploaded;
@@ -142,15 +150,25 @@ pub async fn reset_schema(db: &Surreal<Any>) -> anyhow::Result<()> {
         REMOVE TABLE IF EXISTS has_transaction;
         REMOVE TABLE IF EXISTS owns;
         REMOVE TABLE IF EXISTS works_at;
+        REMOVE TABLE IF EXISTS has_locality;
+        REMOVE TABLE IF EXISTS has_group;
+        REMOVE TABLE IF EXISTS has_form;
+        REMOVE TABLE IF EXISTS uses_state;
+        REMOVE TABLE IF EXISTS uses_locality;
+        REMOVE TABLE IF EXISTS hides_form;
+        REMOVE TABLE IF EXISTS owns_form;
         REMOVE TABLE IF EXISTS comment;
         REMOVE TABLE IF EXISTS document;
         REMOVE TABLE IF EXISTS checklist_item;
         REMOVE TABLE IF EXISTS transaction;
         REMOVE TABLE IF EXISTS invitation;
         REMOVE TABLE IF EXISTS audit_event;
+        REMOVE TABLE IF EXISTS tier;
+        REMOVE TABLE IF EXISTS form;
+        REMOVE TABLE IF EXISTS form_group;
+        REMOVE TABLE IF EXISTS form_set;
         REMOVE TABLE IF EXISTS user;
         REMOVE TABLE IF EXISTS brokerage;
-        REMOVE TABLE IF EXISTS _migrations;
     ";
 
     db.query(RESET_QUERY)

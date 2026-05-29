@@ -1092,6 +1092,12 @@ form .form-row { display: grid; gap: var(--sp-3); grid-template-columns: 1fr 1fr
 .stat-card .value { font-family: var(--font-display); font-size: 2.25rem; font-weight: 700; color: var(--color-ink); line-height: 1; }
 .stat-card .value.success { color: var(--color-success); }
 .stat-card .value.warn    { color: var(--color-warn); }
+/* Corrections-set number colors: Total black (default --color-ink),
+   Needs Attention red, Active green, Pending orange, Sold blue. */
+.stat-card .value.stat-attention { color: var(--color-danger); }
+.stat-card .value.stat-active    { color: var(--color-success); }
+.stat-card .value.stat-pending   { color: var(--color-warn); }
+.stat-card .value.stat-sold      { color: #2563eb; }
 
 .filter-bar {
     display: flex;
@@ -1151,6 +1157,7 @@ form .form-row { display: grid; gap: var(--sp-3); grid-template-columns: 1fr 1fr
 }
 .tx-toolbar-input::placeholder {
     color: var(--color-mute-soft);
+    font-style: italic;
 }
 /* Suppress every WebKit search pseudo-element so the input renders
    exactly the way the surrounding pill expects — no inset clear-X,
@@ -1330,6 +1337,14 @@ form .form-row { display: grid; gap: var(--sp-3); grid-template-columns: 1fr 1fr
     color: var(--color-muted);
 }
 .tx-cell.tx-cell-age time { white-space: nowrap; }
+/* Action column now holds Open + (broker-only) Delete side by side. */
+.tx-cell.tx-cell-action {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    justify-content: flex-end;
+}
+.tx-cell.tx-cell-action .inline-form { display: inline; margin: 0; }
 
 .transaction-sentinel {
     display: flex;
@@ -1621,6 +1636,16 @@ select:disabled {
     background: var(--color-danger-soft);
     border-color: #fecaca;
 }
+/* Role-aware "needs your attention" highlight: a denied form (agent
+   view) or a pending upload awaiting review (broker/CO view). Left
+   accent bar so it reads at a glance even inside a long list. */
+.checklist-item.is-attention {
+    border-left: 4px solid var(--color-warn);
+    box-shadow: inset 0 0 0 1px var(--color-warn-soft);
+}
+.checklist-item.is-denied.is-attention {
+    border-left-color: var(--color-danger);
+}
 .checklist-item .title {
     color: var(--color-ink);
     font-weight: 400;
@@ -1885,6 +1910,11 @@ select:disabled {
     display: grid;
     gap: var(--sp-4);
 }
+.field-hint {
+    margin: var(--sp-2) 0 0;
+    font-size: var(--fs-xs);
+    color: var(--color-muted);
+}
 .tx-form .field-hint {
     margin: -0.25rem 0 var(--sp-3);
     font-size: var(--fs-xs);
@@ -2016,6 +2046,36 @@ select:disabled {
 }
 .checklist-group.complete .checklist-group-header h3 {
     color: var(--color-success-ink);
+}
+
+/* Accordion: each category is a <details>; its <summary> is the
+   group header. Hide the native marker and draw our own chevron that
+   flips when the section is open. */
+details.checklist-group > summary {
+    cursor: pointer;
+    list-style: none;
+    display: block;
+    position: relative;
+    padding-right: 1.75rem;
+}
+details.checklist-group > summary::-webkit-details-marker { display: none; }
+details.checklist-group > summary::after {
+    content: "▸";
+    position: absolute;
+    right: 0.25rem;
+    top: 0;
+    color: var(--color-muted);
+    font-size: 0.9em;
+}
+details.checklist-group[open] > summary::after { content: "▾"; }
+details.checklist-group > summary:hover h3 { color: var(--color-ink); }
+
+/* Bundled-disclosures line under a contract form on the checklist. */
+.checklist-text .form-includes {
+    margin: 0.15rem 0 0;
+    font-size: var(--fs-xs);
+    color: var(--color-muted);
+    font-style: italic;
 }
 
 progress.progress.small {

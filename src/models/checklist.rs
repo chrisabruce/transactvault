@@ -49,7 +49,11 @@ pub struct ChecklistItem {
     pub id: RecordId,
     pub title: String,
     pub form_code: Option<String>,
-    pub group_slug: String,
+    /// Display name of the group this item renders under (from the
+    /// resolved form's `form_group`), plus its sort order. Snapshotted
+    /// at creation so rendering needn't re-resolve the form library.
+    pub group_name: String,
+    pub group_order: i64,
     pub position: i64,
     pub required: bool,
     pub approval_status: String,
@@ -81,7 +85,8 @@ impl ChecklistItem {
 pub struct NewChecklistItem {
     pub title: String,
     pub form_code: Option<String>,
-    pub group_slug: String,
+    pub group_name: String,
+    pub group_order: i64,
     pub position: i64,
     pub required: bool,
 }

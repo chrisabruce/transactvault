@@ -54,6 +54,10 @@
                     Profile &amp; password
                 </a>
                 {% if header.role.is_broker() %}
+                    <a class="user-menu-item" href="/app/forms" role="menuitem"
+                       {% if header.active_nav == "forms" %}aria-current="page"{% endif %}>
+                        Custom forms
+                    </a>
                     <a class="user-menu-item" href="/app/billing/portal" role="menuitem">
                         Manage subscription
                     </a>

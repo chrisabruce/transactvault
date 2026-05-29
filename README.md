@@ -138,6 +138,33 @@ static/css/main.css       single stylesheet, CSS custom properties
 
 `GET /healthcheck` returns JSON with version, DB status, and system metrics.
 
+## Backup & restore
+
+```bash
+make backup                         # → backup-YYYYMMDD-HHMMSS.surql
+make restore FILE=backup-….surql    # load a dump back in
+```
+
+`make backup` wraps `surreal export`, which dumps **every** table's
+definition and rows in one pass — brokerages, users, transactions,
+tiers, the full forms engine (`form_set` / `form_group` / `form` + all
+edges), the audit log, everything. There's no table list to maintain, so
+new tables are always included. Override the connection with
+`make backup SURREAL_ENDPOINT=… SURREAL_USER=… SURREAL_PASS=…`.
+
+Note: this covers the SurrealDB layer only. Uploaded documents live in
+object storage (RustFS/S3) — snapshot that bucket separately for a
+complete disaster-recovery backup.
+
+### Fresh schema load (pre-production)
+
+The schema in `db/schema.surql` is single-pass — every table is defined
+once with its final shape (no migration phases, since there's no legacy
+data yet). To wipe and reload from scratch, boot with
+`DEV_RESET_ON_BOOT=yes-destroy-all-data`: every table is dropped, then
+the schema recreates them empty. Once real data exists, reintroduce a
+relax → backfill → lock migration pass before tightening any field.
+
 ## Security notes
 
 - Every authenticated route runs through the `CurrentUser` extractor, which pulls the JWT, looks up the user, and confirms brokerage membership on every request.

@@ -65,6 +65,14 @@ async fn main() -> anyhow::Result<()> {
 
     db::apply_schema(&db).await.context("applying schema")?;
 
+    // Seed the California master form set if absent. Idempotent
+    // (seed-once); mirrors the in-memory forms engine into the graph
+    // tables. Behavior is unchanged until the resolution swap reads
+    // from these rows.
+    db::seed_forms(&db)
+        .await
+        .context("seeding California form set")?;
+
     let storage = storage::Storage::connect(&config.rustfs)
         .await
         .context("connecting to object storage")?;

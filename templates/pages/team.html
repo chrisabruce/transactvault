@@ -26,19 +26,25 @@
         </p>
     {% when None %}{% endmatch %}
 
+    {% match invite_notice %}{% when Some with (notice) %}
+        <p class="alert success" role="status">{{ notice }}</p>
+    {% when None %}{% endmatch %}
+
     <section class="panel" aria-labelledby="invite-heading">
         <h2 id="invite-heading">Invite a teammate</h2>
         <form method="post" action="/app/team/invite" class="filter-bar">
-            <label class="visually-hidden" for="invite-email">Email</label>
-            <input id="invite-email" type="email" name="email" placeholder="agent@brokerage.com" required>
+            <label class="visually-hidden" for="invite-email">Emails</label>
+            <input id="invite-email" type="text" name="email"
+                   placeholder="agent@brokerage.com, second@brokerage.com…" required>
             <label class="visually-hidden" for="invite-role">Role</label>
             <select id="invite-role" name="role">
                 <option value="agent">Agent</option>
                 <option value="coordinator">Compliance Officer</option>
                 <option value="broker">Broker</option>
             </select>
-            <button type="submit" class="btn">Send invite</button>
+            <button type="submit" class="btn">Send invites</button>
         </form>
+        <p class="field-hint">Invite several at once — separate addresses with commas. Everyone gets the role selected above.</p>
     </section>
 
     <section class="panel" aria-labelledby="members-heading">

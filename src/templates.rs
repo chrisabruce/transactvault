@@ -12,7 +12,7 @@ use serde::Deserialize;
 use surrealdb::types::{RecordId, SurrealValue};
 
 use crate::auth::Role;
-use crate::forms::{CarForm, FormGroup};
+use crate::forms::CarForm;
 use crate::models::{
     AuditEvent, ChecklistItem, Document, Invitation, SalesType, SpecialSalesCondition, Transaction,
     TransactionStatus, TransactionType,
@@ -240,18 +240,22 @@ pub struct TransactionsListPage<'a> {
     pub next_url: String,
     /// Totals across the full visible set (NOT the filtered page) so
     /// the stat-grid cards always show real numbers regardless of
-    /// which filter is on.
+    /// which filter is on. Active and Pending are split into separate
+    /// cards per the corrections set.
     pub total: usize,
-    pub open_count: usize,
+    pub active_count: usize,
+    pub pending_count: usize,
     pub needs_attention: usize,
-    pub complete_count: usize,
+    pub sold_count: usize,
     /// Which stat-card to highlight — derived from `filter_status` +
     /// `attention_on`. One of `""`, `"total"`, `"active"`,
-    /// `"attention"`, `"sold"`.
+    /// `"pending"`, `"attention"`, `"sold"`.
     pub active_filter: &'a str,
     /// Header strip — one entry per sortable column, with the URL to
     /// click + arrow glyph for the active column.
     pub sort_headers: Vec<crate::controllers::transactions::SortHeader>,
+    /// Brokers get a red Delete button on each row (corrections set).
+    pub is_broker: bool,
 }
 
 /// HTML fragment containing only the row markup for a given page. The
@@ -264,6 +268,9 @@ pub struct TransactionRowsFragment {
     pub transactions: Vec<Transaction>,
     pub has_next_page: bool,
     pub next_url: String,
+    /// Brokers get a red Delete button on each row (corrections set).
+    /// Threaded into the fragment so infinitely-scrolled rows keep it.
+    pub is_broker: bool,
 }
 
 #[derive(Template)]
@@ -380,11 +387,15 @@ impl CommentView {
 }
 
 /// One section of the grouped checklist (e.g. Mandatory Disclosures).
+/// Data-driven now: `name` + `order` come straight from the resolved
+/// form's group, so locality-labeled groups ("Los Angeles — Mandatory
+/// Disclosures") render as first-class sections.
 #[derive(Debug, Clone)]
 pub struct ChecklistGroup {
-    pub group: FormGroup,
-    pub label: &'static str,
-    pub slug: &'static str,
+    pub name: String,
+    pub order: i64,
+    /// Contract groups start expanded; everything else folded.
+    pub open_by_default: bool,
     pub items: Vec<ChecklistRow>,
     pub total: usize,
     pub completed: usize,
@@ -394,7 +405,7 @@ pub struct ChecklistGroup {
 }
 
 impl ChecklistGroup {
-    pub fn build(group: FormGroup, items: Vec<ChecklistRow>) -> Self {
+    pub fn build(name: String, order: i64, items: Vec<ChecklistRow>) -> Self {
         let total = items.len();
         let completed = items.iter().filter(|r| r.item.is_approved()).count();
         let required_total = items.iter().filter(|r| r.item.required).count();
@@ -407,10 +418,14 @@ impl ChecklistGroup {
         } else {
             ((completed as f32 / total as f32) * 100.0).round() as u32
         };
+        // The main file contract opens by default; supporting sections
+        // start collapsed. Name-based so locality-labeled contract
+        // groups behave the same.
+        let open_by_default = name.contains("Contract");
         Self {
-            group,
-            label: group.label(),
-            slug: group.slug(),
+            name,
+            order,
+            open_by_default,
             items,
             total,
             completed,
@@ -422,6 +437,27 @@ impl ChecklistGroup {
 
     pub fn complete(&self) -> bool {
         self.required_total > 0 && self.required_completed == self.required_total
+    }
+
+    /// Does any item in this group need the viewer's attention? Drives
+    /// the accordion auto-open so a flagged item is never hidden behind
+    /// a folded category. `reviewer` = broker/compliance-officer view.
+    /// Takes `&bool` because Askama hands method args by reference.
+    pub fn has_attention(&self, reviewer: &bool) -> bool {
+        self.items.iter().any(|r| r.needs_attention(reviewer))
+    }
+}
+
+impl ChecklistRow {
+    /// Per-item attention flag mirroring [`needs_attention_flags`] at
+    /// row granularity: agents see denied/rejected forms; reviewers see
+    /// items with an uploaded document still awaiting review.
+    pub fn needs_attention(&self, reviewer: &bool) -> bool {
+        if *reviewer {
+            self.item.approval_status == "pending" && !self.documents.is_empty()
+        } else {
+            self.item.is_denied()
+        }
     }
 }
 
@@ -497,6 +533,10 @@ pub struct TeamPage<'a> {
     pub pending: Vec<Invitation>,
     pub invite_error: Option<&'a str>,
     pub invite_link: Option<String>,
+    /// Summary line after a multi-address invite, e.g. "Sent 3
+    /// invitations." Shown instead of the single copyable link when
+    /// more than one email was submitted.
+    pub invite_notice: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -592,6 +632,11 @@ pub struct SearchPage<'a> {
     pub signed_in: bool,
     pub header: AppHeader<'a>,
     pub query: &'a str,
+    /// Selected status filter (matches the transactions list dropdown).
+    pub status_filter: &'a str,
+    /// Sortable column headers for the transaction results (links back
+    /// to `/app/search`, query + status preserved).
+    pub sort_headers: Vec<crate::controllers::transactions::SortHeader>,
     pub transactions: Vec<Transaction>,
     pub documents: Vec<SearchDocument>,
 }
@@ -721,6 +766,96 @@ pub struct AdminBrokerageMember {
     pub email: String,
     pub name: String,
     pub role: String,
+}
+
+// ---------------------------------------------------------------------------
+// Forms configuration (broker + admin)
+// ---------------------------------------------------------------------------
+
+/// Broker's forms configuration page (`/app/forms`).
+#[derive(Template)]
+#[template(path = "pages/broker_forms.html")]
+pub struct BrokerFormsPage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+    pub signed_in: bool,
+    pub header: AppHeader<'a>,
+    pub state_name: String,
+    pub localities: Vec<FormSetOption>,
+    pub master_forms: Vec<BrokerFormRow>,
+    pub custom_forms: Vec<BrokerFormRow>,
+    pub group_choices: Vec<&'static str>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FormSetOption {
+    pub key: String,
+    pub name: String,
+    pub selected: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct BrokerFormRow {
+    pub key: String,
+    pub code: String,
+    pub name: String,
+    pub group_name: String,
+    pub hidden: bool,
+    pub custom: bool,
+}
+
+/// Admin form-set list (`/admin/forms`).
+#[derive(Template)]
+#[template(path = "pages/admin_forms.html")]
+pub struct AdminFormsPage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+    pub signed_in: bool,
+    pub header: AppHeader<'a>,
+    pub state_sets: Vec<AdminFormSetRow>,
+    pub local_sets: Vec<AdminFormSetRow>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AdminFormSetRow {
+    pub key: String,
+    pub name: String,
+    pub scope: String,
+    pub group_count: i64,
+    pub form_count: i64,
+}
+
+/// Admin detail for one form set (`/admin/forms/{key}`).
+#[derive(Template)]
+#[template(path = "pages/admin_form_set.html")]
+pub struct AdminFormSetDetailPage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+    pub signed_in: bool,
+    pub header: AppHeader<'a>,
+    pub set_key: String,
+    pub set_name: String,
+    pub set_scope: String,
+    pub groups: Vec<FormGroupView>,
+    pub group_choices: Vec<&'static str>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FormGroupView {
+    pub key: String,
+    pub name: String,
+    pub sort_order: i64,
+    pub forms: Vec<AdminFormRow>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AdminFormRow {
+    pub key: String,
+    pub code: String,
+    pub name: String,
+    pub required: bool,
+    pub is_active: bool,
+    pub form_order: i64,
 }
 
 /// One row on the brokerages admin page: name + already-human-formatted

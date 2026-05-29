@@ -14,13 +14,20 @@
         </section>
     </header>
 
-    <section class="filter-bar">
-        <form method="get" action="/app/search" role="search">
-            <label class="visually-hidden" for="search-q">Search</label>
-            <input id="search-q" type="search" name="q" value="{{ query }}" placeholder="Address, city, filename…" autofocus>
-            <button type="submit" class="btn">Search</button>
-        </form>
-    </section>
+    <form id="search-toolbar" method="get" action="/app/search" role="search" aria-label="Search and filter" class="tx-toolbar">
+        <label class="visually-hidden" for="search-q">Search</label>
+        <input id="search-q" class="tx-toolbar-input" type="search" name="q" value="{{ query }}"
+               placeholder="Search Address, Client, MLS…" autocomplete="off" autofocus>
+        <select name="status" aria-label="Status" class="tx-toolbar-select">
+            <option value="all"{% if status_filter == "all" || status_filter == "" %} selected{% endif %}>All statuses</option>
+            <option value="active"{% if status_filter == "active" %} selected{% endif %}>Active</option>
+            <option value="pending"{% if status_filter == "pending" %} selected{% endif %}>Pending</option>
+            <option value="sold"{% if status_filter == "sold" %} selected{% endif %}>Sold</option>
+            <option value="canceled"{% if status_filter == "canceled" %} selected{% endif %}>Canceled</option>
+            <option value="withdrawn"{% if status_filter == "withdrawn" %} selected{% endif %}>Withdrawn</option>
+        </select>
+        <button type="submit" class="btn">Search</button>
+    </form>
 
     {% if query == "" %}
         <section class="panel">
@@ -36,17 +43,37 @@
                 <p>No transactions match “{{ query }}”.</p>
             {% else %}
                 <section class="transaction-list">
+                    <header class="tx-list-head" role="row">
+                        {% for h in sort_headers %}
+                            <a href="{{ h.url }}"
+                               class="tx-list-col{% if h.active %} is-active{% endif %}"
+                               data-col="{{ h.key }}"
+                               role="columnheader"
+                               {% if h.active %}aria-sort="{% if h.arrow == "▲" %}ascending{% else %}descending{% endif %}"{% endif %}>
+                                <span>{{ h.label }}</span>
+                                <span class="tx-list-arrow">{% if h.arrow != "" %}{{ h.arrow }}{% else %}↕{% endif %}</span>
+                            </a>
+                        {% endfor %}
+                        <span class="tx-list-col is-spacer" aria-hidden="true"></span>
+                    </header>
                     <ul role="list">
                         {% for tx in transactions %}
                             <li class="transaction-row">
-                                <section>
-                                    <p class="property"><a href="/app/transactions/{{ tx.url_key() }}">{{ tx.property_address }}</a></p>
-                                    <p class="meta">{{ tx.city }} · CA</p>
+                                <section class="tx-cell tx-cell-property">
+                                    <a class="property" href="/app/transactions/{{ tx.url_key() }}">{{ tx.property_address }}</a>
+                                    <p class="meta">{{ tx.city }}{% if tx.city != "" %} · {% endif %}CA</p>
                                 </section>
-                                <section><p class="meta">Price</p><p>{{ tx.price_display() }}</p></section>
-                                <section><span class="chip {{ tx.status_class() }}">{{ tx.status_label() }}</span></section>
-                                <span></span>
-                                <a class="btn small secondary" href="/app/transactions/{{ tx.url_key() }}">Open</a>
+                                <section class="tx-cell tx-cell-price">{{ tx.price_display() }}</section>
+                                <section class="tx-cell tx-cell-type">{{ tx.type_label() }}</section>
+                                <section class="tx-cell tx-cell-age">
+                                    <time datetime="{{ tx.created_at }}" title="{{ tx.created_at.format("%b %-d, %Y") }}">{{ tx.age_label() }}</time>
+                                </section>
+                                <section class="tx-cell tx-cell-status">
+                                    <span class="chip {{ tx.status_class() }}">{{ tx.status_label() }}</span>
+                                </section>
+                                <section class="tx-cell tx-cell-action">
+                                    <a class="btn small secondary" href="/app/transactions/{{ tx.url_key() }}">Open</a>
+                                </section>
                             </li>
                         {% endfor %}
                     </ul>
@@ -79,4 +106,14 @@
         </section>
     {% endif %}
 </main>
+<script>
+// Re-run the search when the status filter changes (the text query
+// still needs an explicit Enter / Search click).
+(function () {
+    var form = document.getElementById("search-toolbar");
+    if (!form) return;
+    var sel = form.querySelector("select[name=status]");
+    if (sel) sel.addEventListener("change", function () { form.submit(); });
+})();
+</script>
 {% endblock %}

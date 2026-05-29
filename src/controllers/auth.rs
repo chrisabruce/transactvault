@@ -258,6 +258,13 @@ pub async fn signup(
         .bind(("b", brokerage.id.clone()))
         .await?;
 
+    // Default the new brokerage to the California state form set so its
+    // transactions resolve the standard CA checklist. Best-effort —
+    // a missing seed is logged, not fatal to signup.
+    if let Err(e) = crate::db::forms::attach_default_state(&state.db, &brokerage.id).await {
+        tracing::warn!(error = %e, "could not attach default form state at signup");
+    }
+
     let verify_link = format!("{}/verify/{}", state.config.base_url, token);
     state
         .mailer

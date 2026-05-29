@@ -5,6 +5,7 @@ pub mod auth;
 pub mod checklists;
 pub mod comments;
 pub mod documents;
+pub mod forms;
 pub mod health;
 pub mod marketing;
 pub mod members;

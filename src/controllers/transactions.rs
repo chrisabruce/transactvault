@@ -11,7 +11,7 @@ use axum::response::{Html, IntoResponse, Redirect, Response};
 use serde::Deserialize;
 use surrealdb::types::{RecordId, SurrealValue};
 
-use crate::auth::CurrentUser;
+use crate::auth::{CurrentUser, Role};
 use crate::controllers::render;
 use crate::error::AppError;
 use crate::forms::{self, FormGroup};
@@ -35,29 +35,48 @@ const TX_LIST_PAGE_SIZE: usize = 30;
 // Dashboard
 // ---------------------------------------------------------------------------
 
-/// Compute the four stat-grid totals over the un-filtered transaction
-/// set. Returned in the (total, open_count, needs_attention,
-/// complete_count) order used by the templates.
+/// Stat-grid totals over the un-filtered transaction set. Returned as
+/// `(total, active_count, pending_count, needs_attention, sold_count)` —
+/// the five cards the dashboard renders. Active and Pending are split
+/// into their own cards (per the corrections set) so a broker sees the
+/// live/under-contract breakdown at a glance.
 async fn stat_grid_totals(
     state: &AppState,
     transactions: &[Transaction],
-) -> Result<(usize, usize, usize, usize), AppError> {
+    role: Role,
+    brokerage_id: &RecordId,
+) -> Result<StatTotals, AppError> {
     let total = transactions.len();
-    let open_count = transactions
+    let active_count = transactions
         .iter()
-        .filter(|t| {
-            matches!(
-                t.status_enum(),
-                TransactionStatus::Active | TransactionStatus::Pending
-            )
-        })
+        .filter(|t| matches!(t.status_enum(), TransactionStatus::Active))
         .count();
-    let complete_count = transactions
+    let pending_count = transactions
+        .iter()
+        .filter(|t| matches!(t.status_enum(), TransactionStatus::Pending))
+        .count();
+    let sold_count = transactions
         .iter()
         .filter(|t| matches!(t.status_enum(), TransactionStatus::Sold))
         .count();
-    let needs_attention = count_needs_attention(state, transactions).await?;
-    Ok((total, open_count, needs_attention, complete_count))
+    let needs_attention = count_needs_attention(state, transactions, role, brokerage_id).await?;
+    Ok(StatTotals {
+        total,
+        active_count,
+        pending_count,
+        needs_attention,
+        sold_count,
+    })
+}
+
+/// The five dashboard counters. A named struct keeps the call site
+/// readable now that there are five fields instead of four.
+struct StatTotals {
+    total: usize,
+    active_count: usize,
+    pending_count: usize,
+    needs_attention: usize,
+    sold_count: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -174,15 +193,14 @@ pub async fn list(
     // filter is applied, so the cards keep showing real counts even when
     // a filter is active. (Otherwise "Active" view would say "Total: 5"
     // which defeats the purpose of leaving the cards on the page.)
-    let (total, open_count, needs_attention, complete_count) =
-        stat_grid_totals(&state, &transactions).await?;
+    let totals = stat_grid_totals(&state, &transactions, user.role, &user.brokerage_id).await?;
 
     let status_filter = filters.status.clone().unwrap_or_default();
     if !status_filter.is_empty() && status_filter != "all" {
-        // "open" is a virtual status meaning Active OR Pending — the
-        // dashboard's Active stat card links here so brokers see every
-        // deal still in flight, not just the ones in the narrow
-        // `active` state.
+        // `open` is a legacy alias meaning Active OR Pending. The
+        // dashboard no longer links to it (Active and Pending are now
+        // separate cards), but we keep honoring it so old bookmarks
+        // don't 404 into an empty list.
         if status_filter == "open" {
             transactions.retain(|t| {
                 matches!(
@@ -214,7 +232,8 @@ pub async fn list(
 
     let attention_on = is_truthy(&filters.attention);
     if attention_on {
-        let flags = needs_attention_flags(&state, &transactions).await?;
+        let flags =
+            needs_attention_flags(&state, &transactions, user.role, &user.brokerage_id).await?;
         transactions = transactions
             .into_iter()
             .zip(flags)
@@ -274,6 +293,7 @@ pub async fn list(
             transactions: page_rows,
             has_next_page,
             next_url,
+            is_broker: user.role.is_broker(),
         });
     }
 
@@ -308,12 +328,14 @@ pub async fn list(
         attention_on,
         has_next_page,
         next_url,
-        total,
-        open_count,
-        needs_attention,
-        complete_count,
+        total: totals.total,
+        active_count: totals.active_count,
+        pending_count: totals.pending_count,
+        needs_attention: totals.needs_attention,
+        sold_count: totals.sold_count,
         active_filter,
         sort_headers,
+        is_broker: user.role.is_broker(),
     })
 }
 
@@ -408,8 +430,9 @@ fn build_sort_headers(
 /// should mark "active". An empty status + attention-off means the user
 /// is looking at the unfiltered list, so we highlight Total.
 ///
-/// `"open"` (active OR pending — the Active card's actual semantics) and
-/// the literal `"active"` status both highlight the Active card.
+/// Map the request's status + attention flags onto the stat card that
+/// should be highlighted. Active and Pending are distinct cards now;
+/// the legacy `open` alias still lights the Active card.
 fn derive_active_filter(status: &str, attention_on: bool) -> &'static str {
     if attention_on {
         "attention"
@@ -417,6 +440,7 @@ fn derive_active_filter(status: &str, attention_on: bool) -> &'static str {
         match status {
             "" | "all" => "total",
             "active" | "open" => "active",
+            "pending" => "pending",
             "sold" => "sold",
             _ => "",
         }
@@ -628,7 +652,15 @@ pub async fn create(
         .bind(("u", user.user_id.clone()))
         .await?;
 
-    seed_default_checklist(&state, &tx.id, tx_type, condition, sales).await?;
+    seed_default_checklist(
+        &state,
+        &tx.id,
+        &user.brokerage_id,
+        tx_type,
+        condition,
+        sales,
+    )
+    .await?;
 
     // If this transaction pushed the brokerage over the monthly cap
     // and the tier opts into metered overage, fire-and-forget a
@@ -729,6 +761,82 @@ pub async fn update_status(
         .await?;
 
     Ok(Redirect::to(&format!("/app/transactions/{id}")).into_response())
+}
+
+/// Broker-only hard delete of a single transaction and everything
+/// hanging off it — documents (DB rows + storage objects), checklist
+/// items, comments, and all graph edges. Added for the corrections
+/// set so a broker can clean up duplicate / mistaken transactions
+/// without an admin. The confirm dialog lives in the row template;
+/// the role gate here is the real guard.
+pub async fn delete(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<String>,
+) -> Result<Redirect, AppError> {
+    if !user.role.is_broker() {
+        return Err(AppError::Forbidden);
+    }
+    let tx_id = RecordId::new("transaction", id.as_str());
+    // authorize_transaction confirms the caller's brokerage owns this
+    // transaction — a broker can't delete another office's record.
+    let tx = authorize_transaction(&state, &user, &tx_id).await?;
+
+    // Collect storage keys before the rows vanish so we can purge the
+    // bucket. Best-effort: a failed object delete is logged, not fatal.
+    let mut kq = state
+        .db
+        .query("SELECT VALUE storage_key FROM $t->has_document->document")
+        .bind(("t", tx_id.clone()))
+        .await?;
+    let keys: Vec<String> = kq.take(0).unwrap_or_default();
+
+    // Audit BEFORE the cascade so the intent is recorded even if a
+    // later step fails partway through.
+    crate::audit::record(
+        &state.db,
+        "transaction_deleted",
+        Some(user.user_id.clone()),
+        Some(user.email.clone()),
+        None,
+        None,
+        Some(format!("address=\"{}\" key={id}", tx.property_address)),
+    )
+    .await;
+
+    for key in &keys {
+        if let Err(e) = state.storage.delete(key).await {
+            tracing::warn!(error = %e, %key, "transaction delete: storage purge failed");
+        }
+    }
+
+    // DB cascade in a single transaction so we never leave a
+    // half-deleted graph behind.
+    state
+        .db
+        .query(
+            r#"
+            BEGIN TRANSACTION;
+            LET $doc_ids  = $t->has_document->document.id;
+            LET $item_ids = $t->has_item->checklist_item.id;
+            DELETE comment      WHERE target = $t OR target IN $item_ids;
+            DELETE for_item     WHERE in IN $doc_ids;
+            DELETE version_of   WHERE in IN $doc_ids OR out IN $doc_ids;
+            DELETE uploaded     WHERE out IN $doc_ids;
+            DELETE has_document WHERE out IN $doc_ids;
+            DELETE document     WHERE id IN $doc_ids;
+            DELETE has_item     WHERE out IN $item_ids;
+            DELETE checklist_item WHERE id IN $item_ids;
+            DELETE has_transaction WHERE out = $t;
+            DELETE owns            WHERE out = $t;
+            DELETE transaction     WHERE id = $t;
+            COMMIT TRANSACTION;
+            "#,
+        )
+        .bind(("t", tx_id.clone()))
+        .await?;
+
+    Ok(Redirect::to("/app/transactions?flash=tx_deleted"))
 }
 
 // ---------------------------------------------------------------------------
@@ -998,7 +1106,7 @@ async fn reconcile_checklist(
         defaults.iter().map(|d| (d.code, d)).collect();
 
     let items = load_checklist(state, tx_id).await?;
-    let additional_slug = FormGroup::AdditionalDisclosures.slug().to_string();
+    let (additional_name, additional_order) = FormGroup::AdditionalDisclosures.seed_group();
 
     // First pass: update or relocate existing items.
     for item in &items {
@@ -1007,13 +1115,14 @@ async fn reconcile_checklist(
         };
         match defaults_by_code.get(code) {
             Some(target) => {
-                let target_slug = target.group.slug().to_string();
-                if target_slug != item.group_slug || target.required != item.required {
+                let (gname, gorder) = target.group.seed_group();
+                if item.group_name.as_str() != gname || target.required != item.required {
                     state
                         .db
-                        .query("UPDATE $i SET group_slug = $g, required = $r")
+                        .query("UPDATE $i SET group_name = $gn, group_order = $go, required = $r")
                         .bind(("i", item.id.clone()))
-                        .bind(("g", target_slug))
+                        .bind(("gn", gname.to_string()))
+                        .bind(("go", gorder))
                         .bind(("r", target.required))
                         .await?;
                 }
@@ -1024,12 +1133,15 @@ async fn reconcile_checklist(
                 // catch-all group; otherwise drop the row entirely.
                 let has_docs = item_has_documents(state, &item.id).await?;
                 if has_docs {
-                    if item.group_slug != additional_slug || item.required {
+                    if item.group_name.as_str() != additional_name || item.required {
                         state
                             .db
-                            .query("UPDATE $i SET group_slug = $g, required = false")
+                            .query(
+                                "UPDATE $i SET group_name = $gn, group_order = $go, required = false",
+                            )
                             .bind(("i", item.id.clone()))
-                            .bind(("g", additional_slug.clone()))
+                            .bind(("gn", additional_name.to_string()))
+                            .bind(("go", additional_order))
                             .await?;
                     }
                 } else {
@@ -1061,6 +1173,7 @@ async fn reconcile_checklist(
             let title = forms::lookup(d.code)
                 .map(|f| f.name.to_string())
                 .unwrap_or_else(|| d.code.to_string());
+            let (gname, gorder) = d.group.seed_group();
             async move {
                 let new_item: Option<ChecklistItem> = state
                     .db
@@ -1068,7 +1181,8 @@ async fn reconcile_checklist(
                     .content(NewChecklistItem {
                         title,
                         form_code: Some(d.code.to_string()),
-                        group_slug: d.group.slug().to_string(),
+                        group_name: gname.to_string(),
+                        group_order: gorder,
                         position,
                         required: d.required,
                     })
@@ -1115,6 +1229,14 @@ async fn item_has_documents(state: &AppState, item_id: &RecordId) -> Result<bool
 pub struct SearchInput {
     #[serde(default)]
     pub q: Option<String>,
+    /// Same status vocabulary as the transactions list (no "open"
+    /// alias surfaced; `all`/empty means no filter).
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub sort: Option<String>,
+    #[serde(default)]
+    pub dir: Option<String>,
 }
 
 pub async fn search(
@@ -1125,12 +1247,25 @@ pub async fn search(
     let brokerage = load_brokerage(&state, &user).await?;
     let query = input.q.unwrap_or_default();
     let needle = query.trim().to_ascii_lowercase();
+    let status_filter = input.status.clone().unwrap_or_default();
+    let sort_key = input
+        .sort
+        .as_deref()
+        .and_then(SortKey::parse)
+        .unwrap_or(SortKey::Property);
+    let sort_dir = input
+        .dir
+        .as_deref()
+        .and_then(SortDir::parse)
+        .unwrap_or_else(|| sort_key.default_dir());
 
     let (transactions, documents) = if needle.is_empty() {
         (Vec::new(), Vec::new())
     } else {
+        // Scope is unchanged from the list: brokers/COs see the whole
+        // brokerage, agents see only what they own.
         let all = load_visible_transactions(&state, &user).await?;
-        let filtered: Vec<Transaction> = all
+        let mut filtered: Vec<Transaction> = all
             .iter()
             .filter(|t| {
                 t.property_address.to_ascii_lowercase().contains(&needle)
@@ -1139,13 +1274,24 @@ pub async fn search(
                         .as_deref()
                         .map(|s| s.to_ascii_lowercase().contains(&needle))
                         .unwrap_or(false)
+                    || t.mls_number
+                        .as_deref()
+                        .map(|s| s.to_ascii_lowercase().contains(&needle))
+                        .unwrap_or(false)
             })
             .cloned()
             .collect();
 
+        if !status_filter.is_empty() && status_filter != "all" {
+            filtered.retain(|t| t.status == status_filter);
+        }
+        sort_transactions(&mut filtered, sort_key, sort_dir);
+
         let docs = search_documents(&state, &all, &needle).await?;
         (filtered, docs)
     };
+
+    let sort_headers = build_search_sort_headers(&query, &status_filter, sort_key, sort_dir);
 
     let header = AppHeader::new(
         &user.name,
@@ -1163,9 +1309,66 @@ pub async fn search(
         signed_in: true,
         header,
         query: &query,
+        status_filter: &status_filter,
+        sort_headers,
         transactions,
         documents,
     })
+}
+
+/// Sortable-column header strip for the search page. Mirrors
+/// [`build_sort_headers`] but the links point back at `/app/search`
+/// and carry the query + status filter forward.
+fn build_search_sort_headers(
+    query: &str,
+    status: &str,
+    current_key: SortKey,
+    current_dir: SortDir,
+) -> Vec<SortHeader> {
+    [
+        (SortKey::Property, "Property"),
+        (SortKey::Price, "Price"),
+        (SortKey::Type, "Type"),
+        (SortKey::Age, "Age"),
+        (SortKey::Status, "Status"),
+    ]
+    .iter()
+    .map(|&(key, label)| {
+        let active = key == current_key;
+        let next_dir = if active {
+            current_dir.flip()
+        } else {
+            key.default_dir()
+        };
+        let mut params: Vec<(&str, String)> = vec![("q", query.to_string())];
+        if !status.is_empty() && status != "all" {
+            params.push(("status", status.to_string()));
+        }
+        params.push(("sort", key.as_str().to_string()));
+        params.push(("dir", next_dir.as_str().to_string()));
+        let qs = params
+            .iter()
+            .map(|(k, v)| format!("{k}={}", urlencoding::encode(v)))
+            .collect::<Vec<_>>()
+            .join("&");
+        let arrow = if active {
+            if current_dir == SortDir::Asc {
+                "▲"
+            } else {
+                "▼"
+            }
+        } else {
+            ""
+        };
+        SortHeader {
+            key: key.as_str(),
+            label,
+            url: format!("/app/search?{qs}"),
+            active,
+            arrow,
+        }
+    })
+    .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -1317,14 +1520,10 @@ async fn build_grouped_checklist(
         futures::future::try_join_all(items.iter().map(|item| load_comments(state, &item.id)))
             .await?;
 
-    // Bucket rows into groups, in the canonical render order
-    // (FormGroup::ORDERED matches the section order in the printed CAR
-    // checklists). Items inside each bucket are sorted by their form code's
-    // canonical PDF position, falling back to created_at for custom items.
-    let mut buckets: Vec<(FormGroup, Vec<ChecklistRow>)> = FormGroup::ORDERED
-        .iter()
-        .map(|g| (*g, Vec::new()))
-        .collect();
+    // Bucket rows by the group snapshotted on each item (name + order).
+    // Groups are data-driven now, so we discover them from the items
+    // rather than a fixed enum, then sort groups by `group_order`.
+    let mut buckets: Vec<(i64, String, Vec<ChecklistRow>)> = Vec::new();
 
     for (((item, docs), audit), comments) in items
         .into_iter()
@@ -1332,7 +1531,8 @@ async fn build_grouped_checklist(
         .zip(audit_labels)
         .zip(comments_per_item)
     {
-        let group = FormGroup::parse(&item.group_slug).unwrap_or(FormGroup::AdditionalDisclosures);
+        let group_order = item.group_order;
+        let group_name = item.group_name.clone();
         let form = item.form_code.as_deref().and_then(forms::lookup);
         let row = ChecklistRow {
             item,
@@ -1341,31 +1541,23 @@ async fn build_grouped_checklist(
             documents: docs,
             comments,
         };
-        if let Some((_, bucket)) = buckets.iter_mut().find(|(g, _)| *g == group) {
-            bucket.push(row);
+        match buckets.iter_mut().find(|(_, name, _)| *name == group_name) {
+            Some((_, _, bucket)) => bucket.push(row),
+            None => buckets.push((group_order, group_name, vec![row])),
         }
     }
 
-    // Sort each bucket by canonical PDF order. Items with a known CAR form
-    // code use `forms::canonical_position`; custom (form_code == None) items
-    // sort to the end of their group, ordered by creation time.
-    for (_, bucket) in buckets.iter_mut() {
-        bucket.sort_by_key(|row| {
-            let primary = row
-                .item
-                .form_code
-                .as_deref()
-                .map(forms::canonical_position)
-                .unwrap_or(u32::MAX);
-            (primary, row.item.created_at)
-        });
+    // Groups in ascending order; within a group, items by their stored
+    // position (canonical form order for seeded rows, append order for
+    // manual adds), tie-broken by creation time.
+    buckets.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    for (_, _, bucket) in buckets.iter_mut() {
+        bucket.sort_by_key(|row| (row.item.position, row.item.created_at));
     }
 
-    // Drop empty groups so the page doesn't render hollow sections.
     let groups = buckets
         .into_iter()
-        .filter(|(_, items)| !items.is_empty())
-        .map(|(g, items)| ChecklistGroup::build(g, items))
+        .map(|(order, name, items)| ChecklistGroup::build(name, order, items))
         .collect();
     Ok(groups)
 }
@@ -1476,52 +1668,107 @@ async fn load_transaction_owner_name(
         .unwrap_or_else(|| "Unassigned".into()))
 }
 
-/// True/false per transaction (aligned with the input slice): is the
-/// transaction in an open status AND has at least one checklist item
-/// been denied by a Compliance Officer? Drives both the dashboard
-/// "Needs attention" counter and the `?attention=1` list filter.
+/// True/false per transaction (aligned with the input slice): does
+/// this transaction need the *viewer's* attention? The predicate is
+/// role-split (corrections set):
 ///
-/// "Needs attention" is intentionally the *narrow* predicate — pending
-/// items are the normal in-flight state and shouldn't surface here.
-/// Only an explicit denial (someone flipped the row to `denied`) means
-/// the agent must take action: replace the document, then ask for
-/// re-review.
+/// - **Agents** respond to reviewer feedback — flag if a checklist
+///   item was denied/rejected, OR a broker/compliance officer left a
+///   comment on the transaction (or one of its items).
+/// - **Brokers / Compliance Officers** review agent work — flag if an
+///   item has an uploaded document still awaiting review (pending with
+///   a file attached), OR an agent left a comment.
 ///
 /// Closed transactions (Sold/Canceled/Withdrawn) always return `false`
-/// — historical denials on a finished deal aren't actionable.
+/// — nothing on a finished deal is actionable.
 async fn needs_attention_flags(
     state: &AppState,
     transactions: &[Transaction],
+    role: Role,
+    brokerage_id: &RecordId,
 ) -> Result<Vec<bool>, AppError> {
-    let futures = transactions.iter().map(|t| async move {
-        if matches!(
-            t.status_enum(),
-            TransactionStatus::Sold | TransactionStatus::Canceled | TransactionStatus::Withdrawn
-        ) {
-            return Ok::<bool, AppError>(false);
-        }
-        let mut r = state
-            .db
-            .query(
+    if transactions.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Reviewers (broker / coordinator) watch for agent activity;
+    // agents watch for reviewer activity. This single bool drives both
+    // the form predicate and which comment authors count.
+    let reviewer_view = role.sees_all_transactions();
+    let author_roles: Vec<String> = if reviewer_view {
+        vec!["agent".to_string()]
+    } else {
+        vec!["broker".to_string(), "coordinator".to_string()]
+    };
+
+    // The set of users whose comments should flag a transaction —
+    // fetched once for the whole brokerage rather than per row.
+    let mut au = state
+        .db
+        .query("SELECT VALUE in FROM works_at WHERE out = $b AND role IN $roles")
+        .bind(("b", brokerage_id.clone()))
+        .bind(("roles", author_roles))
+        .await?;
+    let comment_authors: Vec<RecordId> = au.take(0).unwrap_or_default();
+
+    let futures = transactions.iter().map(|t| {
+        let comment_authors = comment_authors.clone();
+        async move {
+            if matches!(
+                t.status_enum(),
+                TransactionStatus::Sold
+                    | TransactionStatus::Canceled
+                    | TransactionStatus::Withdrawn
+            ) {
+                return Ok::<bool, AppError>(false);
+            }
+
+            // Form signal — denied (agent view) vs pending-with-upload
+            // (reviewer view).
+            let form_query = if reviewer_view {
                 "SELECT count() FROM $t->has_item->checklist_item \
-                 WHERE approval_status = 'denied' GROUP ALL",
-            )
-            .bind(("t", t.id.clone()))
-            .await?;
-        let denied: Option<CountRow> = r.take(0)?;
-        Ok::<bool, AppError>(denied.map(|c| c.count > 0).unwrap_or(false))
+                 WHERE approval_status = 'pending' \
+                   AND array::len(<-for_item<-document) > 0 GROUP ALL"
+            } else {
+                "SELECT count() FROM $t->has_item->checklist_item \
+                 WHERE approval_status = 'denied' GROUP ALL"
+            };
+            let mut fr = state.db.query(form_query).bind(("t", t.id.clone())).await?;
+            let forms: Option<CountRow> = fr.take(0)?;
+            if forms.map(|c| c.count > 0).unwrap_or(false) {
+                return Ok(true);
+            }
+
+            // Comment signal — a note from the other role on the
+            // transaction or any of its checklist items.
+            let mut cr = state
+                .db
+                .query(
+                    "SELECT count() FROM comment \
+                     WHERE (target = $t OR target IN (SELECT VALUE id FROM $t->has_item->checklist_item)) \
+                       AND author IN $authors GROUP ALL",
+                )
+                .bind(("t", t.id.clone()))
+                .bind(("authors", comment_authors))
+                .await?;
+            let comments: Option<CountRow> = cr.take(0)?;
+            Ok(comments.map(|c| c.count > 0).unwrap_or(false))
+        }
     });
     let results = futures::future::try_join_all(futures).await?;
     Ok(results)
 }
 
-/// Count of transactions that need attention. Thin wrapper around
-/// [`needs_attention_flags`] used by the dashboard summary card.
+/// Count of transactions that need the viewer's attention. Thin
+/// wrapper around [`needs_attention_flags`] used by the dashboard
+/// summary card.
 async fn count_needs_attention(
     state: &AppState,
     transactions: &[Transaction],
+    role: Role,
+    brokerage_id: &RecordId,
 ) -> Result<usize, AppError> {
-    let flags = needs_attention_flags(state, transactions).await?;
+    let flags = needs_attention_flags(state, transactions, role, brokerage_id).await?;
     Ok(flags.into_iter().filter(|&b| b).count())
 }
 
@@ -1564,25 +1811,75 @@ async fn search_documents(
 async fn seed_default_checklist(
     state: &AppState,
     tx_id: &RecordId,
+    brokerage_id: &RecordId,
     tx_type: TransactionType,
     cond: SpecialSalesCondition,
     sales: SalesType,
 ) -> Result<(), AppError> {
-    let defaults = forms::build_default_checklist(tx_type, cond, sales);
-    let item_futures = defaults.iter().enumerate().map(|(i, di)| async move {
-        let form = forms::lookup(di.code);
-        let title = form
-            .map(|f| f.name.to_string())
-            .unwrap_or_else(|| di.code.to_string());
+    // Each item: (title, form_code, group_name, group_order, position, required).
+    type Seed = (String, Option<String>, String, i64, i64, bool);
+
+    let side = forms::sales_side(sales);
+    let resolved = crate::db::forms::resolve_checklist(
+        &state.db,
+        brokerage_id,
+        tx_type.as_str(),
+        side.as_str(),
+        cond.as_str(),
+    )
+    .await
+    .map_err(|e| AppError::Internal(e.context("resolve checklist")))?;
+
+    let seeds: Vec<Seed> = if resolved.is_empty() {
+        // Fallback: brokerage has no form set wired (shouldn't happen
+        // after signup attaches California, but never ship an empty
+        // checklist). Use the in-memory engine, mapping each group
+        // through `seed_group()` so names match the DB-resolved path.
+        forms::build_default_checklist(tx_type, cond, sales)
+            .into_iter()
+            .map(|di| {
+                let (gname, gorder) = di.group.seed_group();
+                let title = forms::lookup(di.code)
+                    .map(|f| f.name.to_string())
+                    .unwrap_or_else(|| di.code.to_string());
+                (
+                    title,
+                    Some(di.code.to_string()),
+                    gname.to_string(),
+                    gorder,
+                    forms::canonical_position(di.code) as i64,
+                    di.required,
+                )
+            })
+            .collect()
+    } else {
+        resolved
+            .into_iter()
+            .map(|f| {
+                (
+                    f.name,
+                    Some(f.code),
+                    f.group_name,
+                    f.group_order,
+                    f.form_order,
+                    f.required,
+                )
+            })
+            .collect()
+    };
+
+    let item_futures = seeds.into_iter().map(|seed| async move {
+        let (title, form_code, group_name, group_order, position, required) = seed;
         let item: Option<ChecklistItem> = state
             .db
             .create("checklist_item")
             .content(NewChecklistItem {
                 title,
-                form_code: Some(di.code.to_string()),
-                group_slug: di.group.slug().to_string(),
-                position: i as i64,
-                required: di.required,
+                form_code,
+                group_name,
+                group_order,
+                position,
+                required,
             })
             .await?;
         let id = item.map(|c| c.id).ok_or_else(|| {

@@ -476,6 +476,7 @@ const AUDIT_KIND_OPTIONS: &[&str] = &[
     "password_changed",
     "avatar_updated",
     "brokerage_deleted",
+    "transaction_deleted",
     "tier_created",
     "tier_updated",
     "brokerage_comp_granted",

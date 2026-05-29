@@ -13,11 +13,10 @@
            type="search"
            name="q"
            value="{{ query }}"
-           placeholder="Search address, client, MLS…"
+           placeholder="Search Address, Client, MLS…"
            autocomplete="off">
     <select name="status" aria-label="Status" class="tx-toolbar-select">
         <option value="all"{% if filter_status == "all" || filter_status == "" %} selected{% endif %}>All statuses</option>
-        <option value="open"{% if filter_status == "open" %} selected{% endif %}>Open</option>
         <option value="active"{% if filter_status == "active" %} selected{% endif %}>Active</option>
         <option value="pending"{% if filter_status == "pending" %} selected{% endif %}>Pending</option>
         <option value="sold"{% if filter_status == "sold" %} selected{% endif %}>Sold</option>

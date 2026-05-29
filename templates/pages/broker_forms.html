@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+
+{% block title %}Custom forms — {{ app_name }}{% endblock %}
+{% block body_class %}page-app{% endblock %}
+
+{% block body %}
+{% include "components/app_header.html" %}
+
+<main class="app-main">
+    <header class="page-title">
+        <section>
+            <h1>Forms</h1>
+            <p class="subtitle">Tailor which forms appear on this brokerage's transactions.</p>
+        </section>
+    </header>
+
+    <section class="panel" aria-labelledby="jurisdiction-heading">
+        <h2 id="jurisdiction-heading">Jurisdiction</h2>
+        <dl class="kv-list">
+            <dt>State</dt><dd>{{ state_name }}</dd>
+        </dl>
+        <form method="post" action="/app/forms/locality" class="filter-bar">
+            <label for="locality">Local board / municipality</label>
+            <select id="locality" name="locality">
+                <option value="">None</option>
+                {% for loc in localities %}
+                    <option value="{{ loc.key }}"{% if loc.selected %} selected{% endif %}>{{ loc.name }}</option>
+                {% endfor %}
+            </select>
+            <button type="submit" class="btn small">Save</button>
+        </form>
+        <p class="field-hint">Local forms appear under their own locality-labeled groups on each transaction.</p>
+    </section>
+
+    <section class="panel" aria-labelledby="library-heading">
+        <h2 id="library-heading">Library forms ({{ master_forms.len() }})</h2>
+        <p class="field-hint">Hidden forms won't be added to new transactions. Existing transactions are unaffected.</p>
+        {% if master_forms.is_empty() %}
+            <p class="empty-state">No forms resolved — check the state/locality selection above.</p>
+        {% else %}
+            <table class="admin-table">
+                <thead>
+                    <tr>
+                        <th scope="col">Code</th>
+                        <th scope="col">Form</th>
+                        <th scope="col">Group</th>
+                        <th scope="col">Status</th>
+                        <th scope="col" class="actions"><span class="visually-hidden">Actions</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for f in master_forms %}
+                        <tr{% if f.hidden %} class="is-muted"{% endif %}>
+                            <td><code>{{ f.code }}</code></td>
+                            <td>{{ f.name }}</td>
+                            <td>{{ f.group_name }}</td>
+                            <td>{% if f.hidden %}Hidden{% else %}Included{% endif %}</td>
+                            <td class="actions">
+                                <form method="post" action="/app/forms/hide/{{ f.key }}" class="inline-form">
+                                    <button type="submit" class="btn small {% if f.hidden %}secondary{% else %}danger{% endif %}">
+                                        {% if f.hidden %}Show{% else %}Hide{% endif %}
+                                    </button>
+                                </form>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% endif %}
+    </section>
+
+    <section class="panel" aria-labelledby="custom-heading">
+        <h2 id="custom-heading">Custom forms ({{ custom_forms.len() }})</h2>
+        {% if !custom_forms.is_empty() %}
+            <table class="admin-table">
+                <thead>
+                    <tr>
+                        <th scope="col">Code</th>
+                        <th scope="col">Form</th>
+                        <th scope="col">Group</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for f in custom_forms %}
+                        <tr>
+                            <td><code>{{ f.code }}</code></td>
+                            <td>{{ f.name }}</td>
+                            <td>{{ f.group_name }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% endif %}
+        <h3>Add a custom form</h3>
+        <form method="post" action="/app/forms/custom" class="tx-form">
+            <div class="form-row">
+                <label><span>Code</span><input type="text" name="code" placeholder="e.g. LOCAL-1" required></label>
+                <label><span>Name</span><input type="text" name="name" placeholder="Form name" required></label>
+            </div>
+            <div class="form-row">
+                <label>
+                    <span>Group</span>
+                    <select name="group_name">
+                        {% for g in group_choices %}
+                            <option value="{{ g }}">{{ g }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label class="checkbox">
+                    <input type="checkbox" name="required" value="1">
+                    <span>Required for compliance</span>
+                </label>
+            </div>
+            <button type="submit" class="btn">Add custom form</button>
+        </form>
+    </section>
+</main>
+{% endblock %}

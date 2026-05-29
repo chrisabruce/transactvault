@@ -64,25 +64,23 @@ pub async fn create(
     let new_item = match input.form_code.as_deref().filter(|s| !s.is_empty()) {
         Some(code) => {
             // Look up canonical metadata for the form. Unknown codes get a
-            // graceful fallback — title = code, group = Additional.
+            // graceful fallback — title = code, group = Additional. The
+            // inferred FormGroup maps through `seed_group()` to the same
+            // (name, order) the DB seed used, so a manually-added form
+            // buckets with its seeded peers.
             let form = forms::lookup(code);
             let title = form
                 .map(|f| f.name.to_string())
                 .unwrap_or_else(|| code.to_string());
             let group = form
-                .and_then(|f| {
-                    forms::LIBRARY.iter().find(|cf| cf.code == f.code).map(|_| {
-                        // Most ad-hoc adds are supporting docs — drop them
-                        // into "Disclosures — If Applicable" by default,
-                        // unless the code is for a contract or report.
-                        infer_group_from_code(f.code)
-                    })
-                })
+                .map(|f| infer_group_from_code(f.code))
                 .unwrap_or(FormGroup::AdditionalDisclosures);
+            let (group_name, group_order) = group.seed_group();
             NewChecklistItem {
                 title,
                 form_code: Some(code.to_string()),
-                group_slug: group.slug().to_string(),
+                group_name: group_name.to_string(),
+                group_order,
                 position,
                 required,
             }
@@ -95,10 +93,12 @@ pub async fn create(
                 .filter(|s| !s.is_empty())
                 .ok_or_else(|| AppError::invalid("Either pick a form or enter a custom title."))?
                 .to_string();
+            let (group_name, group_order) = FormGroup::AdditionalDisclosures.seed_group();
             NewChecklistItem {
                 title,
                 form_code: None,
-                group_slug: FormGroup::AdditionalDisclosures.slug().to_string(),
+                group_name: group_name.to_string(),
+                group_order,
                 position,
                 required,
             }

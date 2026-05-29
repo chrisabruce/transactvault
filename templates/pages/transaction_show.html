@@ -63,9 +63,13 @@
                 </section>
 
                 {% for group in compliance.groups %}
-                    <section class="checklist-group{% if group.complete() %} complete{% endif %}">
-                        <header class="checklist-group-header">
-                            <h3>{{ group.label }}</h3>
+                    {# Each category collapses independently. Contract
+                       groups (the main file contract) start open;
+                       everything else starts folded so the page isn't a
+                       wall of forms. Native <details> — no JS needed. #}
+                    <details class="checklist-group{% if group.complete() %} complete{% endif %}"{% if group.open_by_default || group.has_attention(can_review) %} open{% endif %}>
+                        <summary class="checklist-group-header">
+                            <h3>{{ group.name }}</h3>
                             <p class="meta">
                                 {{ group.completed }} of {{ group.total }} complete
                                 {% if group.required_total > 0 %}
@@ -74,11 +78,11 @@
                                 · {{ group.percent }}%
                             </p>
                             <progress class="progress small" value="{{ group.percent }}" max="100">{{ group.percent }}%</progress>
-                        </header>
+                        </summary>
 
                         <ul class="checklist" role="list">
                             {% for row in group.items %}
-                                <li class="checklist-item is-{{ row.item.approval_status }}{% if row.item.required %} is-required{% endif %}"{% if !row.item.is_approved() %} data-upload-url="/app/transactions/{{ transaction_key }}/documents" data-item-id="{{ row.item.url_key() }}" data-form-code="{% match row.form %}{% when Some with (f) %}{{ f.code }}{% when None %}MISC{% endmatch %}"{% endif %}>
+                                <li class="checklist-item is-{{ row.item.approval_status }}{% if row.item.required %} is-required{% endif %}{% if row.needs_attention(can_review) %} is-attention{% endif %}"{% if !row.item.is_approved() %} data-upload-url="/app/transactions/{{ transaction_key }}/documents" data-item-id="{{ row.item.url_key() }}" data-form-code="{% match row.form %}{% when Some with (f) %}{{ f.code }}{% when None %}MISC{% endmatch %}"{% endif %}>
                                     <header class="checklist-item-head">
                                         <div class="checklist-item-tags">
                                             {% match row.form %}{% when Some with (f) %}<strong class="form-code">{{ f.code }}</strong>{% when None %}{% endmatch %}
@@ -122,6 +126,11 @@
                                     </header>
                                     <section class="checklist-text">
                                         <p class="title">{{ row.item.title }}</p>
+                                        {% match row.form %}{% when Some with (f) %}
+                                            {% if !f.includes().is_empty() %}
+                                                <p class="form-includes">{{ f.includes() }}</p>
+                                            {% endif %}
+                                        {% when None %}{% endmatch %}
                                         {% if row.item.is_approved() || row.item.is_denied() %}
                                             <p class="audit">{{ row.audit_label }}</p>
                                         {% endif %}
@@ -190,7 +199,7 @@
                                 </li>
                             {% endfor %}
                         </ul>
-                    </section>
+                    </details>
                 {% endfor %}
 
                 <section class="checklist-add">
@@ -226,41 +235,9 @@
                     </form>
                 </section>
             </section>
-
-            <section class="panel" id="transaction-comments" aria-labelledby="comments-heading">
-                <h2 id="comments-heading">Comments</h2>
-                {% if transaction_comments.is_empty() %}
-                    <p class="meta">No comments yet.</p>
-                {% else %}
-                    <ul class="comment-thread" role="list">
-                        {% for c in transaction_comments %}
-                            <li>
-                                <header class="comment-head">
-                                    {% if c.author_has_avatar %}
-                                        <img class="avatar small" src="/app/users/{{ c.author_key }}/avatar" alt="">
-                                    {% else %}
-                                        <span class="avatar small" aria-hidden="true">{{ c.author_initials }}</span>
-                                    {% endif %}
-                                    <small class="comment-meta">{{ c.author_name }} · {{ c.date_label() }}</small>
-                                </header>
-                                <p class="comment-body">{{ c.body }}</p>
-                                {% match c.referenced_document %}{% when Some with (doc_ref) %}
-                                    <p class="comment-ref">
-                                        <a href="/app/documents/{{ doc_ref.key }}/download">↳ {{ doc_ref.filename }} (v{{ doc_ref.version }})</a>
-                                    </p>
-                                {% when None %}{% endmatch %}
-                            </li>
-                        {% endfor %}
-                    </ul>
-                {% endif %}
-                <form method="post" action="/app/transactions/{{ transaction_key }}/comments" class="comment-compose">
-                    <label class="visually-hidden" for="tx-comment">Comment</label>
-                    <textarea id="tx-comment" name="body" rows="3" required maxlength="4000" placeholder="Leave a note on this transaction…"></textarea>
-                    <button type="submit" class="btn small">Post comment</button>
-                </form>
-            </section>
         </section>
 
+        <div class="detail-side">
         <aside class="panel sidebar">
             <h2>Details</h2>
             <dl>
@@ -289,6 +266,40 @@
                 <a class="btn small" href="/app/transactions/{{ transaction_key }}/edit">Edit details</a>
             {% endif %}
         </aside>
+
+        <section class="panel" id="transaction-comments" aria-labelledby="comments-heading">
+            <h2 id="comments-heading">Comments</h2>
+            {% if transaction_comments.is_empty() %}
+                <p class="meta">No comments yet.</p>
+            {% else %}
+                <ul class="comment-thread" role="list">
+                    {% for c in transaction_comments %}
+                        <li>
+                            <header class="comment-head">
+                                {% if c.author_has_avatar %}
+                                    <img class="avatar small" src="/app/users/{{ c.author_key }}/avatar" alt="">
+                                {% else %}
+                                    <span class="avatar small" aria-hidden="true">{{ c.author_initials }}</span>
+                                {% endif %}
+                                <small class="comment-meta">{{ c.author_name }} · {{ c.date_label() }}</small>
+                            </header>
+                            <p class="comment-body">{{ c.body }}</p>
+                            {% match c.referenced_document %}{% when Some with (doc_ref) %}
+                                <p class="comment-ref">
+                                    <a href="/app/documents/{{ doc_ref.key }}/download">↳ {{ doc_ref.filename }} (v{{ doc_ref.version }})</a>
+                                </p>
+                            {% when None %}{% endmatch %}
+                        </li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+            <form method="post" action="/app/transactions/{{ transaction_key }}/comments" class="comment-compose">
+                <label class="visually-hidden" for="tx-comment">Comment</label>
+                <textarea id="tx-comment" name="body" rows="3" required maxlength="4000" placeholder="Leave a note on this transaction…"></textarea>
+                <button type="submit" class="btn small">Post comment</button>
+            </form>
+        </section>
+        </div>
     </section>
 </main>
 

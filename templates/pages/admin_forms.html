@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block title %}Forms — Admin — {{ app_name }}{% endblock %}
+{% block body_class %}page-app page-admin{% endblock %}
+
+{% block body %}
+{% include "components/app_header.html" %}
+
+<main class="app-main">
+    <header class="page-title">
+        <section>
+            <h1>Admin · Forms</h1>
+            <p class="subtitle">State and local form libraries. Brokerages pick from these.</p>
+        </section>
+        <nav class="admin-subnav" aria-label="Admin sections">
+            <a href="/admin">Users</a>
+            <a href="/admin/brokerages">Brokerages</a>
+            <a href="/admin/tiers">Tiers</a>
+            <a href="/admin/forms" class="active" aria-current="page">Forms</a>
+            <a href="/admin/audit">Audit log</a>
+        </nav>
+    </header>
+
+    <section class="panel">
+        <h2>State libraries</h2>
+        {% if state_sets.is_empty() %}
+            <p class="empty-state">No state set seeded yet.</p>
+        {% else %}
+            <table class="admin-table">
+                <thead>
+                    <tr><th scope="col">State</th><th scope="col" class="num">Groups</th><th scope="col" class="num">Forms</th></tr>
+                </thead>
+                <tbody>
+                    {% for s in state_sets %}
+                        <tr>
+                            <td><a href="/admin/forms/{{ s.key }}">{{ s.name }}</a></td>
+                            <td class="num">{{ s.group_count }}</td>
+                            <td class="num">{{ s.form_count }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% endif %}
+    </section>
+
+    <section class="panel">
+        <h2>Local libraries ({{ local_sets.len() }})</h2>
+        {% if !local_sets.is_empty() %}
+            <table class="admin-table">
+                <thead>
+                    <tr><th scope="col">Locality</th><th scope="col" class="num">Groups</th><th scope="col" class="num">Forms</th></tr>
+                </thead>
+                <tbody>
+                    {% for s in local_sets %}
+                        <tr>
+                            <td><a href="/admin/forms/{{ s.key }}">{{ s.name }}</a></td>
+                            <td class="num">{{ s.group_count }}</td>
+                            <td class="num">{{ s.form_count }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% endif %}
+        <h3>Add a locality</h3>
+        <form method="post" action="/admin/forms/sets" class="filter-bar">
+            <label class="visually-hidden" for="set-name">Locality name</label>
+            <input id="set-name" type="text" name="name" placeholder="e.g. City of Los Angeles" required>
+            <button type="submit" class="btn small">Create</button>
+        </form>
+    </section>
+</main>
+{% endblock %}

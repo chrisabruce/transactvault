@@ -17,8 +17,8 @@ use tower_http::trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse, Tr
 use tracing::Level;
 
 use crate::controllers::{
-    admin, auth, checklists, comments, documents, health, marketing, members, profile, subscribe,
-    tiers, transactions, webhooks,
+    admin, auth, checklists, comments, documents, forms, health, marketing, members, profile,
+    subscribe, tiers, transactions, webhooks,
 };
 use crate::state::AppState;
 
@@ -58,6 +58,7 @@ pub fn build(state: AppState) -> Router {
             "/app/transactions/{id}/status",
             post(transactions::update_status),
         )
+        .route("/app/transactions/{id}/delete", post(transactions::delete))
         .route("/app/transactions/{id}/export", get(documents::export_zip))
         .route("/app/transactions/{id}/checklist", post(checklists::create))
         .route("/app/checklist/{id}/approve", post(checklists::approve))
@@ -96,15 +97,16 @@ pub fn build(state: AppState) -> Router {
         .route("/app/profile/avatar/delete", post(profile::delete_avatar))
         .route("/app/users/{key}/avatar", get(profile::serve_avatar))
         .route("/app/subscribe/{slug}", get(subscribe::subscribe))
-        .route("/app/billing/portal", get(subscribe::portal));
+        .route("/app/billing/portal", get(subscribe::portal))
+        .route("/app/forms", get(forms::broker_forms))
+        .route("/app/forms/locality", post(forms::set_locality))
+        .route("/app/forms/hide/{key}", post(forms::toggle_hide))
+        .route("/app/forms/custom", post(forms::add_custom));
 
     let admin_routes = Router::new()
         .route("/admin", get(admin::users))
         .route("/admin/brokerages", get(admin::brokerages))
-        .route(
-            "/admin/brokerages/{key}",
-            get(admin::brokerage_detail),
-        )
+        .route("/admin/brokerages/{key}", get(admin::brokerage_detail))
         .route(
             "/admin/brokerages/{key}/comp",
             post(admin::toggle_brokerage_comp),
@@ -114,6 +116,15 @@ pub fn build(state: AppState) -> Router {
         .route(
             "/admin/tiers/{key}/edit",
             get(tiers::edit_form).post(tiers::update),
+        )
+        .route("/admin/forms", get(forms::admin_list))
+        .route("/admin/forms/sets", post(forms::admin_create_set))
+        .route("/admin/forms/{key}", get(forms::admin_set_detail))
+        .route("/admin/forms/{key}/groups", post(forms::admin_add_group))
+        .route("/admin/forms/{key}/forms", post(forms::admin_add_form))
+        .route(
+            "/admin/forms/{key}/forms/{form_key}/toggle",
+            post(forms::admin_toggle_form),
         )
         .route("/admin/audit", get(admin::audit_log));
 

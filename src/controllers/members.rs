@@ -42,6 +42,7 @@ pub async fn list(
         pending,
         invite_error: None,
         invite_link: None,
+        invite_notice: None,
     })
 }
 
@@ -66,7 +67,6 @@ pub async fn invite(
         .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
         .with_banner(crate::billing::banner_for(&brokerage));
 
-    let email = input.email.trim().to_ascii_lowercase();
     let role = match input.role.as_str() {
         "broker" | "agent" | "coordinator" => input.role,
         _ => {
@@ -79,11 +79,28 @@ pub async fn invite(
                 pending: load_pending_invitations(&state, &user).await?,
                 invite_error: Some("Role must be broker, agent, or coordinator."),
                 invite_link: None,
+                invite_notice: None,
             });
         }
     };
 
-    if email.is_empty() || !email.contains('@') {
+    // Accept one or many addresses separated by commas / spaces /
+    // newlines so a broker can paste a whole roster at once. Dedupe
+    // (case-insensitive) and validate each.
+    let mut emails: Vec<String> = input
+        .email
+        .split([',', ';', '\n', ' '])
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+    emails.sort();
+    emails.dedup();
+
+    let (valid, invalid): (Vec<String>, Vec<String>) = emails
+        .into_iter()
+        .partition(|e| e.contains('@') && e.len() >= 3);
+
+    if valid.is_empty() {
         return render(&TeamPage {
             app_name: &state.config.app_name,
             base_url: &state.config.base_url,
@@ -91,24 +108,47 @@ pub async fn invite(
             header,
             members: load_members(&state, &user).await?,
             pending: load_pending_invitations(&state, &user).await?,
-            invite_error: Some("Please enter a valid email address."),
+            invite_error: Some("Please enter at least one valid email address."),
             invite_link: None,
+            invite_notice: None,
         });
     }
 
-    let invitation = create_invitation(
-        &state,
-        email,
-        role,
-        user.brokerage_id.clone(),
-        &brokerage.name,
-        user.user_id.clone(),
-        &user.name,
-        &user.email,
-    )
-    .await?;
+    // Send an invite per valid address. Each call creates the
+    // invitation row, emails it, and audits.
+    let mut last_link = None;
+    let sent = valid.len();
+    for email in valid {
+        let invitation = create_invitation(
+            &state,
+            email,
+            role.clone(),
+            user.brokerage_id.clone(),
+            &brokerage.name,
+            user.user_id.clone(),
+            &user.name,
+            &user.email,
+        )
+        .await?;
+        last_link = Some(format!(
+            "{}/invite/{}",
+            state.config.base_url, invitation.token
+        ));
+    }
 
-    let link = format!("{}/invite/{}", state.config.base_url, invitation.token);
+    // Single invite → show the copyable link (unchanged UX). Multiple
+    // → show a count summary instead, since N links would be noise.
+    let (invite_link, invite_notice) = if sent == 1 {
+        (last_link, None)
+    } else {
+        (None, Some(format!("Sent {sent} invitations.")))
+    };
+    // Note any addresses we skipped so the broker can fix typos.
+    let invite_notice = match (&invite_notice, invalid.is_empty()) {
+        (_, true) => invite_notice,
+        (Some(n), false) => Some(format!("{n} Skipped invalid: {}.", invalid.join(", "))),
+        (None, false) => Some(format!("Skipped invalid: {}.", invalid.join(", "))),
+    };
 
     render(&TeamPage {
         app_name: &state.config.app_name,
@@ -118,7 +158,8 @@ pub async fn invite(
         members: load_members(&state, &user).await?,
         pending: load_pending_invitations(&state, &user).await?,
         invite_error: None,
-        invite_link: Some(link),
+        invite_link,
+        invite_notice,
     })
 }
 

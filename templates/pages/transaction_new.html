@@ -23,15 +23,15 @@
         <form method="post" action="/app/transactions" class="tx-form">
             <fieldset>
                 <legend>Property Information</legend>
-                <p class="field-hint">Enter a property address <em>or</em> an APN — land deals often have only the APN.</p>
+                <p class="field-hint">Enter a Property Address <em>and/or</em> an APN — Land transactions often only have an APN.</p>
                 <div class="form-row">
                     <label>
                         <span>Property Address</span>
-                        <input type="text" name="property_address" placeholder="42235 Brittle Bush Drive, #AB706">
+                        <input type="text" name="property_address" placeholder="42235 Brittle Brush Drive, #AB706">
                     </label>
                     <label>
                         <span>Assessor's Parcel Number (APN)</span>
-                        <input type="text" name="apn" placeholder="3205-005-0002">
+                        <input type="text" name="apn" placeholder="3205-005-002">
                     </label>
                 </div>
                 <div class="form-row">
@@ -47,7 +47,7 @@
                 <div class="form-row">
                     <label>
                         <span>Sales Price</span>
-                        <input type="text" name="sales_price" placeholder="$7,999,985.00"
+                        <input type="text" name="sales_price" placeholder="$1,699,500.00"
                                inputmode="decimal" data-format="money">
                     </label>
                     <label>

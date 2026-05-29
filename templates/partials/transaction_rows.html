@@ -12,7 +12,17 @@
         <section class="tx-cell tx-cell-status">
             <span class="chip {{ tx.status_class() }}">{{ tx.status_label() }}</span>
         </section>
-        <a class="btn small secondary tx-cell-action" href="/app/transactions/{{ tx.url_key() }}">Open</a>
+        <section class="tx-cell tx-cell-action">
+            <a class="btn small secondary" href="/app/transactions/{{ tx.url_key() }}">Open</a>
+            {% if is_broker %}
+                <form method="post"
+                      action="/app/transactions/{{ tx.url_key() }}/delete"
+                      class="inline-form"
+                      onsubmit="return confirm('Delete this transaction and all of its documents? This cannot be undone.');">
+                    <button type="submit" class="btn small danger">Delete</button>
+                </form>
+            {% endif %}
+        </section>
     </li>
 {% endfor %}
 {% if has_next_page %}

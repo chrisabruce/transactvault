@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+
+{% block title %}{{ set_name }} — Admin Forms — {{ app_name }}{% endblock %}
+{% block body_class %}page-app page-admin{% endblock %}
+
+{% block body %}
+{% include "components/app_header.html" %}
+
+<main class="app-main">
+    <header class="page-title">
+        <section>
+            <h1>{{ set_name }} <span class="badge comp">{{ set_scope }}</span></h1>
+            <p class="subtitle"><a href="/admin/forms">← All form libraries</a></p>
+        </section>
+        <nav class="admin-subnav" aria-label="Admin sections">
+            <a href="/admin">Users</a>
+            <a href="/admin/brokerages">Brokerages</a>
+            <a href="/admin/tiers">Tiers</a>
+            <a href="/admin/forms" class="active" aria-current="page">Forms</a>
+            <a href="/admin/audit">Audit log</a>
+        </nav>
+    </header>
+
+    {% for group in groups %}
+        <section class="panel">
+            <h2>{{ group.name }} <small class="meta">(order {{ group.sort_order }})</small></h2>
+            {% if group.forms.is_empty() %}
+                <p class="meta">No forms in this group yet.</p>
+            {% else %}
+                <table class="admin-table">
+                    <thead>
+                        <tr>
+                            <th scope="col">Code</th><th scope="col">Form</th>
+                            <th scope="col" class="num">Order</th><th scope="col">Required</th>
+                            <th scope="col">Status</th>
+                            <th scope="col" class="actions"><span class="visually-hidden">Actions</span></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for f in group.forms %}
+                            <tr{% if !f.is_active %} class="is-muted"{% endif %}>
+                                <td><code>{{ f.code }}</code></td>
+                                <td>{{ f.name }}</td>
+                                <td class="num">{{ f.form_order }}</td>
+                                <td>{% if f.required %}Required{% else %}Optional{% endif %}</td>
+                                <td>{% if f.is_active %}Active{% else %}Inactive{% endif %}</td>
+                                <td class="actions">
+                                    <form method="post" action="/admin/forms/{{ set_key }}/forms/{{ f.key }}/toggle" class="inline-form">
+                                        <button type="submit" class="btn small {% if f.is_active %}danger{% else %}secondary{% endif %}">
+                                            {% if f.is_active %}Deactivate{% else %}Activate{% endif %}
+                                        </button>
+                                    </form>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% endif %}
+
+            <details class="action-popover">
+                <summary class="btn ghost small">Add form to “{{ group.name }}”</summary>
+                <form method="post" action="/admin/forms/{{ set_key }}/forms" class="tx-form">
+                    <input type="hidden" name="group_key" value="{{ group.key }}">
+                    <div class="form-row">
+                        <label><span>Code</span><input type="text" name="code" required></label>
+                        <label><span>Name</span><input type="text" name="name" required></label>
+                    </div>
+                    <div class="form-row">
+                        <label><span>Order</span><input type="number" name="form_order" value="500"></label>
+                        <label class="checkbox"><input type="checkbox" name="required" value="1"><span>Required</span></label>
+                    </div>
+                    <button type="submit" class="btn small">Add form</button>
+                </form>
+            </details>
+        </section>
+    {% endfor %}
+
+    <section class="panel">
+        <h2>Add a group</h2>
+        <form method="post" action="/admin/forms/{{ set_key }}/groups" class="filter-bar">
+            <label class="visually-hidden" for="group-name">Group name</label>
+            <input id="group-name" type="text" name="name" placeholder="Group name" list="group-name-options" required>
+            <datalist id="group-name-options">
+                {% for g in group_choices %}<option value="{{ g }}">{% endfor %}
+            </datalist>
+            <label class="visually-hidden" for="group-order">Sort order</label>
+            <input id="group-order" type="number" name="sort_order" placeholder="Order" value="50">
+            <button type="submit" class="btn small">Add group</button>
+        </form>
+    </section>
+</main>
+{% endblock %}

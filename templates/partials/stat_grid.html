@@ -1,7 +1,9 @@
 {# Shared dashboard / transaction-list summary cards.
-   Each card is a link that filters the list. `active_filter` is one of
-   "", "total", "active", "attention", "sold" — used to highlight the
-   currently-applied filter so the user sees which view they're in. #}
+   Five clickable cards, each filtering the list. `active_filter` is one
+   of "", "total", "attention", "active", "pending", "sold" — used to
+   highlight the currently-applied filter. Number colors per the
+   corrections set: Total black, Needs Attention red, Active green,
+   Pending orange, Sold blue. #}
 <section class="stat-grid" aria-label="Key metrics">
     <a class="stat-card{% if active_filter == "total" %} is-active{% endif %}"
        href="/app/transactions"
@@ -9,22 +11,28 @@
         <p class="label">Total transactions</p>
         <p class="value">{{ total }}</p>
     </a>
-    <a class="stat-card{% if active_filter == "active" %} is-active{% endif %}"
-       href="/app/transactions?status=open"
-       aria-current="{% if active_filter == "active" %}page{% else %}false{% endif %}">
-        <p class="label">Active</p>
-        <p class="value">{{ open_count }}</p>
-    </a>
     <a class="stat-card{% if active_filter == "attention" %} is-active{% endif %}"
        href="/app/transactions?attention=1"
        aria-current="{% if active_filter == "attention" %}page{% else %}false{% endif %}">
         <p class="label">Needs attention</p>
-        <p class="value warn">{{ needs_attention }}</p>
+        <p class="value stat-attention">{{ needs_attention }}</p>
+    </a>
+    <a class="stat-card{% if active_filter == "active" %} is-active{% endif %}"
+       href="/app/transactions?status=active"
+       aria-current="{% if active_filter == "active" %}page{% else %}false{% endif %}">
+        <p class="label">Active</p>
+        <p class="value stat-active">{{ active_count }}</p>
+    </a>
+    <a class="stat-card{% if active_filter == "pending" %} is-active{% endif %}"
+       href="/app/transactions?status=pending"
+       aria-current="{% if active_filter == "pending" %}page{% else %}false{% endif %}">
+        <p class="label">Pending</p>
+        <p class="value stat-pending">{{ pending_count }}</p>
     </a>
     <a class="stat-card{% if active_filter == "sold" %} is-active{% endif %}"
        href="/app/transactions?status=sold"
        aria-current="{% if active_filter == "sold" %}page{% else %}false{% endif %}">
-        <p class="label">Closed</p>
-        <p class="value success">{{ complete_count }}</p>
+        <p class="label">Sold</p>
+        <p class="value stat-sold">{{ sold_count }}</p>
     </a>
 </section>
