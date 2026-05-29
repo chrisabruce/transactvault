@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block title %}Edit {{ form_code }} — {{ set_name }} — Admin Forms — {{ app_name }}{% endblock %}
+{% block body_class %}page-app page-admin{% endblock %}
+
+{% block body %}
+{% include "components/app_header.html" %}
+
+<main class="app-main">
+    <header class="page-title">
+        <section>
+            <h1>Edit {{ form_code }}</h1>
+            <p class="subtitle">
+                <a href="/admin/forms/{{ set_key }}">← {{ set_name }}</a>
+            </p>
+        </section>
+        <nav class="admin-subnav" aria-label="Admin sections">
+            <a href="/admin">Users</a>
+            <a href="/admin/brokerages">Brokerages</a>
+            <a href="/admin/tiers">Tiers</a>
+            <a href="/admin/forms" class="active" aria-current="page">Forms</a>
+            <a href="/admin/audit">Audit log</a>
+        </nav>
+    </header>
+
+    <section class="panel">
+        <form method="post" action="/admin/forms/{{ set_key }}/forms/{{ form_key }}/edit" class="tx-form">
+            <div class="form-row">
+                <label>
+                    <span>Code</span>
+                    <input type="text" value="{{ form_code }}" readonly disabled>
+                </label>
+                <label>
+                    <span>Name</span>
+                    <input type="text" name="name" value="{{ form_name }}" required>
+                </label>
+            </div>
+            <div class="form-row">
+                <label>
+                    <span>Order</span>
+                    <input type="number" name="form_order" value="{{ form_order }}">
+                </label>
+                <label class="checkbox">
+                    <input type="checkbox" name="required" value="1"{% if form_required %} checked{% endif %}>
+                    <span>Required</span>
+                </label>
+            </div>
+            {% include "components/applies_picker.html" %}
+            <p class="field-hint">
+                A checked box means the form appears on transactions matching that value.
+                Leaving every box in a dimension unchecked is treated as "applies to all" so
+                the form doesn't silently disappear.
+            </p>
+            <div class="form-actions">
+                <button type="submit" class="btn">Save changes</button>
+                <a href="/admin/forms/{{ set_key }}" class="btn ghost">Cancel</a>
+            </div>
+        </form>
+    </section>
+</main>
+{% endblock %}

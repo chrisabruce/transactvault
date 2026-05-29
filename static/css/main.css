@@ -3391,6 +3391,35 @@ a.external {
     font-size: var(--fs-sm);
 }
 
+/* --- 22. form applicability picker (admin + broker) ------------------- */
+/* Compact fieldset grid used in `components/applies_picker.html` so the
+   admin can restrict a library form (or a broker their custom form) to
+   specific transaction types/sides/sales conditions. */
+.applies-picker {
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-md, 0.5rem);
+    padding: var(--sp-3) var(--sp-4);
+    margin: var(--sp-3) 0;
+}
+.applies-picker legend {
+    font-size: var(--fs-sm);
+    color: var(--color-muted);
+    padding: 0 var(--sp-2);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.applies-picker .picker-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--sp-2) var(--sp-4);
+}
+.applies-picker label.checkbox {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: var(--fs-sm);
+}
+
 /* --- 21. drag-and-drop reordering (admin form sets) ------------------- */
 /* Grip handle the user grabs to reorder a group panel or a form row.
    `forms-reorder.js` adds `.drag-handle` and toggles `.is-dragging`. */

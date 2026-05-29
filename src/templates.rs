@@ -785,6 +785,10 @@ pub struct BrokerFormsPage<'a> {
     pub master_forms: Vec<BrokerFormRow>,
     pub custom_forms: Vec<BrokerFormRow>,
     pub group_choices: Vec<&'static str>,
+    /// Pre-checked applicability choices for the "Add custom form" form.
+    pub picker_types: Vec<AppliesChoice>,
+    pub picker_sides: Vec<AppliesChoice>,
+    pub picker_conditions: Vec<AppliesChoice>,
 }
 
 #[derive(Debug, Clone)]
@@ -838,6 +842,46 @@ pub struct AdminFormSetDetailPage<'a> {
     pub set_scope: String,
     pub groups: Vec<FormGroupView>,
     pub group_choices: Vec<&'static str>,
+    /// Checkbox choices for the inline "Add form" applicability picker.
+    /// On this page every box is pre-checked (= broad default); the
+    /// edit page reflects each form's actual stored selections.
+    pub picker_types: Vec<AppliesChoice>,
+    pub picker_sides: Vec<AppliesChoice>,
+    pub picker_conditions: Vec<AppliesChoice>,
+}
+
+/// One checkbox in a form-applicability fieldset. `field_name` is the
+/// POST key (e.g. `cond_short_sale`), `label` is the user-facing
+/// caption, `checked` is the initial state.
+#[derive(Debug, Clone)]
+pub struct AppliesChoice {
+    pub field_name: String,
+    pub label: String,
+    pub checked: bool,
+}
+
+/// Admin edit page for an existing library form. Lets a super-admin
+/// narrow which transaction types/sides/sales conditions the form
+/// applies to, plus tweak its name/order/required flag. Code is shown
+/// read-only — renaming an existing code is rarely what's intended
+/// and would break references downstream.
+#[derive(Template)]
+#[template(path = "pages/admin_form_edit.html")]
+pub struct AdminFormEditPage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+    pub signed_in: bool,
+    pub header: AppHeader<'a>,
+    pub set_key: String,
+    pub set_name: String,
+    pub form_key: String,
+    pub form_code: String,
+    pub form_name: String,
+    pub form_order: i64,
+    pub form_required: bool,
+    pub picker_types: Vec<AppliesChoice>,
+    pub picker_sides: Vec<AppliesChoice>,
+    pub picker_conditions: Vec<AppliesChoice>,
 }
 
 #[derive(Debug, Clone)]

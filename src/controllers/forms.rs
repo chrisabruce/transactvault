@@ -24,8 +24,8 @@ use crate::controllers::render;
 use crate::error::AppError;
 use crate::state::AppState;
 use crate::templates::{
-    AdminFormSetDetailPage, AdminFormSetRow, AdminFormsPage, AppHeader, BrokerFormRow,
-    BrokerFormsPage, FormGroupView, FormSetOption,
+    AdminFormSetDetailPage, AdminFormSetRow, AdminFormsPage, AppHeader, AppliesChoice,
+    BrokerFormRow, BrokerFormsPage, FormGroupView, FormSetOption,
 };
 
 /// The standard group names a broker can drop a custom form into.
@@ -41,6 +41,191 @@ const GROUP_CHOICES: &[(&str, i64)] = &[
     ("Reports, Certificates & Clearances", 6),
     ("Release Disclosures", 7),
 ];
+
+/// (slug, label) pairs for each dimension a form's appearance can be
+/// restricted by. Used by the admin Add / Edit form pages and the
+/// broker custom-form page to drive checkbox UIs whose POST data the
+/// `*Applies` structs deserialize directly. Slugs match the values
+/// stored in `form.applies_*` and the values `resolve_checklist`
+/// filters by.
+pub const APPLIES_TYPES: &[(&str, &str)] = &[
+    ("residential", "Residential"),
+    ("commercial", "Commercial"),
+    ("vacant_lots_land", "Vacant Lots & Land"),
+    ("manufactured_home", "Manufactured / Mobile Home"),
+    ("business_opportunity", "Business Opportunity"),
+    ("commercial_lease", "Commercial Lease"),
+    ("rental_lease", "Rental / Lease"),
+];
+pub const APPLIES_SIDES: &[(&str, &str)] = &[
+    ("listing", "Listing"),
+    ("purchase", "Purchase"),
+    ("both", "Both (dual representation)"),
+];
+pub const APPLIES_CONDITIONS: &[(&str, &str)] = &[
+    ("none", "Standard"),
+    ("probate", "Probate"),
+    ("short_sale", "Short Sale"),
+    ("reo", "REO / Foreclosure"),
+];
+
+/// Checkbox state for a form's applicability picker. Each field is
+/// `Some(_)` when the matching `<dimension>_<slug>` checkbox is ticked
+/// (the value sent is `"1"`; we just check presence). Both the admin
+/// and broker create handlers embed this so the same checkbox markup
+/// works in both templates.
+#[derive(Debug, Default, Deserialize)]
+pub struct AppliesPicker {
+    #[serde(default)]
+    pub type_residential: Option<String>,
+    #[serde(default)]
+    pub type_commercial: Option<String>,
+    #[serde(default)]
+    pub type_vacant_lots_land: Option<String>,
+    #[serde(default)]
+    pub type_manufactured_home: Option<String>,
+    #[serde(default)]
+    pub type_business_opportunity: Option<String>,
+    #[serde(default)]
+    pub type_commercial_lease: Option<String>,
+    #[serde(default)]
+    pub type_rental_lease: Option<String>,
+
+    #[serde(default)]
+    pub side_listing: Option<String>,
+    #[serde(default)]
+    pub side_purchase: Option<String>,
+    #[serde(default)]
+    pub side_both: Option<String>,
+
+    #[serde(default)]
+    pub cond_none: Option<String>,
+    #[serde(default)]
+    pub cond_probate: Option<String>,
+    #[serde(default)]
+    pub cond_short_sale: Option<String>,
+    #[serde(default)]
+    pub cond_reo: Option<String>,
+}
+
+impl AppliesPicker {
+    pub fn types(&self) -> Vec<String> {
+        let mut v = Vec::new();
+        if self.type_residential.is_some() {
+            v.push("residential".into());
+        }
+        if self.type_commercial.is_some() {
+            v.push("commercial".into());
+        }
+        if self.type_vacant_lots_land.is_some() {
+            v.push("vacant_lots_land".into());
+        }
+        if self.type_manufactured_home.is_some() {
+            v.push("manufactured_home".into());
+        }
+        if self.type_business_opportunity.is_some() {
+            v.push("business_opportunity".into());
+        }
+        if self.type_commercial_lease.is_some() {
+            v.push("commercial_lease".into());
+        }
+        if self.type_rental_lease.is_some() {
+            v.push("rental_lease".into());
+        }
+        v
+    }
+    pub fn sides(&self) -> Vec<String> {
+        let mut v = Vec::new();
+        if self.side_listing.is_some() {
+            v.push("listing".into());
+        }
+        if self.side_purchase.is_some() {
+            v.push("purchase".into());
+        }
+        if self.side_both.is_some() {
+            v.push("both".into());
+        }
+        v
+    }
+    pub fn conditions(&self) -> Vec<String> {
+        let mut v = Vec::new();
+        if self.cond_none.is_some() {
+            v.push("none".into());
+        }
+        if self.cond_probate.is_some() {
+            v.push("probate".into());
+        }
+        if self.cond_short_sale.is_some() {
+            v.push("short_sale".into());
+        }
+        if self.cond_reo.is_some() {
+            v.push("reo".into());
+        }
+        v
+    }
+}
+
+/// All-broad applicability — the fallback used when an admin/broker
+/// submits with no checkboxes ticked in a dimension. Lets them create
+/// an unrestricted form by skipping the picker entirely (mirrors the
+/// pre-picker default behavior).
+fn all_types() -> Vec<String> {
+    APPLIES_TYPES.iter().map(|(s, _)| (*s).into()).collect()
+}
+fn all_sides() -> Vec<String> {
+    APPLIES_SIDES.iter().map(|(s, _)| (*s).into()).collect()
+}
+fn all_conditions() -> Vec<String> {
+    APPLIES_CONDITIONS
+        .iter()
+        .map(|(s, _)| (*s).into())
+        .collect()
+}
+
+/// Build the three checkbox lists for an applicability picker. Pass
+/// `None` for the Add-form UI (every box pre-checked = broad default)
+/// or `Some((types, sides, conditions))` for the Edit-form UI so each
+/// box reflects what the form already stores.
+fn picker_choices(
+    selected: Option<(&[String], &[String], &[String])>,
+) -> (Vec<AppliesChoice>, Vec<AppliesChoice>, Vec<AppliesChoice>) {
+    fn dim(defs: &[(&str, &str)], prefix: &str, sel: Option<&[String]>) -> Vec<AppliesChoice> {
+        defs.iter()
+            .map(|(slug, label)| AppliesChoice {
+                field_name: format!("{prefix}_{slug}"),
+                label: (*label).into(),
+                checked: match sel {
+                    Some(s) => s.iter().any(|v| v == slug),
+                    None => true,
+                },
+            })
+            .collect()
+    }
+    let (st, ss, sc) = match selected {
+        Some((t, s, c)) => (Some(t), Some(s), Some(c)),
+        None => (None, None, None),
+    };
+    (
+        dim(APPLIES_TYPES, "type", st),
+        dim(APPLIES_SIDES, "side", ss),
+        dim(APPLIES_CONDITIONS, "cond", sc),
+    )
+}
+
+/// Resolve the picker's three Vecs, falling back to "applies to all"
+/// for any dimension the user left entirely unchecked. Empty-list
+/// semantics in resolution mean "applies to nothing", which is
+/// almost never what someone clicking "save" intends.
+fn applies_or_all(picker: &AppliesPicker) -> (Vec<String>, Vec<String>, Vec<String>) {
+    let t = picker.types();
+    let s = picker.sides();
+    let c = picker.conditions();
+    (
+        if t.is_empty() { all_types() } else { t },
+        if s.is_empty() { all_sides() } else { s },
+        if c.is_empty() { all_conditions() } else { c },
+    )
+}
 
 // ---------------------------------------------------------------------------
 // Broker config
@@ -172,6 +357,7 @@ pub async fn broker_forms(
         .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
         .with_banner(crate::billing::banner_for(&brokerage));
 
+    let (picker_types, picker_sides, picker_conditions) = picker_choices(None);
     render(&BrokerFormsPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
@@ -182,6 +368,9 @@ pub async fn broker_forms(
         master_forms,
         custom_forms,
         group_choices: GROUP_CHOICES.iter().map(|(n, _)| *n).collect(),
+        picker_types,
+        picker_sides,
+        picker_conditions,
     })
 }
 
@@ -252,6 +441,59 @@ pub struct CustomFormInput {
     pub group_name: String,
     #[serde(default)]
     pub required: Option<String>,
+    // Applicability picker — `serde_urlencoded` doesn't support
+    // `#[serde(flatten)]`, so the checkbox fields live on this struct
+    // directly. `applies_picker()` packages them into an
+    // `AppliesPicker` for the shared helper.
+    #[serde(default)]
+    pub type_residential: Option<String>,
+    #[serde(default)]
+    pub type_commercial: Option<String>,
+    #[serde(default)]
+    pub type_vacant_lots_land: Option<String>,
+    #[serde(default)]
+    pub type_manufactured_home: Option<String>,
+    #[serde(default)]
+    pub type_business_opportunity: Option<String>,
+    #[serde(default)]
+    pub type_commercial_lease: Option<String>,
+    #[serde(default)]
+    pub type_rental_lease: Option<String>,
+    #[serde(default)]
+    pub side_listing: Option<String>,
+    #[serde(default)]
+    pub side_purchase: Option<String>,
+    #[serde(default)]
+    pub side_both: Option<String>,
+    #[serde(default)]
+    pub cond_none: Option<String>,
+    #[serde(default)]
+    pub cond_probate: Option<String>,
+    #[serde(default)]
+    pub cond_short_sale: Option<String>,
+    #[serde(default)]
+    pub cond_reo: Option<String>,
+}
+
+impl CustomFormInput {
+    fn applies_picker(&self) -> AppliesPicker {
+        AppliesPicker {
+            type_residential: self.type_residential.clone(),
+            type_commercial: self.type_commercial.clone(),
+            type_vacant_lots_land: self.type_vacant_lots_land.clone(),
+            type_manufactured_home: self.type_manufactured_home.clone(),
+            type_business_opportunity: self.type_business_opportunity.clone(),
+            type_commercial_lease: self.type_commercial_lease.clone(),
+            type_rental_lease: self.type_rental_lease.clone(),
+            side_listing: self.side_listing.clone(),
+            side_purchase: self.side_purchase.clone(),
+            side_both: self.side_both.clone(),
+            cond_none: self.cond_none.clone(),
+            cond_probate: self.cond_probate.clone(),
+            cond_short_sale: self.cond_short_sale.clone(),
+            cond_reo: self.cond_reo.clone(),
+        }
+    }
 }
 
 pub async fn add_custom(
@@ -274,13 +516,11 @@ pub async fn add_custom(
         .unwrap_or(4);
     let required = matches!(input.required.as_deref(), Some("1" | "true" | "on" | "yes"));
 
-    // Custom forms apply to every type/side/condition by default — the
-    // broker can refine later. Stored on the form so resolution picks
-    // them up regardless of the transaction's specifics.
-    let all_types: Vec<String> = crate::models::TransactionType::all()
-        .iter()
-        .map(|t| t.as_str().to_string())
-        .collect();
+    // Picker-driven applicability. Unchecking everything in a
+    // dimension means "applies to all of that dimension" — see
+    // `applies_or_all` for the rationale.
+    let (applies_types, applies_sides, applies_conditions) =
+        applies_or_all(&input.applies_picker());
     let created: Option<CreatedForm> = state
         .db
         .create("form")
@@ -294,14 +534,9 @@ pub async fn add_custom(
             allows_multiple: false,
             group_name: Some(input.group_name.clone()),
             group_order: Some(group_order),
-            applies_types: all_types,
-            applies_sides: vec!["listing".into(), "purchase".into(), "both".into()],
-            applies_conditions: vec![
-                "none".into(),
-                "probate".into(),
-                "short_sale".into(),
-                "reo".into(),
-            ],
+            applies_types,
+            applies_sides,
+            applies_conditions,
             is_active: true,
         })
         .await?;
@@ -548,6 +783,7 @@ pub async fn admin_set_detail(
     .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
     .with_banner(info.banner);
 
+    let (picker_types, picker_sides, picker_conditions) = picker_choices(None);
     render(&AdminFormSetDetailPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
@@ -558,6 +794,9 @@ pub async fn admin_set_detail(
         set_scope: meta.scope,
         groups,
         group_choices: GROUP_CHOICES.iter().map(|(n, _)| *n).collect(),
+        picker_types,
+        picker_sides,
+        picker_conditions,
     })
 }
 
@@ -614,6 +853,57 @@ pub struct NewAdminFormInput {
     pub form_order: Option<i64>,
     #[serde(default)]
     pub required: Option<String>,
+    // Applicability picker — same inlined-fields pattern as
+    // `CustomFormInput` (serde_urlencoded won't flatten).
+    #[serde(default)]
+    pub type_residential: Option<String>,
+    #[serde(default)]
+    pub type_commercial: Option<String>,
+    #[serde(default)]
+    pub type_vacant_lots_land: Option<String>,
+    #[serde(default)]
+    pub type_manufactured_home: Option<String>,
+    #[serde(default)]
+    pub type_business_opportunity: Option<String>,
+    #[serde(default)]
+    pub type_commercial_lease: Option<String>,
+    #[serde(default)]
+    pub type_rental_lease: Option<String>,
+    #[serde(default)]
+    pub side_listing: Option<String>,
+    #[serde(default)]
+    pub side_purchase: Option<String>,
+    #[serde(default)]
+    pub side_both: Option<String>,
+    #[serde(default)]
+    pub cond_none: Option<String>,
+    #[serde(default)]
+    pub cond_probate: Option<String>,
+    #[serde(default)]
+    pub cond_short_sale: Option<String>,
+    #[serde(default)]
+    pub cond_reo: Option<String>,
+}
+
+impl NewAdminFormInput {
+    fn applies_picker(&self) -> AppliesPicker {
+        AppliesPicker {
+            type_residential: self.type_residential.clone(),
+            type_commercial: self.type_commercial.clone(),
+            type_vacant_lots_land: self.type_vacant_lots_land.clone(),
+            type_manufactured_home: self.type_manufactured_home.clone(),
+            type_business_opportunity: self.type_business_opportunity.clone(),
+            type_commercial_lease: self.type_commercial_lease.clone(),
+            type_rental_lease: self.type_rental_lease.clone(),
+            side_listing: self.side_listing.clone(),
+            side_purchase: self.side_purchase.clone(),
+            side_both: self.side_both.clone(),
+            cond_none: self.cond_none.clone(),
+            cond_probate: self.cond_probate.clone(),
+            cond_short_sale: self.cond_short_sale.clone(),
+            cond_reo: self.cond_reo.clone(),
+        }
+    }
 }
 
 pub async fn admin_add_form(
@@ -629,12 +919,8 @@ pub async fn admin_add_form(
     }
     let group_id = RecordId::new("form_group", input.group_key.trim());
     let required = matches!(input.required.as_deref(), Some("1" | "true" | "on" | "yes"));
-    // Admin-added library forms apply broadly by default; criteria can
-    // be refined later. (Per-criteria editing is a follow-up.)
-    let all_types: Vec<String> = crate::models::TransactionType::all()
-        .iter()
-        .map(|t| t.as_str().to_string())
-        .collect();
+    let (applies_types, applies_sides, applies_conditions) =
+        applies_or_all(&input.applies_picker());
     let created: Option<CreatedForm> = state
         .db
         .create("form")
@@ -648,14 +934,9 @@ pub async fn admin_add_form(
             allows_multiple: false,
             group_name: None,
             group_order: None,
-            applies_types: all_types,
-            applies_sides: vec!["listing".into(), "purchase".into(), "both".into()],
-            applies_conditions: vec![
-                "none".into(),
-                "probate".into(),
-                "short_sale".into(),
-                "reo".into(),
-            ],
+            applies_types,
+            applies_sides,
+            applies_conditions,
             is_active: true,
         })
         .await?;
@@ -742,6 +1023,184 @@ pub async fn admin_toggle_form(
         .await?;
     Ok(Redirect::to(&format!(
         "/admin/forms/{}?flash=form_toggled",
+        p.key
+    )))
+}
+
+/// GET `/admin/forms/{set_key}/forms/{form_key}/edit` — render the
+/// per-form edit page with applicability checkboxes pre-populated
+/// from the stored `applies_*` arrays.
+pub async fn admin_edit_form(
+    State(state): State<AppState>,
+    SuperAdmin(user): SuperAdmin,
+    Path(p): Path<ToggleFormPath>,
+) -> Result<axum::response::Html<String>, AppError> {
+    #[derive(Debug, Deserialize, SurrealValue)]
+    struct LoadedForm {
+        code: String,
+        name: String,
+        form_order: i64,
+        required: bool,
+        applies_types: Vec<String>,
+        applies_sides: Vec<String>,
+        applies_conditions: Vec<String>,
+    }
+    let form_id = RecordId::new("form", p.form_key.as_str());
+    let mut fq = state
+        .db
+        .query(
+            "SELECT code, name, form_order, required, \
+             applies_types, applies_sides, applies_conditions FROM ONLY $f",
+        )
+        .bind(("f", form_id.clone()))
+        .await?;
+    let form: Option<LoadedForm> = fq.take(0)?;
+    let form = form.ok_or(AppError::NotFound)?;
+
+    #[derive(Debug, Deserialize, SurrealValue)]
+    struct SetMeta {
+        name: String,
+    }
+    let set_id = RecordId::new("form_set", p.key.as_str());
+    let mut sq = state
+        .db
+        .query("SELECT name FROM ONLY $s")
+        .bind(("s", set_id))
+        .await?;
+    let set_meta: Option<SetMeta> = sq.take(0)?;
+    let set_name = set_meta.map(|s| s.name).unwrap_or_default();
+
+    let info = crate::billing::header_info_for_user(&state, &user).await;
+    let header = AppHeader::new(
+        &user.name,
+        &user.email,
+        user.role,
+        &info.brokerage_name,
+        "admin",
+    )
+    .with_super_admin(true)
+    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
+    .with_banner(info.banner);
+
+    let (picker_types, picker_sides, picker_conditions) = picker_choices(Some((
+        &form.applies_types,
+        &form.applies_sides,
+        &form.applies_conditions,
+    )));
+
+    render(&crate::templates::AdminFormEditPage {
+        app_name: &state.config.app_name,
+        base_url: &state.config.base_url,
+        signed_in: true,
+        header,
+        set_key: p.key,
+        set_name,
+        form_key: p.form_key,
+        form_code: form.code,
+        form_name: form.name,
+        form_order: form.form_order,
+        form_required: form.required,
+        picker_types,
+        picker_sides,
+        picker_conditions,
+    })
+}
+
+/// POST payload for the admin edit-form page. Same applicability
+/// checkbox shape as `NewAdminFormInput`, plus the editable name /
+/// order / required fields. `code` is intentionally absent — it's
+/// shown read-only because downstream references key off it.
+#[derive(Debug, Deserialize)]
+pub struct EditAdminFormInput {
+    pub name: String,
+    #[serde(default)]
+    pub form_order: Option<i64>,
+    #[serde(default)]
+    pub required: Option<String>,
+    #[serde(default)]
+    pub type_residential: Option<String>,
+    #[serde(default)]
+    pub type_commercial: Option<String>,
+    #[serde(default)]
+    pub type_vacant_lots_land: Option<String>,
+    #[serde(default)]
+    pub type_manufactured_home: Option<String>,
+    #[serde(default)]
+    pub type_business_opportunity: Option<String>,
+    #[serde(default)]
+    pub type_commercial_lease: Option<String>,
+    #[serde(default)]
+    pub type_rental_lease: Option<String>,
+    #[serde(default)]
+    pub side_listing: Option<String>,
+    #[serde(default)]
+    pub side_purchase: Option<String>,
+    #[serde(default)]
+    pub side_both: Option<String>,
+    #[serde(default)]
+    pub cond_none: Option<String>,
+    #[serde(default)]
+    pub cond_probate: Option<String>,
+    #[serde(default)]
+    pub cond_short_sale: Option<String>,
+    #[serde(default)]
+    pub cond_reo: Option<String>,
+}
+
+impl EditAdminFormInput {
+    fn applies_picker(&self) -> AppliesPicker {
+        AppliesPicker {
+            type_residential: self.type_residential.clone(),
+            type_commercial: self.type_commercial.clone(),
+            type_vacant_lots_land: self.type_vacant_lots_land.clone(),
+            type_manufactured_home: self.type_manufactured_home.clone(),
+            type_business_opportunity: self.type_business_opportunity.clone(),
+            type_commercial_lease: self.type_commercial_lease.clone(),
+            type_rental_lease: self.type_rental_lease.clone(),
+            side_listing: self.side_listing.clone(),
+            side_purchase: self.side_purchase.clone(),
+            side_both: self.side_both.clone(),
+            cond_none: self.cond_none.clone(),
+            cond_probate: self.cond_probate.clone(),
+            cond_short_sale: self.cond_short_sale.clone(),
+            cond_reo: self.cond_reo.clone(),
+        }
+    }
+}
+
+/// POST `/admin/forms/{set_key}/forms/{form_key}/edit` — persist
+/// the picker selections + name/order/required for an existing
+/// library form.
+pub async fn admin_update_form(
+    State(state): State<AppState>,
+    SuperAdmin(_user): SuperAdmin,
+    Path(p): Path<ToggleFormPath>,
+    Form(input): Form<EditAdminFormInput>,
+) -> Result<Redirect, AppError> {
+    let name = input.name.trim().to_string();
+    if name.is_empty() {
+        return Err(AppError::invalid("Form name is required."));
+    }
+    let required = matches!(input.required.as_deref(), Some("1" | "true" | "on" | "yes"));
+    let (applies_types, applies_sides, applies_conditions) =
+        applies_or_all(&input.applies_picker());
+    let form_id = RecordId::new("form", p.form_key.as_str());
+    state
+        .db
+        .query(
+            "UPDATE $f SET name = $n, form_order = $o, required = $r, \
+             applies_types = $at, applies_sides = $asd, applies_conditions = $ac",
+        )
+        .bind(("f", form_id))
+        .bind(("n", name))
+        .bind(("o", input.form_order.unwrap_or(500)))
+        .bind(("r", required))
+        .bind(("at", applies_types))
+        .bind(("asd", applies_sides))
+        .bind(("ac", applies_conditions))
+        .await?;
+    Ok(Redirect::to(&format!(
+        "/admin/forms/{}?flash=form_updated",
         p.key
     )))
 }

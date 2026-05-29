@@ -1,0 +1,40 @@
+{# Applicability picker — three fieldsets of checkboxes that restrict a form
+   to specific transaction types / sides / sales conditions. The host page
+   supplies `picker_types`, `picker_sides`, `picker_conditions` as
+   `Vec<AppliesChoice>`; each checkbox sends `name="{{ field_name }}"`
+   when ticked, which the controller maps into `applies_*` arrays via
+   `AppliesPicker::types/sides/conditions`. Leaving every box in a
+   dimension unchecked means "apply to all of that dimension". #}
+<fieldset class="applies-picker">
+    <legend>Applies to transaction types</legend>
+    <div class="picker-row">
+        {% for c in picker_types %}
+            <label class="checkbox">
+                <input type="checkbox" name="{{ c.field_name }}" value="1"{% if c.checked %} checked{% endif %}>
+                <span>{{ c.label }}</span>
+            </label>
+        {% endfor %}
+    </div>
+</fieldset>
+<fieldset class="applies-picker">
+    <legend>Applies to sides</legend>
+    <div class="picker-row">
+        {% for c in picker_sides %}
+            <label class="checkbox">
+                <input type="checkbox" name="{{ c.field_name }}" value="1"{% if c.checked %} checked{% endif %}>
+                <span>{{ c.label }}</span>
+            </label>
+        {% endfor %}
+    </div>
+</fieldset>
+<fieldset class="applies-picker">
+    <legend>Applies to special sales conditions</legend>
+    <div class="picker-row">
+        {% for c in picker_conditions %}
+            <label class="checkbox">
+                <input type="checkbox" name="{{ c.field_name }}" value="1"{% if c.checked %} checked{% endif %}>
+                <span>{{ c.label }}</span>
+            </label>
+        {% endfor %}
+    </div>
+</fieldset>

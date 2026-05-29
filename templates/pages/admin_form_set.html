@@ -51,6 +51,7 @@
                                 <td>{% if f.required %}Required{% else %}Optional{% endif %}</td>
                                 <td>{% if f.is_active %}Active{% else %}Inactive{% endif %}</td>
                                 <td class="actions">
+                                    <a href="/admin/forms/{{ set_key }}/forms/{{ f.key }}/edit" class="btn small ghost">Edit</a>
                                     <form method="post" action="/admin/forms/{{ set_key }}/forms/{{ f.key }}/toggle" class="inline-form">
                                         <button type="submit" class="btn small {% if f.is_active %}danger{% else %}secondary{% endif %}">
                                             {% if f.is_active %}Deactivate{% else %}Activate{% endif %}
@@ -75,6 +76,7 @@
                         <label><span>Order</span><input type="number" name="form_order" value="500"></label>
                         <label class="checkbox"><input type="checkbox" name="required" value="1"><span>Required</span></label>
                     </div>
+                    {% include "components/applies_picker.html" %}
                     <button type="submit" class="btn small">Add form</button>
                 </form>
             </details>

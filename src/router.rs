@@ -134,6 +134,10 @@ pub fn build(state: AppState) -> Router {
             "/admin/forms/{key}/forms/{form_key}/toggle",
             post(forms::admin_toggle_form),
         )
+        .route(
+            "/admin/forms/{key}/forms/{form_key}/edit",
+            get(forms::admin_edit_form).post(forms::admin_update_form),
+        )
         .route("/admin/audit", get(admin::audit_log));
 
     Router::new()
