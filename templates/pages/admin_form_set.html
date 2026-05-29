@@ -21,24 +21,30 @@
         </nav>
     </header>
 
+    <div class="reorder-groups" data-reorder="/admin/forms/{{ set_key }}/reorder_groups">
     {% for group in groups %}
-        <section class="panel">
-            <h2>{{ group.name }} <small class="meta">(order {{ group.sort_order }})</small></h2>
+        <section class="panel" data-reorder-key="{{ group.key }}">
+            <h2>
+                <span class="drag-handle" data-reorder-handle title="Drag to reorder group" aria-hidden="true">⠿</span>
+                {{ group.name }} <small class="meta">(order {{ group.sort_order }})</small>
+            </h2>
             {% if group.forms.is_empty() %}
                 <p class="meta">No forms in this group yet.</p>
             {% else %}
                 <table class="admin-table">
                     <thead>
                         <tr>
+                            <th scope="col" class="drag-col"><span class="visually-hidden">Reorder</span></th>
                             <th scope="col">Code</th><th scope="col">Form</th>
                             <th scope="col" class="num">Order</th><th scope="col">Required</th>
                             <th scope="col">Status</th>
                             <th scope="col" class="actions"><span class="visually-hidden">Actions</span></th>
                         </tr>
                     </thead>
-                    <tbody>
+                    <tbody data-reorder="/admin/forms/{{ set_key }}/reorder_forms" data-reorder-group="{{ group.key }}">
                         {% for f in group.forms %}
-                            <tr{% if !f.is_active %} class="is-muted"{% endif %}>
+                            <tr data-reorder-key="{{ f.key }}"{% if !f.is_active %} class="is-muted"{% endif %}>
+                                <td class="drag-cell"><span class="drag-handle" data-reorder-handle title="Drag to reorder form" aria-hidden="true">⠿</span></td>
                                 <td><code>{{ f.code }}</code></td>
                                 <td>{{ f.name }}</td>
                                 <td class="num">{{ f.form_order }}</td>
@@ -74,6 +80,7 @@
             </details>
         </section>
     {% endfor %}
+    </div>
 
     <section class="panel">
         <h2>Add a group</h2>
@@ -89,4 +96,5 @@
         </form>
     </section>
 </main>
+<script src="/static/js/forms-reorder.js" defer></script>
 {% endblock %}

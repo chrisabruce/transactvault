@@ -673,6 +673,56 @@ pub async fn admin_add_form(
     )))
 }
 
+/// Drag-and-drop reorder payload: `order` is a comma-separated list of
+/// record keys in their new display order. The client also sends a
+/// `group` field for form reordering, but record keys are globally
+/// unique so it isn't needed here — serde drops the unknown field.
+#[derive(Debug, Deserialize)]
+pub struct ReorderInput {
+    pub order: String,
+}
+
+/// Persist a new group order within a set: each `form_group`'s
+/// `sort_order` becomes its index in the dropped sequence. Returns 204
+/// (the client already moved the DOM; it only needs success/failure).
+pub async fn admin_reorder_groups(
+    State(state): State<AppState>,
+    SuperAdmin(_user): SuperAdmin,
+    Path(_set_key): Path<String>,
+    Form(input): Form<ReorderInput>,
+) -> Result<axum::http::StatusCode, AppError> {
+    for (i, key) in input.order.split(',').filter(|s| !s.is_empty()).enumerate() {
+        let gid = RecordId::new("form_group", key);
+        state
+            .db
+            .query("UPDATE $g SET sort_order = $o")
+            .bind(("g", gid))
+            .bind(("o", i as i64))
+            .await?;
+    }
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+/// Persist a new form order within a group: each `form`'s `form_order`
+/// becomes its index in the dropped sequence.
+pub async fn admin_reorder_forms(
+    State(state): State<AppState>,
+    SuperAdmin(_user): SuperAdmin,
+    Path(_set_key): Path<String>,
+    Form(input): Form<ReorderInput>,
+) -> Result<axum::http::StatusCode, AppError> {
+    for (i, key) in input.order.split(',').filter(|s| !s.is_empty()).enumerate() {
+        let fid = RecordId::new("form", key);
+        state
+            .db
+            .query("UPDATE $f SET form_order = $o")
+            .bind(("f", fid))
+            .bind(("o", i as i64))
+            .await?;
+    }
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ToggleFormPath {
     pub key: String,

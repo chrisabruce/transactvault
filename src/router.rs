@@ -123,6 +123,14 @@ pub fn build(state: AppState) -> Router {
         .route("/admin/forms/{key}/groups", post(forms::admin_add_group))
         .route("/admin/forms/{key}/forms", post(forms::admin_add_form))
         .route(
+            "/admin/forms/{key}/reorder_groups",
+            post(forms::admin_reorder_groups),
+        )
+        .route(
+            "/admin/forms/{key}/reorder_forms",
+            post(forms::admin_reorder_forms),
+        )
+        .route(
             "/admin/forms/{key}/forms/{form_key}/toggle",
             post(forms::admin_toggle_form),
         )

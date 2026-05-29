@@ -3391,6 +3391,35 @@ a.external {
     font-size: var(--fs-sm);
 }
 
+/* --- 21. drag-and-drop reordering (admin form sets) ------------------- */
+/* Grip handle the user grabs to reorder a group panel or a form row.
+   `forms-reorder.js` adds `.drag-handle` and toggles `.is-dragging`. */
+.drag-handle {
+    cursor: grab;
+    color: var(--color-muted);
+    font-size: var(--fs-md);
+    line-height: 1;
+    user-select: none;
+    padding: 0 0.15rem;
+}
+.drag-handle:hover { color: var(--color-ink); }
+.is-dragging .drag-handle,
+.drag-handle:active { cursor: grabbing; }
+
+/* While a node is mid-drag, fade it so the drop target reads clearly. */
+.is-dragging {
+    opacity: 0.5;
+    background: var(--color-surface-alt, var(--color-surface));
+}
+.reorder-groups .panel.is-dragging {
+    outline: 2px dashed var(--color-line);
+    outline-offset: 2px;
+}
+
+/* Slim leading column that holds the row grip. */
+.drag-col { width: 1.5rem; }
+.drag-cell { text-align: center; white-space: nowrap; }
+
 /* --- print: clean handoff if a designer hits Cmd-P -------------------- */
 @media print {
     .site-header,
