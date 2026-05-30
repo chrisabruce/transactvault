@@ -337,13 +337,24 @@ impl Transaction {
         record_key(&self.id)
     }
 
-    /// Human-friendly age string for list views — "3 days ago", "an hour
-    /// ago", "just now", etc. Powered by the `chrono-humanize` crate so
-    /// pluralisation + threshold handling stay consistent.
+    /// Human-friendly age string for list views — "3 days ago", "now",
+    /// "in 5 minutes" for a future-dated record, etc. `Tense::Present`
+    /// lets `chrono-humanize` pick the suffix from the sign of the
+    /// delta; forcing `Tense::Past` (the previous setting) made a
+    /// freshly-created row render as "now ago" and any future-dated
+    /// row read as "X ago" instead of "in X".
     pub fn age_label(&self) -> String {
         use chrono_humanize::{Accuracy, HumanTime, Tense};
         let delta = self.created_at - chrono::Utc::now();
-        HumanTime::from(delta).to_text_en(Accuracy::Rough, Tense::Past)
+        let label = HumanTime::from(delta).to_text_en(Accuracy::Rough, Tense::Present);
+        // `chrono-humanize` renders sub-threshold deltas as a bare
+        // "now"; "just now" reads warmer and matches the rest of the
+        // app's voice.
+        if label == "now" {
+            "just now".into()
+        } else {
+            label
+        }
     }
 
     /// CSS hook for status colouring.
