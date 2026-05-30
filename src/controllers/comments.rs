@@ -55,7 +55,7 @@ pub async fn create_on_item(
     Ok(Redirect::to(&format!("/app/transactions/{key}")))
 }
 
-async fn insert_comment(
+pub(crate) async fn insert_comment(
     state: &AppState,
     user: &CurrentUser,
     target: RecordId,

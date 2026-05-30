@@ -698,7 +698,7 @@ pub async fn show(
     let tx = authorize_transaction(&state, &user, &tx_id).await?;
 
     let items = load_checklist(&state, &tx.id).await?;
-    let groups = build_grouped_checklist(&state, items).await?;
+    let groups = build_grouped_checklist(&state, items, user.role).await?;
     let owner_name = load_transaction_owner_name(&state, &tx.id).await?;
     let available_forms = available_forms(&groups);
     let transaction_comments = load_comments(&state, &tx.id).await?;
@@ -1484,6 +1484,7 @@ struct NameOnly {
 async fn build_grouped_checklist(
     state: &AppState,
     items: Vec<ChecklistItem>,
+    role: crate::auth::Role,
 ) -> Result<Vec<ChecklistGroup>, AppError> {
     // Per-item documents — one query per item is fine for the volumes we
     // expect; cheaper than a single mega-query that has to be split client-side.
@@ -1557,7 +1558,7 @@ async fn build_grouped_checklist(
 
     let groups = buckets
         .into_iter()
-        .map(|(order, name, items)| ChecklistGroup::build(name, order, items))
+        .map(|(order, name, items)| ChecklistGroup::build(name, order, items, role))
         .collect();
     Ok(groups)
 }

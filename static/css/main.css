@@ -2235,6 +2235,23 @@ progress.progress.small {
     border-radius: var(--radius);
 }
 .inline-upload input[type="file"] { font-size: var(--fs-xs); }
+.inline-deny {
+    margin-top: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 0.6rem;
+    background: var(--color-surface-alt);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius);
+    min-width: 18rem;
+}
+.inline-deny textarea {
+    font: inherit;
+    font-size: var(--fs-sm);
+    resize: vertical;
+    padding: 0.4rem 0.5rem;
+}
 
 .checklist-add {
     margin-top: var(--sp-5);

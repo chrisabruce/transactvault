@@ -405,7 +405,7 @@ pub struct ChecklistGroup {
 }
 
 impl ChecklistGroup {
-    pub fn build(name: String, order: i64, items: Vec<ChecklistRow>) -> Self {
+    pub fn build(name: String, order: i64, items: Vec<ChecklistRow>, role: Role) -> Self {
         let total = items.len();
         let completed = items.iter().filter(|r| r.item.is_approved()).count();
         let required_total = items.iter().filter(|r| r.item.required).count();
@@ -418,10 +418,12 @@ impl ChecklistGroup {
         } else {
             ((completed as f32 / total as f32) * 100.0).round() as u32
         };
-        // The main file contract opens by default; supporting sections
-        // start collapsed. Name-based so locality-labeled contract
-        // groups behave the same.
-        let open_by_default = name.contains("Contract");
+        // Agents see every group expanded — their working view is "what
+        // still needs my attention" and folding hides items behind a
+        // click. For everyone else only the contract groups open by
+        // default; locality-labeled contract groups carry the same name
+        // substring so they behave the same.
+        let open_by_default = role == Role::Agent || name.contains("Contract");
         Self {
             name,
             order,

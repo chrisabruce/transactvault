@@ -97,11 +97,14 @@
                                                         {% if row.item.is_approved() %}Approved{% else %}Approve{% endif %}
                                                     </button>
                                                 </form>
-                                                <form method="post" action="/app/checklist/{{ row.item.url_key() }}/deny" class="review-action">
-                                                    <button class="btn small deny{% if row.item.is_denied() %} active{% endif %}" type="submit">
-                                                        {% if row.item.is_denied() %}Denied{% else %}Deny{% endif %}
-                                                    </button>
-                                                </form>
+                                                <details class="action-popover review-action">
+                                                    <summary class="btn small deny{% if row.item.is_denied() %} active{% endif %}">{% if row.item.is_denied() %}Denied{% else %}Deny{% endif %}</summary>
+                                                    <form method="post" action="/app/checklist/{{ row.item.url_key() }}/deny" class="inline-deny">
+                                                        <label class="visually-hidden" for="reason-{{ row.item.url_key() }}">Reason (optional)</label>
+                                                        <textarea id="reason-{{ row.item.url_key() }}" name="reason" rows="3" maxlength="4000" placeholder="Reason (optional) — saved as a comment so the agent sees why"></textarea>
+                                                        <button type="submit" class="btn small deny">Deny item</button>
+                                                    </form>
+                                                </details>
                                             {% else %}
                                                 <span class="status-pill status-{{ row.item.approval_status }}">
                                                     {% if row.item.is_approved() %}Approved{% else if row.item.is_denied() %}Denied{% else %}Pending review{% endif %}

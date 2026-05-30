@@ -124,15 +124,26 @@ pub async fn approve(
     user: CurrentUser,
     Path(item_id): Path<String>,
 ) -> Result<Redirect, AppError> {
-    set_approval(&state, &user, item_id, "approved").await
+    set_approval(&state, &user, item_id, "approved", None).await
+}
+
+/// POST body for the Deny action. The reason field is optional — the
+/// review workflow shouldn't be blocked on the reviewer typing one, but
+/// when supplied it becomes a comment on the item so the agent sees the
+/// explanation in the same thread they already read.
+#[derive(Debug, Deserialize)]
+pub struct DenyInput {
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 pub async fn deny(
     State(state): State<AppState>,
     user: CurrentUser,
     Path(item_id): Path<String>,
+    Form(input): Form<DenyInput>,
 ) -> Result<Redirect, AppError> {
-    set_approval(&state, &user, item_id, "denied").await
+    set_approval(&state, &user, item_id, "denied", input.reason).await
 }
 
 async fn set_approval(
@@ -140,6 +151,7 @@ async fn set_approval(
     user: &CurrentUser,
     item_id: String,
     new_status: &'static str,
+    reason: Option<String>,
 ) -> Result<Redirect, AppError> {
     if !user.role.can_review() {
         return Err(AppError::Forbidden);
@@ -184,10 +196,20 @@ async fn set_approval(
                 reviewed_at     = time::now(),
                 reviewed_by     = $u",
         )
-        .bind(("c", item_ref))
+        .bind(("c", item_ref.clone()))
         .bind(("u", user.user_id.clone()))
         .bind(("s", new_status))
         .await?;
+
+    // If the reviewer supplied a reason on Deny, drop it into the item's
+    // comment thread so the agent reads the explanation in the place
+    // they're already watching. Empty / whitespace-only is silently
+    // skipped — the prompt is optional.
+    if let Some(text) = reason
+        && !text.trim().is_empty()
+    {
+        crate::controllers::comments::insert_comment(state, user, item_ref, text).await?;
+    }
 
     let key = crate::db::record_key(&tx_id);
     Ok(Redirect::to(&format!("/app/transactions/{key}")))
