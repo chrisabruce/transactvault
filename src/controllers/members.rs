@@ -114,11 +114,43 @@ pub async fn invite(
         });
     }
 
-    // Send an invite per valid address. Each call creates the
+    // Skip anyone who already has an account — `user.email` is unique,
+    // so the acceptance step would 500 on insert. Show the broker which
+    // addresses we skipped instead of failing silently.
+    let mut existing_q = state
+        .db
+        .query("SELECT VALUE email FROM user WHERE email IN $e")
+        .bind(("e", valid.clone()))
+        .await?;
+    let already_registered: Vec<String> = existing_q.take(0).unwrap_or_default();
+    let to_send: Vec<String> = valid
+        .into_iter()
+        .filter(|e| !already_registered.contains(e))
+        .collect();
+
+    if to_send.is_empty() {
+        return render(&TeamPage {
+            app_name: &state.config.app_name,
+            base_url: &state.config.base_url,
+            signed_in: true,
+            header,
+            members: load_members(&state, &user).await?,
+            pending: load_pending_invitations(&state, &user).await?,
+            invite_error: Some(
+                "Every address you entered already has an account on TransactVault. \
+                 A user can only belong to one brokerage at a time — they'll need to \
+                 leave their current brokerage before joining yours.",
+            ),
+            invite_link: None,
+            invite_notice: None,
+        });
+    }
+
+    // Send an invite per remaining address. Each call creates the
     // invitation row, emails it, and audits.
     let mut last_link = None;
-    let sent = valid.len();
-    for email in valid {
+    let sent = to_send.len();
+    for email in to_send {
         let invitation = create_invitation(
             &state,
             email,
@@ -143,11 +175,22 @@ pub async fn invite(
     } else {
         (None, Some(format!("Sent {sent} invitations.")))
     };
-    // Note any addresses we skipped so the broker can fix typos.
-    let invite_notice = match (&invite_notice, invalid.is_empty()) {
-        (_, true) => invite_notice,
-        (Some(n), false) => Some(format!("{n} Skipped invalid: {}.", invalid.join(", "))),
-        (None, false) => Some(format!("Skipped invalid: {}.", invalid.join(", "))),
+    // Note any addresses we skipped so the broker can fix typos or
+    // follow up with the people who already have an account elsewhere.
+    let mut notice_parts: Vec<String> = invite_notice.into_iter().collect();
+    if !already_registered.is_empty() {
+        notice_parts.push(format!(
+            "Skipped (already registered, must leave current brokerage first): {}.",
+            already_registered.join(", "),
+        ));
+    }
+    if !invalid.is_empty() {
+        notice_parts.push(format!("Skipped invalid: {}.", invalid.join(", ")));
+    }
+    let invite_notice = if notice_parts.is_empty() {
+        None
+    } else {
+        Some(notice_parts.join(" "))
     };
 
     render(&TeamPage {

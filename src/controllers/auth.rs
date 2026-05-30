@@ -623,7 +623,7 @@ pub async fn accept_invite(
     Path(token): Path<String>,
     Form(input): Form<AcceptInviteInput>,
 ) -> Result<Response, AppError> {
-    let (invitation, _, _) = load_invitation(&state, &token).await?;
+    let (invitation, brokerage, inviter_name) = load_invitation(&state, &token).await?;
 
     if input.password.len() < 8 {
         return Err(AppError::invalid("Password must be at least 8 characters."));
@@ -631,6 +631,36 @@ pub async fn accept_invite(
     let name = input.name.trim().to_string();
     if name.is_empty() {
         return Err(AppError::invalid("Name is required."));
+    }
+
+    // Defense in depth: if a user with this email already exists (e.g.
+    // they signed up between invite issuance and acceptance), the
+    // `idx_user_email` unique index would 500 on insert below. Catch it
+    // first and re-render the invite page with a clear explanation
+    // instead. The invitation token stays unconsumed so the recipient
+    // can re-use it after sorting out their existing account.
+    let mut existing_q = state
+        .db
+        .query("SELECT VALUE id FROM user WHERE email = $e LIMIT 1")
+        .bind(("e", invitation.email.clone()))
+        .await?;
+    let existing: Vec<RecordId> = existing_q.take(0).unwrap_or_default();
+    if !existing.is_empty() {
+        let html = render(&InvitePage {
+            app_name: &state.config.app_name,
+            base_url: &state.config.base_url,
+            signed_in: false,
+            invitation: &invitation,
+            brokerage_name: &brokerage.name,
+            inviter_name: &inviter_name,
+            error: Some(
+                "This email already has a TransactVault account. \
+                 A user can only belong to one brokerage at a time — \
+                 leave your current brokerage first, then revisit this \
+                 invite link.",
+            ),
+        })?;
+        return Ok(html.into_response());
     }
 
     let hashed = hash_password(&input.password).await?;

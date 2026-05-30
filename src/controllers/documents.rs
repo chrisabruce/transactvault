@@ -186,6 +186,24 @@ pub async fn upload(
             .db
             .query("RELATE $d->for_item->$i")
             .bind(("d", doc.id.clone()))
+            .bind(("i", item_ref.clone()))
+            .await?;
+
+        // A fresh upload against a previously DENIED item un-denies it:
+        // the agent has corrected the issue, so the box flips back to
+        // pending review (color + status pill) and the prior reviewer
+        // attribution clears (otherwise the audit line would still say
+        // "Denied by Alice on May 3" on a pending row). The deny-reason
+        // comment from the popover stays in the thread as history.
+        // No-op for items that aren't in the denied state — the WHERE
+        // clause makes this safe for every upload path.
+        state
+            .db
+            .query(
+                "UPDATE $i SET approval_status = 'pending', \
+                 reviewed_at = NONE, reviewed_by = NONE \
+                 WHERE approval_status = 'denied'",
+            )
             .bind(("i", item_ref))
             .await?;
     }
