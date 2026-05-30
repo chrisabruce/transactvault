@@ -97,14 +97,14 @@
                                                         {% if row.item.is_approved() %}Approved{% else %}Approve{% endif %}
                                                     </button>
                                                 </form>
-                                                <details class="action-popover review-action">
-                                                    <summary class="btn small deny{% if row.item.is_denied() %} active{% endif %}">{% if row.item.is_denied() %}Denied{% else %}Deny{% endif %}</summary>
-                                                    <form method="post" action="/app/checklist/{{ row.item.url_key() }}/deny" class="inline-deny">
-                                                        <label class="visually-hidden" for="reason-{{ row.item.url_key() }}">Reason (optional)</label>
-                                                        <textarea id="reason-{{ row.item.url_key() }}" name="reason" rows="3" maxlength="4000" placeholder="Reason (optional) — saved as a comment so the agent sees why"></textarea>
-                                                        <button type="submit" class="btn small deny">Deny item</button>
-                                                    </form>
-                                                </details>
+                                                <form method="post"
+                                                      action="/app/checklist/{{ row.item.url_key() }}/deny"
+                                                      class="review-action deny-form"
+                                                      data-comment-action="/app/checklist/{{ row.item.url_key() }}/comments">
+                                                    <button class="btn small deny{% if row.item.is_denied() %} active{% endif %}" type="submit">
+                                                        {% if row.item.is_denied() %}Denied{% else %}Deny{% endif %}
+                                                    </button>
+                                                </form>
                                             {% else %}
                                                 <span class="status-pill status-{{ row.item.approval_status }}">
                                                     {% if row.item.is_approved() %}Approved{% else if row.item.is_denied() %}Denied{% else %}Pending review{% endif %}
@@ -305,6 +305,20 @@
         </div>
     </section>
 </main>
+
+{% if can_review %}
+<dialog id="deny-reason-dialog" class="modal-dialog" aria-label="Add a denial note">
+    <form id="deny-reason-form" class="modal-dialog-body">
+        <h3>Item denied — add a note?</h3>
+        <p class="meta">Optional. Anything you type here is posted as a comment on the item so the agent sees what to fix.</p>
+        <label class="visually-hidden" for="deny-reason-text">Reason</label>
+        <textarea id="deny-reason-text" name="body" rows="4" maxlength="4000" placeholder="What needs to change?"></textarea>
+        <div class="dialog-actions">
+            <button type="button" id="deny-reason-button" class="btn">No comment</button>
+        </div>
+    </form>
+</dialog>
+{% endif %}
 
 <dialog id="doc-preview" class="lightbox" aria-label="Document preview">
     <header class="lightbox-head">
@@ -533,4 +547,7 @@
     });
 })();
 </script>
+{% if can_review %}
+<script src="/static/js/deny-flow.js" defer></script>
+{% endif %}
 {% endblock %}
