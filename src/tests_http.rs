@@ -1413,3 +1413,65 @@ async fn create_transaction_requires_address_or_apn() {
         "APN-only should succeed, got {status}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Item-comment route regression — proves that standalone item comments
+// (posted via /app/checklist/{id}/comments — the same endpoint the deny
+// popover uses) are stored as comment rows that needs_attention picks up
+// at the DB layer. Closes the user-reported "only deny comments seem to
+// flag" suspicion.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn standalone_item_comment_endpoint_writes_a_flaggable_comment() {
+    // Persistence check, not behavior check — the per-item comment
+    // route writes the same comment row shape (target=item, author=
+    // submitter) that the deny popover writes. needs_attention's
+    // unit tests already prove that shape flags; this test pins the
+    // route's persisted output so a regression in the controller
+    // (e.g. accidentally targeting the transaction instead of the
+    // item) gets caught.
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    join(&app.state, &broker, &b, "broker").await;
+    let agent = seed_user(&app.state, "a@a").await;
+    join(&app.state, &agent, &b, "agent").await;
+    let tx = seed_tx(&app.state, &b, Some(&agent)).await;
+    let item = seed_item(&app.state, &tx, "pending").await;
+
+    // Agent posts via the STANDALONE comment endpoint — NOT via the
+    // deny popover. Same URL the deny flow targets, minus the deny
+    // wrapper.
+    let (status, _) = authed_post(
+        &app,
+        &agent,
+        &format!("/app/checklist/{}/comments", crate::db::record_key(&item)),
+        "body=please+review+this",
+    )
+    .await;
+    assert!(
+        status.is_redirection() || status.is_success(),
+        "POST comment should succeed, got {status}"
+    );
+
+    // Exactly one comment row exists, and it targets the ITEM (not
+    // the transaction). That's the shape needs_attention's
+    // unit-tested query picks up; equivalence with the deny flow is
+    // proved by both writing the same row.
+    let mut q = app
+        .state
+        .db
+        .query("SELECT target, author FROM comment")
+        .await
+        .expect("count");
+    #[derive(serde::Deserialize, surrealdb::types::SurrealValue)]
+    struct Row {
+        target: RecordId,
+        author: RecordId,
+    }
+    let rows: Vec<Row> = q.take(0).unwrap_or_default();
+    assert_eq!(rows.len(), 1, "expected exactly one comment row");
+    assert_eq!(rows[0].target, item, "comment must target the item");
+    assert_eq!(rows[0].author, agent, "author must be the poster");
+}

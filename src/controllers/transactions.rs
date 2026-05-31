@@ -1802,18 +1802,32 @@ async fn load_transaction_owner_name(
 }
 
 /// True/false per transaction (aligned with the input slice): does
-/// this transaction need the *viewer's* attention? The predicate is
-/// role-split (corrections set):
+/// this transaction need the *viewer's* attention?
 ///
-/// - **Agents** respond to reviewer feedback — flag if a checklist
-///   item was denied/rejected, OR a broker/compliance officer left a
-///   comment on the transaction (or one of its items).
-/// - **Brokers / Compliance Officers** review agent work — flag if an
-///   item has an uploaded document still awaiting review (pending with
-///   a file attached), OR an agent left a comment.
+/// **Single-court model.** Each item assigns the "ball" to at most one
+/// side; the viewer's flag for the parent tx is true iff any item on
+/// that tx has the ball on the viewer's side. Per-item rule:
 ///
-/// Closed transactions (Sold/Canceled/Withdrawn) always return `false`
-/// — nothing on a finished deal is actionable.
+/// | item state | latest item-comment | has upload | ball  |
+/// |------------|---------------------|------------|-------|
+/// | approved   | (any)               | (any)      | nobody |
+/// | denied     | (any)               | (any)      | agent |
+/// | pending    | from agent          | (any)      | reviewer |
+/// | pending    | from reviewer       | (any)      | agent |
+/// | pending    | (none)              | yes        | reviewer |
+/// | pending    | (none)              | no         | nobody |
+///
+/// Key consequences:
+/// - When a reviewer comments on a pending+upload item, the form
+///   signal yields to the comment — the ball moves to the agent, and
+///   the reviewer's flag clears for that item.
+/// - Once approved, no chatter can re-flag the item; an entire
+///   all-approved transaction never flags either side.
+/// - Transaction-level comments (`target = transaction`) never flag
+///   anyone — they're agent self-notes.
+/// - Closed tx statuses (Sold / Canceled / Withdrawn) still flag if
+///   any item has an open ball — finished deals can still surface
+///   on the attention list when something legitimately needs a look.
 async fn needs_attention_flags(
     state: &AppState,
     transactions: &[Transaction],
@@ -1821,6 +1835,15 @@ async fn needs_attention_flags(
     brokerage_id: &RecordId,
 ) -> Result<Vec<bool>, AppError> {
     needs_attention_flags_with(&state.db, transactions, role, brokerage_id).await
+}
+
+/// Which court holds the ball for one checklist item. Computed from
+/// (approval_status, has_upload, latest comment author). Returning
+/// `None` means the item is settled or idle — neither side flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Court {
+    Reviewer,
+    Agent,
 }
 
 /// DB-only variant exposed for unit testing — see the `mod tests`
@@ -1832,137 +1855,139 @@ async fn needs_attention_flags_with(
     role: Role,
     brokerage_id: &RecordId,
 ) -> Result<Vec<bool>, AppError> {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
 
     if transactions.is_empty() {
         return Ok(Vec::new());
     }
 
-    // Reviewers (broker / coordinator) watch for agent activity;
-    // agents watch for reviewer activity. This single bool drives both
-    // the form predicate and which comment authors count.
-    let reviewer_view = role.sees_all_transactions();
-    let author_roles: Vec<String> = if reviewer_view {
-        vec!["agent".to_string()]
+    let viewer = if role.sees_all_transactions() {
+        Court::Reviewer
     } else {
-        vec!["broker".to_string(), "coordinator".to_string()]
+        Court::Agent
     };
-
-    // Every visible tx is in scope — even Sold/Canceled/Withdrawn rows
-    // can pick up a fresh comment or denial after the deal closed, and
-    // the user explicitly wants that to surface.
     let tx_ids: Vec<RecordId> = transactions.iter().map(|t| t.id.clone()).collect();
 
-    // Comment-author roster — one query for the whole brokerage. This
-    // is the "other side" — the users whose comments should flag the
-    // current viewer.
-    let mut au = db
-        .query("SELECT VALUE in FROM works_at WHERE out = $b AND role IN $roles")
+    // ---- 1. Brokerage roster -------------------------------------
+    // (user_id, role-on-brokerage) — used to classify comment
+    // authors into reviewer vs agent sides. One row per member.
+    #[derive(Debug, Deserialize, SurrealValue)]
+    struct MemberRow {
+        user_id: RecordId,
+        role: String,
+    }
+    let mut mq = db
+        .query("SELECT in AS user_id, role FROM works_at WHERE out = $b")
         .bind(("b", brokerage_id.clone()))
-        .bind(("roles", author_roles))
         .await?;
-    let other_side_authors: Vec<RecordId> = au.take(0).unwrap_or_default();
+    let members: Vec<MemberRow> = mq.take(0).unwrap_or_default();
+    let user_court: HashMap<RecordId, Court> = members
+        .into_iter()
+        .map(|m| {
+            let court = match m.role.as_str() {
+                "broker" | "coordinator" => Court::Reviewer,
+                _ => Court::Agent,
+            };
+            (m.user_id, court)
+        })
+        .collect();
 
-    // Item → transaction map. One query gives us every item under every
-    // visible tx; we feed the item list straight into the latest-comment
-    // query and use the reverse map to attribute item-level comments
-    // back to their parent tx. (`in` is renamed via SQL `AS` because
-    // SurrealValue derive doesn't honour serde rename attributes.)
-    let mut im = db
-        .query("SELECT in AS tx, out AS item FROM has_item WHERE in IN $txs")
-        .bind(("txs", tx_ids.clone()))
-        .await?;
+    // ---- 2. Items in scope --------------------------------------
+    // For every checklist_item under any visible tx: id, parent tx,
+    // approval_status, and whether at least one document is attached.
+    // Two queries: first the has_item edges (because SurrealDB won't
+    // dereference `out.<-for_item` from an edge projection), then a
+    // batched lookup on the items themselves.
     #[derive(Debug, Deserialize, SurrealValue)]
     struct ItemEdge {
         tx: RecordId,
         item: RecordId,
     }
-    let edges: Vec<ItemEdge> = im.take(0)?;
-    let mut item_to_tx: HashMap<RecordId, RecordId> = HashMap::with_capacity(edges.len());
-    let mut all_items: Vec<RecordId> = Vec::with_capacity(edges.len());
-    for e in edges {
-        all_items.push(e.item.clone());
-        item_to_tx.insert(e.item, e.tx);
+    let mut eq = db
+        .query("SELECT in AS tx, out AS item FROM has_item WHERE in IN $txs")
+        .bind(("txs", tx_ids.clone()))
+        .await?;
+    let edges: Vec<ItemEdge> = eq.take(0)?;
+    if edges.is_empty() {
+        return Ok(vec![false; transactions.len()]);
+    }
+    let item_ids: Vec<RecordId> = edges.iter().map(|e| e.item.clone()).collect();
+    let item_to_tx: HashMap<RecordId, RecordId> =
+        edges.into_iter().map(|e| (e.item, e.tx)).collect();
+
+    #[derive(Debug, Deserialize, SurrealValue)]
+    struct ItemRow {
+        id: RecordId,
+        approval_status: String,
+        has_upload: bool,
+    }
+    let mut iq = db
+        .query(
+            "SELECT id, approval_status, \
+                    array::len(<-for_item<-document) > 0 AS has_upload \
+             FROM checklist_item WHERE id IN $ids",
+        )
+        .bind(("ids", item_ids.clone()))
+        .await?;
+    let items: Vec<ItemRow> = iq.take(0).unwrap_or_default();
+
+    // ---- 3. Latest comment per item (item-targeted only) --------
+    // ORDER BY created_at DESC + dedupe by target = first row per
+    // item wins. SurrealValue requires every ORDER BY column to
+    // appear in the projection; `created_at` is selected but unused.
+    #[derive(Debug, Deserialize, SurrealValue)]
+    struct CommentRow {
+        target: RecordId,
+        author: RecordId,
+        #[allow(dead_code)]
+        created_at: chrono::DateTime<chrono::Utc>,
+    }
+    let mut cq = db
+        .query(
+            "SELECT target, author, created_at FROM comment \
+             WHERE target IN $items \
+             ORDER BY created_at DESC",
+        )
+        .bind(("items", item_ids.clone()))
+        .await?;
+    let comments: Vec<CommentRow> = cq.take(0).unwrap_or_default();
+    let mut latest_author: HashMap<RecordId, RecordId> = HashMap::new();
+    for c in comments {
+        latest_author.entry(c.target).or_insert(c.author);
     }
 
-    // Form signal — per-tx queries fanned out via `try_join_all` so
-    // they run concurrently (wall-clock = slowest single query, not
-    // sum). A single batched query against `checklist_item` would be
-    // nicer but the `<-for_item<-document` graph traversal only parses
-    // at the top of an expression, and `$item.<-…` isn't supported.
-    let form_sql_reviewer = "SELECT count() FROM $t->has_item->checklist_item \
-                             WHERE approval_status = 'pending' \
-                               AND array::len(<-for_item<-document) > 0 GROUP ALL";
-    let form_sql_agent = "SELECT count() FROM $t->has_item->checklist_item \
-                          WHERE approval_status = 'denied' GROUP ALL";
-    let form_sql = if reviewer_view {
-        form_sql_reviewer
-    } else {
-        form_sql_agent
-    };
-
-    let form_futures = tx_ids.iter().map(|tx_id| {
-        let tx_id = tx_id.clone();
-        async move {
-            let mut q = db.query(form_sql).bind(("t", tx_id.clone())).await?;
-            let row: Option<CountRow> = q.take(0)?;
-            Ok::<_, AppError>((tx_id, row.map(|c| c.count > 0).unwrap_or(false)))
-        }
-    });
-    let form_results = futures::future::try_join_all(form_futures).await?;
-    let mut flagged: HashSet<RecordId> = form_results
-        .into_iter()
-        .filter_map(|(t, hit)| hit.then_some(t))
-        .collect();
-
-    // Comment signal — only ITEM-LEVEL comments count, and only when
-    // the latest comment on that item is from the other side. This
-    // models "the ball is in your court":
-    //   * Agent posts on an item → reviewers flag (their turn).
-    //   * Reviewer replies on the same item → agent flags, reviewers
-    //     stop flagging (ball moved back).
-    //   * Transaction-target comments are self-notes — they never flag
-    //     anyone, on either side.
-    if !other_side_authors.is_empty() && !all_items.is_empty() {
-        // ORDER BY created_at DESC; the first hit per `target` is the
-        // latest comment on that item. SurrealDB requires every field
-        // referenced in ORDER BY to appear in the SELECT projection,
-        // so `created_at` is pulled even though we never inspect its
-        // value in Rust.
-        let mut cr = db
-            .query(
-                "SELECT target, author, created_at FROM comment \
-                 WHERE target IN $items \
-                 ORDER BY created_at DESC",
-            )
-            .bind(("items", all_items.clone()))
-            .await?;
-        #[derive(Debug, Deserialize, SurrealValue)]
-        struct CommentRow {
-            target: RecordId,
-            author: RecordId,
-            #[allow(dead_code)]
-            created_at: chrono::DateTime<chrono::Utc>,
-        }
-        let rows: Vec<CommentRow> = cr.take(0).unwrap_or_default();
-        let other_side: HashSet<&RecordId> = other_side_authors.iter().collect();
-        let mut seen_items: HashSet<RecordId> = HashSet::new();
-        for row in &rows {
-            // Skip every row that isn't the newest one for its item.
-            if !seen_items.insert(row.target.clone()) {
-                continue;
-            }
-            if other_side.contains(&row.author)
-                && let Some(tx) = item_to_tx.get(&row.target)
-            {
-                flagged.insert(tx.clone());
-            }
+    // ---- 4. Compute per-item ball, aggregate per tx --------------
+    let mut flagged_tx: std::collections::HashSet<RecordId> = std::collections::HashSet::new();
+    for item in &items {
+        let ball: Option<Court> = match item.approval_status.as_str() {
+            "approved" => None,
+            "denied" => Some(Court::Agent),
+            "pending" => match latest_author.get(&item.id) {
+                Some(author) => {
+                    // Ball goes to the OPPOSITE side of whoever spoke
+                    // last. Unknown authors (e.g. a removed member's
+                    // residual comment) fall through to the no-comment
+                    // branch via `flatten`.
+                    user_court.get(author).map(|c| match c {
+                        Court::Reviewer => Court::Agent,
+                        Court::Agent => Court::Reviewer,
+                    })
+                }
+                None if item.has_upload => Some(Court::Reviewer),
+                None => None,
+            },
+            _ => None,
+        };
+        if ball == Some(viewer)
+            && let Some(tx) = item_to_tx.get(&item.id)
+        {
+            flagged_tx.insert(tx.clone());
         }
     }
 
     Ok(transactions
         .iter()
-        .map(|t| flagged.contains(&t.id))
+        .map(|t| flagged_tx.contains(&t.id))
         .collect())
 }
 
@@ -2754,5 +2779,287 @@ mod tests {
             .await
             .expect("flags");
         assert_eq!(flags, vec![false]);
+    }
+
+    // ---- approved-item-skip rule -------------------------------------
+
+    /// Approving an item must clear its comment-driven attention signal
+    /// for BOTH sides. Setup: pending item with an unanswered comment
+    /// from the agent → reviewer flags. Flip the item to approved →
+    /// neither side flags.
+    #[tokio::test]
+    async fn approved_item_clears_attention_for_both_sides() {
+        let db = make_db().await;
+        let b = insert_brokerage(&db).await;
+        let agent = insert_user(&db, "agent@x.com").await;
+        put_user_in_brokerage(&db, &agent, &b, "agent").await;
+        let tx = insert_tx(&db, &b, "active").await;
+        let item = insert_item(&db, &tx.id, "pending").await;
+        attach_document(&db, &item).await;
+        add_comment(&db, &item, &agent).await;
+
+        // Baseline: reviewer flags because pending+upload AND because
+        // an agent comment is the latest on an unsettled item.
+        let reviewer_pre =
+            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Broker, &b)
+                .await
+                .expect("flags");
+        assert_eq!(reviewer_pre, vec![true]);
+
+        // Approve the item. (Upload precondition satisfied above.)
+        db.query("UPDATE $i SET approval_status = 'approved'")
+            .bind(("i", item.clone()))
+            .await
+            .expect("approve");
+
+        // Reviewer no longer flags — form signal off + comment-skip rule.
+        let reviewer_post =
+            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Broker, &b)
+                .await
+                .expect("flags");
+        assert_eq!(reviewer_post, vec![false]);
+
+        // Agent also doesn't flag — the comment was their own to start
+        // with, and the approval kills any residual signal.
+        let agent_post = needs_attention_flags_with(&db, &[tx], Role::Agent, &b)
+            .await
+            .expect("flags");
+        assert_eq!(agent_post, vec![false]);
+    }
+
+    /// Reviewer-authored item comment on an APPROVED item must NOT
+    /// flag the agent. The handoff rule normally fires here (latest
+    /// comment is from the other side) but approval supersedes.
+    #[tokio::test]
+    async fn approved_item_ignores_other_side_comment_for_agent_view() {
+        let db = make_db().await;
+        let b = insert_brokerage(&db).await;
+        let broker = insert_user(&db, "broker@x.com").await;
+        put_user_in_brokerage(&db, &broker, &b, "broker").await;
+        let tx = insert_tx(&db, &b, "active").await;
+        let item = insert_item(&db, &tx.id, "approved").await;
+        // Reviewer comments AFTER approval — e.g., a "looks good" note.
+        add_comment(&db, &item, &broker).await;
+
+        let agent_flags =
+            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent, &b)
+                .await
+                .expect("flags");
+        assert_eq!(agent_flags, vec![false]);
+        let reviewer_flags = needs_attention_flags_with(&db, &[tx], Role::Broker, &b)
+            .await
+            .expect("flags");
+        assert_eq!(reviewer_flags, vec![false]);
+    }
+
+    /// Every item approved → transaction never flags, regardless of
+    /// how many comments exist on items or on the transaction itself
+    /// or who authored them. This is the "settled deal goes quiet"
+    /// guarantee.
+    #[tokio::test]
+    async fn all_approved_never_flags_regardless_of_comments() {
+        let db = make_db().await;
+        let b = insert_brokerage(&db).await;
+        let agent = insert_user(&db, "agent@x.com").await;
+        put_user_in_brokerage(&db, &agent, &b, "agent").await;
+        let broker = insert_user(&db, "broker@x.com").await;
+        put_user_in_brokerage(&db, &broker, &b, "broker").await;
+        let tx = insert_tx(&db, &b, "active").await;
+        let item_a = insert_item(&db, &tx.id, "approved").await;
+        let item_b = insert_item(&db, &tx.id, "approved").await;
+        // Pile on comments from both sides on both items AND on the
+        // transaction itself.
+        add_comment(&db, &item_a, &agent).await;
+        add_comment(&db, &item_a, &broker).await;
+        add_comment(&db, &item_b, &agent).await;
+        add_comment(&db, &item_b, &broker).await;
+        add_comment(&db, &tx.id, &agent).await;
+        add_comment(&db, &tx.id, &broker).await;
+
+        let agent_flags =
+            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent, &b)
+                .await
+                .expect("flags");
+        assert_eq!(agent_flags, vec![false]);
+        let reviewer_flags = needs_attention_flags_with(&db, &[tx], Role::Broker, &b)
+            .await
+            .expect("flags");
+        assert_eq!(reviewer_flags, vec![false]);
+    }
+
+    /// Mixed state: one approved item, one still-pending-with-issue.
+    /// The transaction must keep flagging because of the pending one.
+    /// After approving the second item too, the flag clears.
+    #[tokio::test]
+    async fn mixed_approved_and_pending_still_flags_on_pending_ones() {
+        let db = make_db().await;
+        let b = insert_brokerage(&db).await;
+        let tx = insert_tx(&db, &b, "active").await;
+        let approved_item = insert_item(&db, &tx.id, "approved").await;
+        // The denied item flags the AGENT under the form-signal rule.
+        let denied_item = insert_item(&db, &tx.id, "denied").await;
+        attach_document(&db, &denied_item).await;
+        // Add a stale "looks good" reviewer comment on the approved
+        // item — must not contribute either way.
+        let broker = insert_user(&db, "broker@x.com").await;
+        put_user_in_brokerage(&db, &broker, &b, "broker").await;
+        add_comment(&db, &approved_item, &broker).await;
+
+        // Agent sees the flag because of the denied item.
+        let agent_flags =
+            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent, &b)
+                .await
+                .expect("flags");
+        assert_eq!(agent_flags, vec![true]);
+
+        // Promote the denied item to approved → no more flags for
+        // either side.
+        db.query("UPDATE $i SET approval_status = 'approved'")
+            .bind(("i", denied_item))
+            .await
+            .expect("approve denied");
+        let agent_flags =
+            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent, &b)
+                .await
+                .expect("flags");
+        assert_eq!(agent_flags, vec![false]);
+        let reviewer_flags = needs_attention_flags_with(&db, &[tx], Role::Broker, &b)
+            .await
+            .expect("flags");
+        assert_eq!(reviewer_flags, vec![false]);
+    }
+
+    // ---- single-court override ---------------------------------------
+
+    /// The "ball moves" case: pending item with an upload would
+    /// normally flag the reviewer via the form signal, BUT once the
+    /// reviewer leaves a comment ("looks wrong, please re-upload")
+    /// the ball belongs in the agent's court. Reviewer flag clears;
+    /// agent flag fires. At most one side ever flags an item.
+    #[tokio::test]
+    async fn reviewer_comment_on_pending_upload_moves_ball_to_agent() {
+        let db = make_db().await;
+        let b = insert_brokerage(&db).await;
+        let broker = insert_user(&db, "broker@x.com").await;
+        put_user_in_brokerage(&db, &broker, &b, "broker").await;
+        let tx = insert_tx(&db, &b, "active").await;
+        let item = insert_item(&db, &tx.id, "pending").await;
+        attach_document(&db, &item).await;
+
+        // Before the comment: reviewer flagged (form signal alone).
+        let reviewer_pre =
+            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Broker, &b)
+                .await
+                .expect("flags");
+        assert_eq!(reviewer_pre, vec![true]);
+        let agent_pre = needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent, &b)
+            .await
+            .expect("flags");
+        assert_eq!(agent_pre, vec![false]);
+
+        // Reviewer comments on the item.
+        add_comment(&db, &item, &broker).await;
+
+        // After: ball has moved. Reviewer no longer flagged; agent is.
+        let reviewer_post =
+            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Broker, &b)
+                .await
+                .expect("flags");
+        assert_eq!(reviewer_post, vec![false]);
+        let agent_post =
+            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent, &b)
+                .await
+                .expect("flags");
+        assert_eq!(agent_post, vec![true]);
+    }
+
+    /// Agent self-comment on a pending+upload item shouldn't move the
+    /// ball — it's still in the reviewer's court. Latest comment is
+    /// from the agent → opposite-of-agent = reviewer.
+    #[tokio::test]
+    async fn agent_self_comment_on_pending_upload_keeps_ball_with_reviewer() {
+        let db = make_db().await;
+        let b = insert_brokerage(&db).await;
+        let agent = insert_user(&db, "agent@x.com").await;
+        put_user_in_brokerage(&db, &agent, &b, "agent").await;
+        let tx = insert_tx(&db, &b, "active").await;
+        let item = insert_item(&db, &tx.id, "pending").await;
+        attach_document(&db, &item).await;
+        add_comment(&db, &item, &agent).await;
+
+        let reviewer = needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Broker, &b)
+            .await
+            .expect("flags");
+        assert_eq!(reviewer, vec![true]);
+        let agent_flags =
+            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent, &b)
+                .await
+                .expect("flags");
+        assert_eq!(agent_flags, vec![false]);
+    }
+
+    /// At no point does a single item flag both sides. This is the
+    /// invariant the override rule guarantees — sweep every plausible
+    /// pending-item shape and confirm the two role views never both
+    /// return true on the same row.
+    #[tokio::test]
+    async fn no_item_ever_flags_both_sides_simultaneously() {
+        let db = make_db().await;
+        let b = insert_brokerage(&db).await;
+        let agent = insert_user(&db, "agent@x.com").await;
+        put_user_in_brokerage(&db, &agent, &b, "agent").await;
+        let broker = insert_user(&db, "broker@x.com").await;
+        put_user_in_brokerage(&db, &broker, &b, "broker").await;
+
+        // Four pending items in four different comment + upload
+        // states, each on its own tx so the assertion is per-row.
+        let tx1 = insert_tx(&db, &b, "active").await;
+        let i1 = insert_item(&db, &tx1.id, "pending").await;
+        attach_document(&db, &i1).await; // pending + upload, no comment
+
+        let tx2 = insert_tx(&db, &b, "active").await;
+        let i2 = insert_item(&db, &tx2.id, "pending").await;
+        attach_document(&db, &i2).await;
+        add_comment(&db, &i2, &agent).await; // + agent comment
+
+        let tx3 = insert_tx(&db, &b, "active").await;
+        let i3 = insert_item(&db, &tx3.id, "pending").await;
+        attach_document(&db, &i3).await;
+        add_comment(&db, &i3, &broker).await; // + reviewer comment
+
+        let tx4 = insert_tx(&db, &b, "active").await;
+        let i4 = insert_item(&db, &tx4.id, "pending").await;
+        add_comment(&db, &i4, &broker).await; // pending no-upload + reviewer
+
+        let txs = vec![tx1, tx2, tx3, tx4];
+        let reviewer = needs_attention_flags_with(&db, &txs, Role::Broker, &b)
+            .await
+            .expect("flags");
+        let agent_flags = needs_attention_flags_with(&db, &txs, Role::Agent, &b)
+            .await
+            .expect("flags");
+        for (i, (r, a)) in reviewer.iter().zip(agent_flags.iter()).enumerate() {
+            assert!(!(*r && *a), "tx index {i}: both sides flagged");
+        }
+    }
+
+    /// Zero-items transactions never flag (no items = nothing
+    /// actionable). Belt-and-braces — covered by the form signal
+    /// returning zero, but worth pinning.
+    #[tokio::test]
+    async fn zero_items_transaction_never_flags() {
+        let db = make_db().await;
+        let b = insert_brokerage(&db).await;
+        let tx = insert_tx(&db, &b, "active").await;
+        // No items inserted.
+        let agent_flags =
+            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent, &b)
+                .await
+                .expect("flags");
+        assert_eq!(agent_flags, vec![false]);
+        let reviewer_flags = needs_attention_flags_with(&db, &[tx], Role::Broker, &b)
+            .await
+            .expect("flags");
+        assert_eq!(reviewer_flags, vec![false]);
     }
 }
