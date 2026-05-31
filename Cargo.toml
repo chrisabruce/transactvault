@@ -3,7 +3,11 @@ name = "transactvault"
 version = "0.1.0"
 edition = "2024"
 description = "TransactVault — modern real estate transaction management for California brokerages."
-license = "MIT"
+# Proprietary, all rights reserved — source is public on GitHub for
+# transparency and security review, NOT under an OSI-approved license.
+# See LICENSE for full terms and commercial-licensing contact.
+license-file = "LICENSE"
+publish = false
 
 [dependencies]
 axum = { version = "0.8", features = ["macros", "multipart"] }

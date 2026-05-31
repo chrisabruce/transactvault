@@ -478,10 +478,11 @@ impl ChecklistGroup {
         };
         // Agents see every group expanded — their working view is "what
         // still needs my attention" and folding hides items behind a
-        // click. For everyone else only the contract groups open by
-        // default; locality-labeled contract groups carry the same name
-        // substring so they behave the same.
-        let open_by_default = role == Role::Agent || name.contains("Contract");
+        // click. Brokers and coordinators start with every group
+        // collapsed; the template's `has_attention()` branch still
+        // pops open any group that has a flagged item, so a denial or
+        // a pending-with-upload never hides behind a fold for them.
+        let open_by_default = role == Role::Agent;
         Self {
             name,
             order,

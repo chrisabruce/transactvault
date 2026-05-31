@@ -54,7 +54,10 @@
                 </aside>
             {% endif %}
 
-            <section class="panel" id="compliance-panel" aria-labelledby="compliance-heading">
+            <section class="panel"
+                     id="compliance-panel"
+                     aria-labelledby="compliance-heading"
+                     data-tx-key="{{ transaction_key }}">
                 <h2 id="compliance-heading">Compliance Checklist</h2>
                 <section class="compliance-summary" aria-label="Overall progress">
                     <p class="score">{{ compliance.required_completed }}/{{ compliance.required_total }} required</p>
@@ -67,7 +70,9 @@
                        groups (the main file contract) start open;
                        everything else starts folded so the page isn't a
                        wall of forms. Native <details> — no JS needed. #}
-                    <details class="checklist-group{% if group.complete() %} complete{% endif %}"{% if group.open_by_default || group.has_attention(can_review) %} open{% endif %}>
+                    <details class="checklist-group{% if group.complete() %} complete{% endif %}"
+                             data-group-key="{{ group.name }}"
+                             {% if group.open_by_default || group.has_attention(can_review) %}open{% endif %}>
                         <summary class="checklist-group-header">
                             <h3>{{ group.name }}</h3>
                             <p class="meta">
@@ -552,4 +557,5 @@
 {% if can_review %}
 <script src="/static/js/deny-flow.js" defer></script>
 {% endif %}
+<script src="/static/js/checklist-state.js" defer></script>
 {% endblock %}

@@ -1848,40 +1848,29 @@ async fn needs_attention_flags_with(
         vec!["broker".to_string(), "coordinator".to_string()]
     };
 
-    // Closed transactions never flag — strip them up front so every
-    // batched query that follows only carries live ids.
-    let active_ids: Vec<RecordId> = transactions
-        .iter()
-        .filter(|t| {
-            !matches!(
-                t.status_enum(),
-                TransactionStatus::Sold
-                    | TransactionStatus::Canceled
-                    | TransactionStatus::Withdrawn
-            )
-        })
-        .map(|t| t.id.clone())
-        .collect();
-    if active_ids.is_empty() {
-        return Ok(vec![false; transactions.len()]);
-    }
+    // Every visible tx is in scope — even Sold/Canceled/Withdrawn rows
+    // can pick up a fresh comment or denial after the deal closed, and
+    // the user explicitly wants that to surface.
+    let tx_ids: Vec<RecordId> = transactions.iter().map(|t| t.id.clone()).collect();
 
-    // Comment-author roster — one query for the whole brokerage.
+    // Comment-author roster — one query for the whole brokerage. This
+    // is the "other side" — the users whose comments should flag the
+    // current viewer.
     let mut au = db
         .query("SELECT VALUE in FROM works_at WHERE out = $b AND role IN $roles")
         .bind(("b", brokerage_id.clone()))
         .bind(("roles", author_roles))
         .await?;
-    let comment_authors: Vec<RecordId> = au.take(0).unwrap_or_default();
+    let other_side_authors: Vec<RecordId> = au.take(0).unwrap_or_default();
 
-    // Item → transaction map. One query produces both the comment-target
-    // universe (every item in every active tx) and the reverse lookup
-    // we need to attribute item-targeted comments back to their tx.
-    // (`in` is renamed via SQL `AS` because SurrealValue derive doesn't
-    // honour serde rename attributes.)
+    // Item → transaction map. One query gives us every item under every
+    // visible tx; we feed the item list straight into the latest-comment
+    // query and use the reverse map to attribute item-level comments
+    // back to their parent tx. (`in` is renamed via SQL `AS` because
+    // SurrealValue derive doesn't honour serde rename attributes.)
     let mut im = db
         .query("SELECT in AS tx, out AS item FROM has_item WHERE in IN $txs")
-        .bind(("txs", active_ids.clone()))
+        .bind(("txs", tx_ids.clone()))
         .await?;
     #[derive(Debug, Deserialize, SurrealValue)]
     struct ItemEdge {
@@ -1912,7 +1901,7 @@ async fn needs_attention_flags_with(
         form_sql_agent
     };
 
-    let form_futures = active_ids.iter().map(|tx_id| {
+    let form_futures = tx_ids.iter().map(|tx_id| {
         let tx_id = tx_id.clone();
         async move {
             let mut q = db.query(form_sql).bind(("t", tx_id.clone())).await?;
@@ -1926,22 +1915,46 @@ async fn needs_attention_flags_with(
         .filter_map(|(t, hit)| hit.then_some(t))
         .collect();
 
-    // Comment signal — pull every comment authored by a member of the
-    // other role in this brokerage, then filter the targets in Rust
-    // against our known tx + item sets. Fetching all of them in one
-    // query (instead of one per tx) keeps the DB load proportional to
-    // the comment volume in the brokerage, not the visible-tx count.
-    if !comment_authors.is_empty() {
+    // Comment signal — only ITEM-LEVEL comments count, and only when
+    // the latest comment on that item is from the other side. This
+    // models "the ball is in your court":
+    //   * Agent posts on an item → reviewers flag (their turn).
+    //   * Reviewer replies on the same item → agent flags, reviewers
+    //     stop flagging (ball moved back).
+    //   * Transaction-target comments are self-notes — they never flag
+    //     anyone, on either side.
+    if !other_side_authors.is_empty() && !all_items.is_empty() {
+        // ORDER BY created_at DESC; the first hit per `target` is the
+        // latest comment on that item. SurrealDB requires every field
+        // referenced in ORDER BY to appear in the SELECT projection,
+        // so `created_at` is pulled even though we never inspect its
+        // value in Rust.
         let mut cr = db
-            .query("SELECT VALUE target FROM comment WHERE author IN $authors")
-            .bind(("authors", comment_authors))
+            .query(
+                "SELECT target, author, created_at FROM comment \
+                 WHERE target IN $items \
+                 ORDER BY created_at DESC",
+            )
+            .bind(("items", all_items.clone()))
             .await?;
-        let hits: Vec<RecordId> = cr.take(0).unwrap_or_default();
-        let tx_set: HashSet<&RecordId> = active_ids.iter().collect();
-        for t in hits {
-            if tx_set.contains(&t) {
-                flagged.insert(t);
-            } else if let Some(tx) = item_to_tx.get(&t) {
+        #[derive(Debug, Deserialize, SurrealValue)]
+        struct CommentRow {
+            target: RecordId,
+            author: RecordId,
+            #[allow(dead_code)]
+            created_at: chrono::DateTime<chrono::Utc>,
+        }
+        let rows: Vec<CommentRow> = cr.take(0).unwrap_or_default();
+        let other_side: HashSet<&RecordId> = other_side_authors.iter().collect();
+        let mut seen_items: HashSet<RecordId> = HashSet::new();
+        for row in &rows {
+            // Skip every row that isn't the newest one for its item.
+            if !seen_items.insert(row.target.clone()) {
+                continue;
+            }
+            if other_side.contains(&row.author)
+                && let Some(tx) = item_to_tx.get(&row.target)
+            {
                 flagged.insert(tx.clone());
             }
         }
@@ -2526,17 +2539,19 @@ mod tests {
         assert!(flags.is_empty());
     }
 
-    // ---- closed statuses never flag ----
+    // ---- closed statuses CAN still flag ----
 
     #[tokio::test]
-    async fn closed_statuses_never_flag() {
+    async fn closed_statuses_flag_on_new_activity() {
+        // Even after a deal closes, late activity (a denial that the
+        // agent still needs to fix, a comment from the reviewer)
+        // should bubble up — the "ball in your court" rule isn't
+        // gated on lifecycle status.
         let db = make_db().await;
         let b = insert_brokerage(&db).await;
         let sold = insert_tx(&db, &b, "sold").await;
         let canceled = insert_tx(&db, &b, "canceled").await;
         let withdrawn = insert_tx(&db, &b, "withdrawn").await;
-        // Throw a denied item on each so the predicate WOULD fire if
-        // the status check weren't applied.
         for tx in [&sold, &canceled, &withdrawn] {
             insert_item(&db, &tx.id, "denied").await;
         }
@@ -2548,7 +2563,7 @@ mod tests {
         )
         .await
         .expect("flags");
-        assert_eq!(flags, vec![false, false, false]);
+        assert_eq!(flags, vec![true, true, true]);
     }
 
     // ---- agent view ----
@@ -2566,13 +2581,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_view_flags_on_reviewer_comment() {
+    async fn agent_view_flags_on_reviewer_item_comment() {
+        // Reviewer drops a comment on an item — that's a "ball in
+        // your court" handoff for the agent.
         let db = make_db().await;
         let b = insert_brokerage(&db).await;
         let tx = insert_tx(&db, &b, "active").await;
+        let item = insert_item(&db, &tx.id, "pending").await;
         let broker = insert_user(&db, "broker@x.com").await;
         put_user_in_brokerage(&db, &broker, &b, "broker").await;
-        add_comment(&db, &tx.id, &broker).await;
+        add_comment(&db, &item, &broker).await;
         let flags = needs_attention_flags_with(&db, &[tx], Role::Agent, &b)
             .await
             .expect("flags");
@@ -2585,13 +2603,103 @@ mod tests {
         let db = make_db().await;
         let b = insert_brokerage(&db).await;
         let tx = insert_tx(&db, &b, "active").await;
+        let item = insert_item(&db, &tx.id, "pending").await;
         let agent = insert_user(&db, "agent@x.com").await;
         put_user_in_brokerage(&db, &agent, &b, "agent").await;
-        add_comment(&db, &tx.id, &agent).await;
+        add_comment(&db, &item, &agent).await;
         let flags = needs_attention_flags_with(&db, &[tx], Role::Agent, &b)
             .await
             .expect("flags");
         assert_eq!(flags, vec![false]);
+    }
+
+    #[tokio::test]
+    async fn transaction_target_comments_never_flag() {
+        // Comments on a transaction itself are "self-notes" — they
+        // don't bubble up to the other side's needs-attention list,
+        // even when the author is the opposite role.
+        let db = make_db().await;
+        let b = insert_brokerage(&db).await;
+        let tx = insert_tx(&db, &b, "active").await;
+        let broker = insert_user(&db, "broker@x.com").await;
+        put_user_in_brokerage(&db, &broker, &b, "broker").await;
+        let agent = insert_user(&db, "agent@x.com").await;
+        put_user_in_brokerage(&db, &agent, &b, "agent").await;
+        // Reviewer leaves a note on the transaction itself.
+        add_comment(&db, &tx.id, &broker).await;
+        // Neither side should be flagged by a tx-target comment.
+        let agent_flags =
+            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent, &b)
+                .await
+                .expect("flags");
+        let reviewer_flags = needs_attention_flags_with(&db, &[tx], Role::Broker, &b)
+            .await
+            .expect("flags");
+        assert_eq!(agent_flags, vec![false]);
+        assert_eq!(reviewer_flags, vec![false]);
+    }
+
+    #[tokio::test]
+    async fn latest_comment_rule_handoff() {
+        // The "ball in your court" rule: only the LATEST comment on an
+        // item determines who flags.
+        //   1. Agent comments → reviewer flags.
+        //   2. Reviewer comments back → agent flags, reviewer clear.
+        let db = make_db().await;
+        let b = insert_brokerage(&db).await;
+        let tx = insert_tx(&db, &b, "active").await;
+        let item = insert_item(&db, &tx.id, "pending").await;
+        let agent = insert_user(&db, "agent@x.com").await;
+        put_user_in_brokerage(&db, &agent, &b, "agent").await;
+        let broker = insert_user(&db, "broker@x.com").await;
+        put_user_in_brokerage(&db, &broker, &b, "broker").await;
+
+        // Step 1: agent posts first — reviewer should flag.
+        add_comment(&db, &item, &agent).await;
+        let reviewer_flags =
+            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Broker, &b)
+                .await
+                .expect("flags");
+        assert_eq!(
+            reviewer_flags,
+            vec![true],
+            "reviewer should flag after agent posts"
+        );
+        let agent_flags =
+            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent, &b)
+                .await
+                .expect("flags");
+        assert_eq!(
+            agent_flags,
+            vec![false],
+            "agent should not flag on own comment"
+        );
+
+        // SurrealDB's `time::now()` resolves at insert time; insert a
+        // small delay so the reviewer's comment sorts strictly later
+        // than the agent's. (SurrealKV's mem engine has microsecond
+        // resolution; a 10ms sleep is generous.)
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        // Step 2: reviewer replies — handoff completes.
+        add_comment(&db, &item, &broker).await;
+        let reviewer_flags =
+            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Broker, &b)
+                .await
+                .expect("flags");
+        assert_eq!(
+            reviewer_flags,
+            vec![false],
+            "reviewer should clear after replying"
+        );
+        let agent_flags = needs_attention_flags_with(&db, &[tx], Role::Agent, &b)
+            .await
+            .expect("flags");
+        assert_eq!(
+            agent_flags,
+            vec![true],
+            "agent should flag after reviewer replies"
+        );
     }
 
     // ---- reviewer view ----

@@ -165,7 +165,13 @@ DEFINE FIELD OVERWRITE updated_at ON brokerage TYPE datetime DEFAULT time::now()
 -- User
 -- ----------------------------------------------------------------------------
 DEFINE TABLE OVERWRITE user SCHEMAFULL;
-DEFINE FIELD OVERWRITE email         ON user TYPE string ASSERT string::is_email($value);
+-- Lowercased + trimmed at the schema level so equality lookups
+-- (login, "is this user already registered?", invite-recipient match)
+-- don't have to remember to normalize. The application layer also
+-- lowercases for clarity; this is defense in depth.
+DEFINE FIELD OVERWRITE email         ON user TYPE string
+    VALUE string::lowercase(string::trim($value))
+    ASSERT string::is_email($value);
 DEFINE FIELD OVERWRITE name          ON user TYPE string ASSERT string::len($value) >= 1;
 DEFINE FIELD OVERWRITE password_hash ON user TYPE string;
 -- Object-storage key for the user's avatar PNG. Served from
@@ -198,7 +204,12 @@ DEFINE FIELD OVERWRITE joined_at ON works_at TYPE datetime DEFAULT time::now();
 -- Invitation
 -- ----------------------------------------------------------------------------
 DEFINE TABLE OVERWRITE invitation SCHEMAFULL;
-DEFINE FIELD OVERWRITE email      ON invitation TYPE string ASSERT string::is_email($value);
+-- Same normalization rule as `user.email` — schema-enforced so a
+-- broker pasting `Alice@Example.com` and `alice@example.com` produces
+-- one invitation row, not two.
+DEFINE FIELD OVERWRITE email      ON invitation TYPE string
+    VALUE string::lowercase(string::trim($value))
+    ASSERT string::is_email($value);
 DEFINE FIELD OVERWRITE role       ON invitation TYPE string
     ASSERT $value IN ["broker", "agent", "coordinator"];
 DEFINE FIELD OVERWRITE token      ON invitation TYPE string ASSERT string::len($value) >= 16;
@@ -208,6 +219,29 @@ DEFINE FIELD OVERWRITE accepted   ON invitation TYPE bool DEFAULT false;
 DEFINE FIELD OVERWRITE declined   ON invitation TYPE bool DEFAULT false;
 DEFINE FIELD OVERWRITE created_at ON invitation TYPE datetime DEFAULT time::now();
 DEFINE INDEX OVERWRITE idx_invitation_token ON invitation FIELDS token UNIQUE;
+
+-- Defense-in-depth against duplicate-pending invitations. The
+-- application's `members::invite` handler dedupes against existing
+-- pending rows before calling `create_invitation`, but if a future
+-- caller bypasses that check (or two requests race past it) this
+-- event will reject the second CREATE at the DB layer. Accepted /
+-- declined rows stay for history — they only block when *another*
+-- row is still pending for the same (brokerage, email).
+DEFINE EVENT OVERWRITE invitation_no_duplicate_pending ON invitation
+    WHEN $event = "CREATE" THEN {
+        LET $dups = (
+            SELECT count() FROM invitation
+            WHERE brokerage = $after.brokerage
+              AND email = $after.email
+              AND accepted = false
+              AND declined = false
+              AND id != $after.id
+            GROUP ALL
+        );
+        IF array::len($dups) > 0 AND $dups[0].count > 0 {
+            THROW "duplicate pending invitation for this brokerage + email";
+        };
+    };
 
 -- ----------------------------------------------------------------------------
 -- Transaction (CAR-forms revision)

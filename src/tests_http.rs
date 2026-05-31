@@ -759,6 +759,167 @@ async fn agent_cannot_invite() {
 }
 
 #[tokio::test]
+async fn invite_handles_email_case_insensitively() {
+    // Schema lowercases on write + the app lowercases on read, so
+    // inviting `Alice@Example.com` then `alice@example.com` should
+    // collapse to a single pending row.
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    join(&app.state, &broker, &b, "broker").await;
+
+    authed_post(
+        &app,
+        &broker,
+        "/app/team/invite",
+        "email=Alice@Example.com&role=agent",
+    )
+    .await;
+    let (status, body) = authed_post(
+        &app,
+        &broker,
+        "/app/team/invite",
+        "email=alice@example.com&role=agent",
+    )
+    .await;
+    assert!(status.is_success() || status.is_redirection());
+    assert!(
+        body.to_ascii_lowercase()
+            .contains("already has a pending invitation"),
+        "second invite (case variation) should be deduped"
+    );
+
+    // Exactly one row, stored in lowercase.
+    let mut q = app
+        .state
+        .db
+        .query("SELECT VALUE email FROM invitation WHERE email = 'alice@example.com'")
+        .await
+        .expect("query");
+    let emails: Vec<String> = q.take(0).unwrap_or_default();
+    assert_eq!(
+        emails,
+        vec!["alice@example.com".to_string()],
+        "schema must store the lowercase form"
+    );
+}
+
+#[tokio::test]
+async fn db_event_rejects_duplicate_pending_at_layer_below_app() {
+    // Belt-and-braces: bypass the handler and CREATE two invitation
+    // rows directly. The `invitation_no_duplicate_pending` event must
+    // reject the second create even though the application-level
+    // check is sidestepped.
+    use surrealdb::types::SurrealValue;
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let inviter = seed_user(&app.state, "inviter@a").await;
+
+    #[derive(serde::Serialize, SurrealValue)]
+    struct NewInv {
+        email: String,
+        role: String,
+        token: String,
+        brokerage: RecordId,
+        invited_by: RecordId,
+    }
+
+    // First create succeeds.
+    let first: Option<crate::models::Invitation> = app
+        .state
+        .db
+        .create("invitation")
+        .content(NewInv {
+            email: "dup@x".into(),
+            role: "agent".into(),
+            token: "tok-first-1234567890abcdef".into(),
+            brokerage: b.clone(),
+            invited_by: inviter.clone(),
+        })
+        .await
+        .expect("first invite create");
+    assert!(first.is_some(), "first create should succeed");
+
+    // Second create with the same (brokerage, email) and still
+    // pending must be rejected by the event guard.
+    let second: Result<Option<crate::models::Invitation>, _> = app
+        .state
+        .db
+        .create("invitation")
+        .content(NewInv {
+            email: "dup@x".into(),
+            role: "agent".into(),
+            token: "tok-second-987654321fedcba".into(),
+            brokerage: b.clone(),
+            invited_by: inviter.clone(),
+        })
+        .await;
+    assert!(
+        second.is_err(),
+        "duplicate pending CREATE should be rejected at the DB layer"
+    );
+}
+
+#[tokio::test]
+async fn reinvite_same_email_is_idempotent() {
+    // Real-world trigger: broker double-clicks "Send invites" or hits
+    // back-and-resubmit. Without the pending-dedupe guard each submit
+    // would create another `invitation` row and fire another email —
+    // we explicitly check both: exactly one row exists after two
+    // submits, and the second submit's response surfaces the skip
+    // notice instead of confirming a new send.
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    join(&app.state, &broker, &b, "broker").await;
+
+    // First invite: succeeds, creates one row.
+    authed_post(
+        &app,
+        &broker,
+        "/app/team/invite",
+        "email=victim@x&role=agent",
+    )
+    .await;
+
+    // Second invite for the same email: must be a no-op.
+    let (status, body) = authed_post(
+        &app,
+        &broker,
+        "/app/team/invite",
+        "email=victim@x&role=agent",
+    )
+    .await;
+    assert!(
+        status.is_success() || status.is_redirection(),
+        "got {status}"
+    );
+    assert!(
+        body.to_ascii_lowercase()
+            .contains("already has a pending invitation"),
+        "expected pending-dupe notice in response"
+    );
+
+    // Exactly one invitation row in the DB.
+    let mut q = app
+        .state
+        .db
+        .query("SELECT count() FROM invitation WHERE email = 'victim@x' GROUP ALL")
+        .await
+        .expect("count invites");
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct C {
+        count: i64,
+    }
+    let row: Option<C> = q.take(0).unwrap_or_default();
+    assert_eq!(
+        row.map(|r| r.count).unwrap_or(0),
+        1,
+        "re-invite should NOT create a second invitation row"
+    );
+}
+
+#[tokio::test]
 async fn invite_skips_email_already_at_another_brokerage() {
     // Option-A semantics: a user with an existing works_at edge cannot
     // be invited away — the issuer sees them skipped in the notice.
@@ -774,12 +935,10 @@ async fn invite_skips_email_already_at_another_brokerage() {
     let (status, body) =
         authed_post(&app, &broker, "/app/team/invite", "email=busy@x&role=agent").await;
     assert!(status.is_success() || status.is_redirection());
+    let lower = body.to_ascii_lowercase();
     assert!(
-        body.contains("already at another brokerage")
-            || body.contains("Skipped")
-            || body.contains("belongs to a brokerage"),
-        "expected skip notice in response, body snippet:\n{}",
-        &body.chars().take(2000).collect::<String>()
+        lower.contains("already at another brokerage") || lower.contains("must leave first"),
+        "expected cross-brokerage skip notice in response"
     );
     // No invitation was created for the busy address.
     let mut q = app

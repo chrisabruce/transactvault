@@ -2060,14 +2060,22 @@ details.checklist-group > summary {
 }
 details.checklist-group > summary::-webkit-details-marker { display: none; }
 details.checklist-group > summary::after {
-    content: "▸";
+    /* Match the visual weight of the transactions-list sort arrow
+       (dark teal brand-ink), but a touch larger so the disclosure
+       reads as a primary affordance on each group header. */
+    content: "▶";
     position: absolute;
     right: 0.25rem;
-    top: 0;
-    color: var(--color-muted);
-    font-size: 0.9em;
+    top: 0.15rem;
+    color: var(--color-brand-ink);
+    font-size: 1.05em;
+    line-height: 1;
+    transition: transform 120ms ease-out;
 }
-details.checklist-group[open] > summary::after { content: "▾"; }
+details.checklist-group[open] > summary::after {
+    content: "▼";
+    color: var(--color-brand-ink);
+}
 details.checklist-group > summary:hover h3 { color: var(--color-ink); }
 
 /* Bundled-disclosures line under a contract form on the checklist. */

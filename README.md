@@ -173,6 +173,21 @@ relax → backfill → lock migration pass before tightening any field.
 - Argon2id default parameters are OWASP-aligned.
 - Cookies are HTTP-only, `SameSite=Lax`, and scoped to the app lifetime (`JWT_EXPIRY_HOURS`).
 
+## License
+
+**Proprietary — All rights reserved.** This repository is public on GitHub so
+customers, prospective customers, auditors, and security researchers can inspect
+what they would be running. **Visibility is not a grant of rights.**
+
+You may not copy, fork (beyond GitHub's read-only inspection), modify, build,
+run, host, or redistribute this software without a separate written commercial
+license. See [LICENSE](./LICENSE) for the full terms and contact information
+for commercial licensing.
+
+This is **not** an open-source project. The package metadata in `Cargo.toml`
+references this LICENSE file directly (not an OSI-approved license slug) and
+`publish = false` is set to prevent accidental publication to crates.io.
+
 ## Not yet included (scoped for the PoC)
 
 - Google SSO is stubbed in the UI — the working flow is email/password.

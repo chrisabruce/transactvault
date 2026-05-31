@@ -128,12 +128,54 @@ pub async fn invite(
         .await?;
     let existing_user_emails: Vec<String> = existing_user_q.take(0).unwrap_or_default();
 
+    // Skip emails that already have a *pending* invitation to THIS
+    // brokerage. Without this guard, a double-submitted form (back +
+    // resubmit, double-click, two browser tabs) would create N
+    // invitation rows and fire N emails for the same address.
+    // Brokers who actually want to re-send use the "Resend email"
+    // button on the pending-invites list — that uses the existing
+    // token and audits as `invite_resent` so it's idempotent.
+    let mut pending_q = state
+        .db
+        .query(
+            "SELECT VALUE email FROM invitation \
+             WHERE brokerage = $b AND email IN $e \
+               AND accepted = false AND declined = false",
+        )
+        .bind(("b", user.brokerage_id.clone()))
+        .bind(("e", valid.clone()))
+        .await?;
+    let already_pending: Vec<String> = pending_q.take(0).unwrap_or_default();
+
     let to_send: Vec<String> = valid
         .into_iter()
         .filter(|e| !already_at_brokerage.contains(e))
+        .filter(|e| !already_pending.contains(e))
         .collect();
 
     if to_send.is_empty() {
+        // Surface why each address was skipped — "already at another
+        // brokerage" vs "already pending here" mean different things
+        // to the broker, so we show both buckets explicitly instead of
+        // collapsing into a single generic error.
+        let mut parts: Vec<String> = Vec::new();
+        if !already_at_brokerage.is_empty() {
+            parts.push(format!(
+                "Already at another brokerage (must leave first): {}.",
+                already_at_brokerage.join(", "),
+            ));
+        }
+        if !already_pending.is_empty() {
+            parts.push(format!(
+                "Already has a pending invitation here (use \"Resend email\" on the pending list): {}.",
+                already_pending.join(", "),
+            ));
+        }
+        let msg = if parts.is_empty() {
+            "No new invitations were sent.".to_string()
+        } else {
+            parts.join(" ")
+        };
         return render(&TeamPage {
             app_name: &state.config.app_name,
             base_url: &state.config.base_url,
@@ -141,13 +183,9 @@ pub async fn invite(
             header,
             members: load_members(&state, &user).await?,
             pending: load_pending_invitations(&state, &user).await?,
-            invite_error: Some(
-                "Every address you entered already belongs to a brokerage on TransactVault. \
-                 A user can only belong to one brokerage at a time — they'll need to \
-                 leave their current brokerage before joining yours.",
-            ),
+            invite_error: None,
             invite_link: None,
-            invite_notice: None,
+            invite_notice: Some(msg),
         });
     }
 
@@ -189,6 +227,12 @@ pub async fn invite(
         notice_parts.push(format!(
             "Skipped (already at another brokerage, must leave first): {}.",
             already_at_brokerage.join(", "),
+        ));
+    }
+    if !already_pending.is_empty() {
+        notice_parts.push(format!(
+            "Skipped (already has a pending invitation; use \"Resend email\" if needed): {}.",
+            already_pending.join(", "),
         ));
     }
     if !invalid.is_empty() {
