@@ -555,6 +555,20 @@ pub async fn login(
     .await;
 
     set_session_cookie(&state, &cookies, &user.id)?;
+
+    // Send users without a brokerage to the friendly landing instead
+    // of `/app`, which would otherwise 403 inside the `CurrentUser`
+    // extractor.
+    let mut membership_q = state
+        .db
+        .query("SELECT VALUE id FROM works_at WHERE in = $u LIMIT 1")
+        .bind(("u", user.id.clone()))
+        .await?;
+    let memberships: Vec<RecordId> = membership_q.take(0).unwrap_or_default();
+    if memberships.is_empty() {
+        return Ok(Redirect::to("/app/no-brokerage").into_response());
+    }
+
     Ok(Redirect::to("/app").into_response())
 }
 
@@ -603,6 +617,19 @@ pub async fn invite_form(
     Path(token): Path<String>,
 ) -> Result<Html<String>, AppError> {
     let (invitation, brokerage, inviter_name) = load_invitation(&state, &token).await?;
+
+    // If a user already exists with this email, swap the form for a
+    // "sign in to accept" CTA — they don't need to (and can't) create
+    // a new account. Once signed in, the no-brokerage landing has the
+    // accept/decline buttons.
+    let mut existing_q = state
+        .db
+        .query("SELECT VALUE id FROM user WHERE email = $e LIMIT 1")
+        .bind(("e", invitation.email.clone()))
+        .await?;
+    let existing: Vec<RecordId> = existing_q.take(0).unwrap_or_default();
+    let prompt_login = !existing.is_empty();
+
     let page = InvitePage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
@@ -611,6 +638,7 @@ pub async fn invite_form(
         brokerage_name: &brokerage.name,
         inviter_name: &inviter_name,
         error: None,
+        prompt_login,
     };
     render(&page)
 }
@@ -655,10 +683,9 @@ pub async fn accept_invite(
             inviter_name: &inviter_name,
             error: Some(
                 "This email already has a TransactVault account. \
-                 A user can only belong to one brokerage at a time — \
-                 leave your current brokerage first, then revisit this \
-                 invite link.",
+                 Sign in below to accept the invitation from your existing account.",
             ),
+            prompt_login: true,
         })?;
         return Ok(html.into_response());
     }
@@ -731,7 +758,7 @@ async fn load_invitation(
 ) -> Result<(Invitation, Brokerage, String), AppError> {
     let mut response = state
         .db
-        .query("SELECT * FROM invitation WHERE token = $t AND accepted = false LIMIT 1")
+        .query("SELECT * FROM invitation WHERE token = $t AND accepted = false AND declined = false LIMIT 1")
         .bind(("t", token.to_string()))
         .await?;
     let invitation: Option<Invitation> = response.take(0)?;
@@ -831,6 +858,7 @@ pub(crate) async fn create_invitation(
     invited_by: RecordId,
     inviter_name: &str,
     inviter_email: &str,
+    is_existing_user: bool,
 ) -> Result<Invitation, AppError> {
     let token = generate_token();
     let invite: Option<Invitation> = state
@@ -858,6 +886,7 @@ pub(crate) async fn create_invitation(
             brokerage_name,
             &role,
             &link,
+            is_existing_user,
         )
         .await;
 

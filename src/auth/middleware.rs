@@ -31,6 +31,27 @@ struct MembershipRow {
     role: String,
 }
 
+/// Single round-trip session load: profile + (optional) brokerage
+/// membership. Both extractors call this so authenticated requests
+/// pay for one DB hop instead of two. Returns `(profile, membership)`;
+/// `Ok(None)` for profile means "the JWT references a user that no
+/// longer exists" (treated as Unauthorized by callers).
+async fn load_session(
+    db: &crate::state::Db,
+    user_id: &RecordId,
+) -> Result<(Option<UserProfile>, Option<MembershipRow>), AppError> {
+    let mut q = db
+        .query(
+            "SELECT email, name, avatar_storage_key FROM ONLY $u; \
+             SELECT out AS brokerage, role FROM works_at WHERE in = $u LIMIT 1",
+        )
+        .bind(("u", user_id.clone()))
+        .await?;
+    let profile: Option<UserProfile> = q.take(0)?;
+    let membership: Option<MembershipRow> = q.take(1)?;
+    Ok((profile, membership))
+}
+
 impl FromRequestParts<AppState> for CurrentUser {
     type Rejection = AppError;
 
@@ -51,25 +72,9 @@ impl FromRequestParts<AppState> for CurrentUser {
             decode_token(&state.config, &token).map_err(|_| AppError::Unauthorized)?;
 
         let user_id = claims.user_id();
-
-        let mut profile_q = state
-            .db
-            .query("SELECT email, name, avatar_storage_key FROM ONLY $u")
-            .bind(("u", user_id.clone()))
-            .await?;
-        let profile: Option<UserProfile> = profile_q.take(0)?;
+        let (profile, membership) = load_session(&state.db, &user_id).await?;
         let profile = profile.ok_or(AppError::Unauthorized)?;
-
-        // Graph hop: user -> works_at -> brokerage. We also grab the role
-        // stored on the relation edge in the same round trip.
-        let mut response = state
-            .db
-            .query("SELECT out AS brokerage, role FROM works_at WHERE in = $u LIMIT 1")
-            .bind(("u", user_id.clone()))
-            .await?;
-        let membership: Option<MembershipRow> = response.take(0)?;
         let membership = membership.ok_or(AppError::Forbidden)?;
-
         let role = Role::parse(&membership.role).ok_or(AppError::Forbidden)?;
 
         let current = CurrentUser {
@@ -104,6 +109,71 @@ fn is_app_write(parts: &Parts) -> bool {
         Method::POST | Method::PUT | Method::PATCH | Method::DELETE
     );
     writing && parts.uri.path().starts_with("/app/")
+}
+
+/// Authenticated-but-maybe-brokerage-less variant. Used by the
+/// no-brokerage landing page and the invite accept/decline handlers,
+/// which must work for a user who is signed in but isn't currently
+/// attached to any brokerage (newly removed agent, or someone whose
+/// previous brokerage closed). Every other authenticated route should
+/// stay on [`CurrentUser`] so `brokerage_id` is statically guaranteed.
+#[derive(Debug, Clone)]
+pub struct LooseCurrentUser {
+    pub user_id: RecordId,
+    pub email: String,
+    pub name: String,
+    // Currently only checked for the friendly avatar fallback inside
+    // the no-brokerage landing; kept on the struct so callers don't
+    // have to second-query the profile.
+    #[allow(dead_code)]
+    pub has_avatar: bool,
+    pub membership: Option<LooseMembership>,
+}
+
+/// Brokerage membership data preserved on the loose extractor so a
+/// future brokerage-switcher (option B) can route the user without
+/// re-running the works_at lookup. Currently only `is_some()` is read.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct LooseMembership {
+    pub brokerage_id: RecordId,
+    pub role: Role,
+}
+
+impl FromRequestParts<AppState> for LooseCurrentUser {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let cookies = Cookies::from_request_parts(parts, state)
+            .await
+            .map_err(|_| AppError::Unauthorized)?;
+        let token = cookies
+            .get(SESSION_COOKIE)
+            .map(|c| c.value().to_string())
+            .ok_or(AppError::Unauthorized)?;
+        let claims: Claims =
+            decode_token(&state.config, &token).map_err(|_| AppError::Unauthorized)?;
+        let user_id = claims.user_id();
+        let (profile, row) = load_session(&state.db, &user_id).await?;
+        let profile = profile.ok_or(AppError::Unauthorized)?;
+        let membership = row.and_then(|r| {
+            Role::parse(&r.role).map(|role| LooseMembership {
+                brokerage_id: r.brokerage,
+                role,
+            })
+        });
+
+        Ok(LooseCurrentUser {
+            user_id,
+            email: profile.email,
+            name: profile.name,
+            has_avatar: profile.avatar_storage_key.is_some(),
+            membership,
+        })
+    }
 }
 
 /// Optional variant — used on pages that change their shape when signed in

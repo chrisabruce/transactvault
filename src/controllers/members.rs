@@ -17,22 +17,17 @@ use crate::error::AppError;
 use crate::models::Invitation;
 use crate::state::AppState;
 use crate::templates::{
-    AppHeader, AuditRowsFragment, BrokerageAuditPage, BrokerageDeletePage, Member, TeamPage,
+    AuditRowsFragment, BrokerageAuditPage, BrokerageDeletePage, Member, TeamPage,
 };
 
 pub async fn list(
     State(state): State<AppState>,
     user: CurrentUser,
 ) -> Result<Html<String>, AppError> {
-    let brokerage = load_brokerage(&state, &user).await?;
-
     let members = load_members(&state, &user).await?;
     let pending = load_pending_invitations(&state, &user).await?;
 
-    let header = AppHeader::new(&user.name, &user.email, user.role, &brokerage.name, "team")
-        .with_super_admin(crate::controllers::is_super_admin(&state, &user))
-        .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
-        .with_banner(crate::billing::banner_for(&brokerage));
+    let header = crate::controllers::common::build_app_header(&state, &user, "team").await;
     render(&TeamPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
@@ -62,10 +57,7 @@ pub async fn invite(
     }
 
     let brokerage = load_brokerage(&state, &user).await?;
-    let header = AppHeader::new(&user.name, &user.email, user.role, &brokerage.name, "team")
-        .with_super_admin(crate::controllers::is_super_admin(&state, &user))
-        .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
-        .with_banner(crate::billing::banner_for(&brokerage));
+    let header = crate::controllers::common::build_app_header(&state, &user, "team").await;
 
     let role = match input.role.as_str() {
         "broker" | "agent" | "coordinator" => input.role,
@@ -114,18 +106,31 @@ pub async fn invite(
         });
     }
 
-    // Skip anyone who already has an account — `user.email` is unique,
-    // so the acceptance step would 500 on insert. Show the broker which
-    // addresses we skipped instead of failing silently.
-    let mut existing_q = state
+    // Block invites for emails already attached to a brokerage — option A
+    // semantics, a user can only belong to one at a time. Existing
+    // accounts WITHOUT a brokerage (a removed agent, etc.) are fine
+    // and get a different email body ("sign in to accept") via the
+    // is_existing_user flag passed through to `create_invitation`.
+    let mut at_brokerage_q = state
+        .db
+        .query(
+            "SELECT VALUE in.email FROM works_at \
+             WHERE in IN (SELECT VALUE id FROM user WHERE email IN $e)",
+        )
+        .bind(("e", valid.clone()))
+        .await?;
+    let already_at_brokerage: Vec<String> = at_brokerage_q.take(0).unwrap_or_default();
+
+    let mut existing_user_q = state
         .db
         .query("SELECT VALUE email FROM user WHERE email IN $e")
         .bind(("e", valid.clone()))
         .await?;
-    let already_registered: Vec<String> = existing_q.take(0).unwrap_or_default();
+    let existing_user_emails: Vec<String> = existing_user_q.take(0).unwrap_or_default();
+
     let to_send: Vec<String> = valid
         .into_iter()
-        .filter(|e| !already_registered.contains(e))
+        .filter(|e| !already_at_brokerage.contains(e))
         .collect();
 
     if to_send.is_empty() {
@@ -137,7 +142,7 @@ pub async fn invite(
             members: load_members(&state, &user).await?,
             pending: load_pending_invitations(&state, &user).await?,
             invite_error: Some(
-                "Every address you entered already has an account on TransactVault. \
+                "Every address you entered already belongs to a brokerage on TransactVault. \
                  A user can only belong to one brokerage at a time — they'll need to \
                  leave their current brokerage before joining yours.",
             ),
@@ -151,6 +156,7 @@ pub async fn invite(
     let mut last_link = None;
     let sent = to_send.len();
     for email in to_send {
+        let is_existing_user = existing_user_emails.contains(&email);
         let invitation = create_invitation(
             &state,
             email,
@@ -160,6 +166,7 @@ pub async fn invite(
             user.user_id.clone(),
             &user.name,
             &user.email,
+            is_existing_user,
         )
         .await?;
         last_link = Some(format!(
@@ -178,10 +185,10 @@ pub async fn invite(
     // Note any addresses we skipped so the broker can fix typos or
     // follow up with the people who already have an account elsewhere.
     let mut notice_parts: Vec<String> = invite_notice.into_iter().collect();
-    if !already_registered.is_empty() {
+    if !already_at_brokerage.is_empty() {
         notice_parts.push(format!(
-            "Skipped (already registered, must leave current brokerage first): {}.",
-            already_registered.join(", "),
+            "Skipped (already at another brokerage, must leave first): {}.",
+            already_at_brokerage.join(", "),
         ));
     }
     if !invalid.is_empty() {
@@ -316,6 +323,108 @@ pub async fn change_role(
     Ok(Redirect::to("/app/team"))
 }
 
+/// Remove an agent (or coordinator) from this brokerage without
+/// deleting their account. The user's `works_at` edge goes away, plus
+/// any `owns` edges from them to this brokerage's transactions — the
+/// broker still sees those deals via `has_transaction` and can
+/// reassign them later. The user themselves stays in the system and
+/// will land on `/app/no-brokerage` the next time they sign in.
+pub async fn remove_member(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(target_user_key): Path<String>,
+) -> Result<Redirect, AppError> {
+    if !user.role.is_broker() {
+        return Err(AppError::Forbidden);
+    }
+
+    let target_user_id = RecordId::new("user", target_user_key.as_str());
+    if target_user_id == user.user_id {
+        return Err(AppError::invalid(
+            "You can't remove yourself. Have another broker remove you, \
+             or delete the brokerage entirely from Team → Delete.",
+        ));
+    }
+
+    // Confirm membership + capture target email/role for the audit row.
+    use surrealdb::types::SurrealValue;
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct Existing {
+        role: String,
+        email: String,
+    }
+    let mut existing_q = state
+        .db
+        .query(
+            "SELECT in.email AS email, role FROM works_at \
+             WHERE in = $u AND out = $b LIMIT 1",
+        )
+        .bind(("u", target_user_id.clone()))
+        .bind(("b", user.brokerage_id.clone()))
+        .await?;
+    let existing: Option<Existing> = existing_q.take(0)?;
+    let existing = existing.ok_or(AppError::NotFound)?;
+
+    // Last-broker guard mirrors `change_role` — you can't remove the
+    // only broker without leaving the brokerage rudderless.
+    if Role::parse(&existing.role)
+        .map(|r| r.is_broker())
+        .unwrap_or(false)
+    {
+        let mut count_q = state
+            .db
+            .query(
+                "SELECT count() FROM works_at \
+                 WHERE out = $b AND role = 'broker' GROUP ALL",
+            )
+            .bind(("b", user.brokerage_id.clone()))
+            .await?;
+        #[derive(serde::Deserialize, SurrealValue)]
+        struct CountRow {
+            count: i64,
+        }
+        let count: Option<CountRow> = count_q.take(0)?;
+        if count.map(|c| c.count).unwrap_or(0) <= 1 {
+            return Err(AppError::invalid(
+                "There must be at least one broker on the brokerage. \
+                 Promote someone else first.",
+            ));
+        }
+    }
+
+    // Detach. `owns` edges go too — the brokerage keeps the
+    // transactions visible via `has_transaction`, so the broker can
+    // reassign them from the unassigned-transactions view.
+    state
+        .db
+        .query("DELETE works_at WHERE in = $u AND out = $b")
+        .bind(("u", target_user_id.clone()))
+        .bind(("b", user.brokerage_id.clone()))
+        .await?;
+    state
+        .db
+        .query(
+            "DELETE owns WHERE in = $u \
+             AND out IN (SELECT VALUE out FROM has_transaction WHERE in = $b)",
+        )
+        .bind(("u", target_user_id.clone()))
+        .bind(("b", user.brokerage_id.clone()))
+        .await?;
+
+    crate::audit::record(
+        &state.db,
+        "member_removed",
+        Some(user.user_id.clone()),
+        Some(user.email.clone()),
+        None,
+        None,
+        Some(format!("removed {} ({})", existing.email, existing.role)),
+    )
+    .await;
+
+    Ok(Redirect::to("/app/team"))
+}
+
 async fn load_pending_invitations(
     state: &AppState,
     user: &CurrentUser,
@@ -324,7 +433,7 @@ async fn load_pending_invitations(
         .db
         .query(
             "SELECT * FROM invitation
-             WHERE brokerage = $b AND accepted = false
+             WHERE brokerage = $b AND accepted = false AND declined = false
              ORDER BY created_at DESC",
         )
         .bind(("b", user.brokerage_id.clone()))
@@ -352,7 +461,7 @@ async fn authorize_invite(
         .db
         .query(
             "SELECT * FROM invitation
-             WHERE token = $t AND accepted = false LIMIT 1",
+             WHERE token = $t AND accepted = false AND declined = false LIMIT 1",
         )
         .bind(("t", token.to_string()))
         .await?;
@@ -377,6 +486,16 @@ pub async fn resend_invite(
     let brokerage = load_brokerage(&state, &user).await?;
     let link = format!("{}/invite/{}", state.config.base_url, invite.token);
 
+    // Recompute the "existing account" flag so a resend doesn't tell
+    // someone who has since signed up to "create a password" again.
+    let mut existing_q = state
+        .db
+        .query("SELECT VALUE id FROM user WHERE email = $e LIMIT 1")
+        .bind(("e", invite.email.clone()))
+        .await?;
+    let existing: Vec<RecordId> = existing_q.take(0).unwrap_or_default();
+    let is_existing_user = !existing.is_empty();
+
     state
         .mailer
         .send_invite(
@@ -386,6 +505,7 @@ pub async fn resend_invite(
             &brokerage.name,
             &invite.role,
             &link,
+            is_existing_user,
         )
         .await;
 
@@ -557,11 +677,7 @@ pub async fn audit_log(
         .into_response());
     }
 
-    let brokerage = load_brokerage(&state, &user).await?;
-    let header = AppHeader::new(&user.name, &user.email, user.role, &brokerage.name, "audit")
-        .with_super_admin(crate::controllers::is_super_admin(&state, &user))
-        .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
-        .with_banner(crate::billing::banner_for(&brokerage));
+    let header = crate::controllers::common::build_app_header(&state, &user, "audit").await;
 
     Ok(render(&BrokerageAuditPage {
         app_name: &state.config.app_name,
@@ -856,13 +972,8 @@ async fn render_delete_page(
     let brokerage = load_brokerage(state, user).await?;
     let summary = gather_delete_summary(state, &user.brokerage_id).await?;
 
-    // Clone for the page model first so the header can hold its
-    // `&str` reference to the original until the render is done.
     let brokerage_name = brokerage.name.clone();
-    let header = AppHeader::new(&user.name, &user.email, user.role, &brokerage.name, "team")
-        .with_super_admin(crate::controllers::is_super_admin(state, user))
-        .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
-        .with_banner(crate::billing::banner_for(&brokerage));
+    let header = crate::controllers::common::build_app_header(state, user, "team").await;
 
     render(&BrokerageDeletePage {
         app_name: &state.config.app_name,

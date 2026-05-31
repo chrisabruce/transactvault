@@ -25,6 +25,25 @@ pub struct Storage {
 }
 
 impl Storage {
+    /// Construct a non-functional [`Storage`] for tests that don't
+    /// touch object storage. The bucket points at a non-routable
+    /// address; any actual `get_object` / `put_object` call will fail.
+    /// Use only when the code under test never hits the storage layer
+    /// (billing gates, authz checks, query helpers, etc.).
+    #[cfg(test)]
+    pub fn null_for_tests() -> Self {
+        let credentials = Credentials::new(Some("test"), Some("test"), None, None, None)
+            .expect("test credentials");
+        let region = Region::Custom {
+            region: "us-east-1".into(),
+            endpoint: "http://127.0.0.1:1".into(),
+        };
+        let bucket = Bucket::new("test", region, credentials)
+            .expect("bucket handle for tests")
+            .with_path_style();
+        Self { bucket }
+    }
+
     /// Build a bucket handle pointed at the configured endpoint + region.
     /// Uses path-style addressing because RustFS and MinIO (and most local
     /// dev S3 servers) only speak that dialect — virtual-host-style requires

@@ -44,18 +44,30 @@ impl ApprovalStatus {
     }
 }
 
+/// One compliance step on a transaction. Hangs off a transaction via
+/// the `has_item` graph edge; document uploads attach via `for_item`.
+/// The `approval_status` column stores the [`ApprovalStatus`] slug —
+/// read via [`Self::status`].
 #[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
 pub struct ChecklistItem {
     pub id: RecordId,
     pub title: String,
+    /// CAR library form code (`"RPA"`, `"TDS"`, etc.) when the item
+    /// was seeded from the master library; `None` for custom items
+    /// the agent or broker added by hand.
     pub form_code: Option<String>,
     /// Display name of the group this item renders under (from the
     /// resolved form's `form_group`), plus its sort order. Snapshotted
     /// at creation so rendering needn't re-resolve the form library.
     pub group_name: String,
     pub group_order: i64,
+    /// Sort key within the group; the seeder assigns these by canonical
+    /// CAR ordering, and manually-added items append after.
     pub position: i64,
+    /// `true` items count toward the "compliance complete" gate.
     pub required: bool,
+    /// Slug from [`ApprovalStatus`]. Don't read directly — use
+    /// [`Self::status`] / [`Self::is_approved`] / [`Self::is_denied`].
     pub approval_status: String,
     pub reviewed_at: Option<DateTime<Utc>>,
     pub reviewed_by: Option<RecordId>,

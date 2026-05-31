@@ -14,6 +14,9 @@ pub struct Invitation {
     pub brokerage: RecordId,
     pub invited_by: RecordId,
     pub accepted: bool,
+    /// Recipient declined the invite from the no-brokerage landing.
+    /// Once declined, the token is consumed (no longer pending).
+    pub declined: bool,
     pub created_at: DateTime<Utc>,
 }
 

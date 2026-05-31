@@ -266,20 +266,41 @@ impl SalesType {
 // Persisted record
 // ---------------------------------------------------------------------------
 
+/// Persisted real-estate deal. One row per property × side; brokers
+/// can spawn additional transactions for the same address (e.g. a
+/// listing + a purchase in a dual-rep). Tenant scope lives on the
+/// graph: every transaction has an inbound `has_transaction` edge
+/// from exactly one brokerage; the optional `owns` edge from a user
+/// scopes it to an agent.
+///
+/// The `status`, `transaction_type`, `special_sales_condition`, and
+/// `sales_type` string columns mirror the corresponding enums
+/// ([`TransactionStatus`], [`TransactionType`],
+/// [`SpecialSalesCondition`], [`SalesType`]) — schema stores the slug
+/// for backward-compat with SurrealDB exports, and the `*_enum()`
+/// accessors below give type-safe access in code.
 #[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
 pub struct Transaction {
     pub id: RecordId,
     pub property_address: String,
     pub city: String,
+    /// Assessor's Parcel Number — land-only deals may have an APN
+    /// without a street address, so create / edit accepts either one.
     pub apn: Option<String>,
     pub postal_code: Option<String>,
+    /// Stored in cents so a `i64` covers up to ~$92T without
+    /// floating-point loss; render via [`Self::price_display`].
     pub price_cents: i64,
     pub client_name: Option<String>,
     pub mls_number: Option<String>,
     pub office_file_number: Option<String>,
+    /// Slug from [`TransactionStatus`]; read via `status_enum()`.
     pub status: String,
+    /// Slug from [`TransactionType`]; read via `type_enum()`.
     pub transaction_type: String,
+    /// Slug from [`SpecialSalesCondition`]; read via `condition_enum()`.
     pub special_sales_condition: String,
+    /// Slug from [`SalesType`]; read via `sales_type_enum()`.
     pub sales_type: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

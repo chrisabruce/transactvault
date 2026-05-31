@@ -40,4 +40,28 @@ impl AppState {
             rate_limiter: RateLimiter::new(),
         }
     }
+
+    /// Build an [`AppState`] backed by an in-memory SurrealDB plus
+    /// noop stubs for storage / email / Stripe. Used by HTTP-level
+    /// tests via `tower::ServiceExt::oneshot` — every external
+    /// integration is disabled so the test never reaches off-host.
+    /// Callers must apply the schema (`crate::db::apply_schema`)
+    /// against the returned `state.db` before exercising handlers.
+    #[cfg(test)]
+    pub async fn for_tests() -> Self {
+        let db = surrealdb::engine::any::connect("mem://")
+            .await
+            .expect("mem connect");
+        db.use_ns("test").use_db("test").await.expect("use ns/db");
+        crate::db::apply_schema(&db).await.expect("apply schema");
+        let config = Config::for_tests();
+        Self {
+            db,
+            storage: Storage::null_for_tests(),
+            mailer: crate::email::Mailer::new(&config.email),
+            stripe: crate::stripe::Stripe::new(&config.stripe),
+            config: Arc::new(config),
+            rate_limiter: RateLimiter::new(),
+        }
+    }
 }

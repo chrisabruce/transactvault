@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+
+{% block title %}Unassigned transactions — {{ app_name }}{% endblock %}
+{% block body_class %}page-app{% endblock %}
+
+{% block body %}
+{% include "components/app_header.html" %}
+
+<main class="app-main">
+    <header class="page-title">
+        <section>
+            <h1>Unassigned transactions</h1>
+            <p class="subtitle">
+                These transactions have no owning agent — typically because the previous
+                owner was removed from the brokerage. Pick an assignee, check the
+                transactions to hand over, and apply.
+            </p>
+        </section>
+    </header>
+
+    {% if transactions.is_empty() %}
+        <section class="panel">
+            <p class="empty-state">
+                Nothing unassigned right now. New unassigned deals will show up here
+                whenever someone leaves the brokerage with active transactions.
+            </p>
+        </section>
+    {% else %}
+        <form method="post" action="/app/transactions/reassign" class="reassign-form"
+              onsubmit="return this.tx_keys.value.length > 0 ? confirm('Reassign the selected transactions?') : (alert('Select at least one transaction.'), false);">
+            <input type="hidden" name="tx_keys" value="">
+            <section class="panel reassign-toolbar">
+                <label class="field">
+                    <span>Assign to</span>
+                    <select name="assignee_key" required>
+                        <option value="" disabled selected>Choose a member…</option>
+                        {% for a in assignees %}
+                            <option value="{{ a.key }}">{{ a.name }} — {{ a.role_label }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <button type="submit" class="btn">Reassign selected</button>
+            </section>
+
+            <section class="panel">
+                <table class="admin-table reassign-table">
+                    <thead>
+                        <tr>
+                            <th scope="col" class="check-col">
+                                <input type="checkbox" id="reassign-all" aria-label="Select all">
+                            </th>
+                            <th scope="col">Property</th>
+                            <th scope="col">Status</th>
+                            <th scope="col">Created</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for tx in transactions %}
+                            <tr>
+                                <td class="check-col">
+                                    <input type="checkbox" class="reassign-row" value="{{ tx.url_key() }}" aria-label="Select {{ tx.property_address }}">
+                                </td>
+                                <td>
+                                    <a href="/app/transactions/{{ tx.url_key() }}">{{ tx.property_address }}</a>
+                                    {% if !tx.city.is_empty() %}
+                                        <small class="meta">{{ tx.city }}</small>
+                                    {% endif %}
+                                </td>
+                                <td><span class="status-pill {{ tx.status_class() }}">{{ tx.status_label() }}</span></td>
+                                <td><time datetime="{{ tx.created_at }}">{{ tx.age_label() }}</time></td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </section>
+        </form>
+    {% endif %}
+</main>
+
+<script>
+// Build the hidden tx_keys CSV from the row checkboxes on submit, and
+// keep the master "select all" in sync. No build step needed — this
+// page is rarely visited so a 30-line inline script beats adding a new
+// JS module to the bundle.
+(function () {
+    var form = document.querySelector("form.reassign-form");
+    if (!form) return;
+    var all = document.getElementById("reassign-all");
+    var rows = form.querySelectorAll(".reassign-row");
+    var hidden = form.querySelector('input[name="tx_keys"]');
+
+    function sync() {
+        var keys = [];
+        rows.forEach(function (cb) { if (cb.checked) keys.push(cb.value); });
+        hidden.value = keys.join(",");
+    }
+    rows.forEach(function (cb) { cb.addEventListener("change", sync); });
+    if (all) {
+        all.addEventListener("change", function () {
+            rows.forEach(function (cb) { cb.checked = all.checked; });
+            sync();
+        });
+    }
+    sync();
+})();
+</script>
+{% endblock %}

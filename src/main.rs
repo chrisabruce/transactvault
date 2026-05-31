@@ -27,6 +27,9 @@ mod storage;
 mod stripe;
 mod templates;
 
+#[cfg(test)]
+mod tests_http;
+
 use crate::config::Config;
 use crate::state::AppState;
 

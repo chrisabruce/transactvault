@@ -103,10 +103,19 @@ pub async fn upload(
                         form_code: Option<String>,
                         approval_status: String,
                     }
+                    // Cross-tenant guard: the item id is supplied by the
+                    // client, so we can't trust it. Restrict the lookup
+                    // to items that actually hang off the *URL's*
+                    // transaction (already authorized above). A foreign
+                    // or fabricated item_id falls through as NotFound.
                     let mut r = state
                         .db
-                        .query("SELECT form_code, approval_status FROM ONLY $i")
+                        .query(
+                            "SELECT form_code, approval_status FROM ONLY $i \
+                             WHERE id IN (SELECT VALUE out FROM has_item WHERE in = $t)",
+                        )
                         .bind(("i", item_ref))
+                        .bind(("t", tx_id.clone()))
                         .await?;
                     let row: Option<ItemRow> = r.take(0).ok().flatten();
                     let row = row.ok_or(AppError::NotFound)?;

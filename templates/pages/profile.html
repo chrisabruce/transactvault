@@ -46,7 +46,7 @@
                 {% if has_avatar %}
                     <form method="post"
                           action="/app/profile/avatar/delete"
-                          onsubmit="return confirm('Remove your profile photo?');"
+                          data-confirm="Remove your profile photo?"
                           class="avatar-remove">
                         <button type="submit" class="btn small ghost danger">Remove photo</button>
                     </form>

@@ -18,7 +18,7 @@
                 <form method="post"
                       action="/app/transactions/{{ tx.url_key() }}/delete"
                       class="inline-form"
-                      onsubmit="return confirm('Delete this transaction and all of its documents? This cannot be undone.');">
+                      data-confirm="Delete this transaction and all of its documents? This cannot be undone.">
                     <button type="submit" class="btn small danger">Delete</button>
                 </form>
             {% endif %}

@@ -4,14 +4,25 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use surrealdb::types::{RecordId, SurrealValue};
 
+/// Append-only security event. Persisted by [`crate::audit::record`]
+/// on signup attempts (blocked or successful), every login, every
+/// admin action, and any tenant-affecting mutation. Drives the
+/// brokerage audit log + the super-admin audit page. The `kind`
+/// allowlist lives in `db/schema.surql`; keep [`Self::kind_label`]
+/// + [`Self::kind_class`] in sync when adding a new kind.
 #[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
 pub struct AuditEvent {
     pub id: RecordId,
     pub kind: String,
     pub actor_email: Option<String>,
+    /// Record link to the user that triggered the event when known —
+    /// missing on signup-blocked rows because no user exists yet.
     pub actor: Option<RecordId>,
     pub ip: Option<String>,
     pub user_agent: Option<String>,
+    /// Free-form context (e.g. `"removed alice@x.com (agent)"` for a
+    /// member_removed event). Not user-rendered raw — controllers
+    /// template it.
     pub detail: Option<String>,
     pub at: DateTime<Utc>,
 }
@@ -46,6 +57,7 @@ impl AuditEvent {
             "invite_resent" => "Invite resent",
             "invite_cancelled" => "Invite cancelled",
             "invite_accepted" => "Invite accepted",
+            "invite_declined" => "Invite declined",
             "admin_view" => "Admin view",
             "document_deleted" => "Document deleted",
             "profile_updated" => "Profile updated",
@@ -53,6 +65,8 @@ impl AuditEvent {
             "avatar_updated" => "Avatar updated",
             "brokerage_deleted" => "Brokerage deleted",
             "transaction_deleted" => "Transaction deleted",
+            "transaction_reassigned" => "Transaction reassigned",
+            "member_removed" => "Member removed",
             "tier_created" => "Tier created",
             "tier_updated" => "Tier updated",
             "brokerage_comp_granted" => "Comp access granted",
@@ -65,13 +79,19 @@ impl AuditEvent {
     pub fn kind_class(&self) -> &'static str {
         match self.kind.as_str() {
             "verify_success" | "login_success" | "invite_accepted" | "signup_pending" => "ok",
-            "logout" | "invite_sent" | "invite_resent" | "admin_view" => "neutral",
+            "logout"
+            | "invite_sent"
+            | "invite_resent"
+            | "admin_view"
+            | "transaction_reassigned" => "neutral",
             "login_failure"
             | "verify_failure"
             | "invite_cancelled"
+            | "invite_declined"
             | "document_deleted"
             | "brokerage_deleted"
-            | "transaction_deleted" => "fail",
+            | "transaction_deleted"
+            | "member_removed" => "fail",
             _ => "blocked",
         }
     }

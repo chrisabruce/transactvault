@@ -23,7 +23,7 @@ use crate::controllers::render;
 use crate::error::AppError;
 use crate::models::{NewTier, Tier};
 use crate::state::AppState;
-use crate::templates::{AdminTierEditPage, AdminTiersPage, AppHeader};
+use crate::templates::{AdminTierEditPage, AdminTiersPage};
 
 pub async fn list(
     State(state): State<AppState>,
@@ -35,17 +35,7 @@ pub async fn list(
         .await?;
     let tiers: Vec<Tier> = q.take(0).unwrap_or_default();
 
-    let info = crate::billing::header_info_for_user(&state, &user).await;
-    let header = AppHeader::new(
-        &user.name,
-        &user.email,
-        user.role,
-        &info.brokerage_name,
-        "admin",
-    )
-    .with_super_admin(true)
-    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
-    .with_banner(info.banner);
+    let header = crate::controllers::common::build_app_header(&state, &user, "admin").await;
 
     render(&AdminTiersPage {
         app_name: &state.config.app_name,
@@ -248,10 +238,9 @@ pub async fn update(
     if is_archived
         && !existing.is_archived
         && let Some(ref pid) = product_id
+        && let Err(e) = state.stripe.archive_product(pid).await
     {
-        if let Err(e) = state.stripe.archive_product(pid).await {
-            tracing::warn!(error = %e, tier = %parsed.slug, "Stripe archive failed");
-        }
+        tracing::warn!(error = %e, tier = %parsed.slug, "Stripe archive failed");
     }
 
     // Snapshot the email-relevant fields before the `.bind` calls
@@ -491,17 +480,7 @@ async fn render_edit(
     existing: Option<Tier>,
     error: Option<&str>,
 ) -> Result<Html<String>, AppError> {
-    let info = crate::billing::header_info_for_user(state, user).await;
-    let header = AppHeader::new(
-        &user.name,
-        &user.email,
-        user.role,
-        &info.brokerage_name,
-        "admin",
-    )
-    .with_super_admin(true)
-    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
-    .with_banner(info.banner);
+    let header = crate::controllers::common::build_app_header(state, user, "admin").await;
     render(&AdminTierEditPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,

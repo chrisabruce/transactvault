@@ -87,6 +87,8 @@ impl Mailer {
              {link}\n\n\
              If you didn't sign up, ignore this and the account will never activate.\n\n\
              — The TransactVault team\n",
+            name = name,
+            link = link,
         );
         self.send(to, "Verify your TransactVault email", html, text)
             .await;
@@ -127,6 +129,7 @@ impl Mailer {
     /// to treat the message as person-to-person rather than bulk —
     /// the single biggest deliverability lever we have without touching
     /// DNS records.
+    #[allow(clippy::too_many_arguments)]
     pub async fn send_invite(
         &self,
         to: &str,
@@ -135,6 +138,7 @@ impl Mailer {
         brokerage: &str,
         role: &str,
         link: &str,
+        is_existing_user: bool,
     ) {
         let role_label = match role {
             "broker" => "Broker",
@@ -142,6 +146,19 @@ impl Mailer {
             _ => "Agent",
         };
         let subject = format!("{inviter} invited you to {brokerage} on TransactVault");
+        // Existing accounts don't need to pick a password — they just
+        // need to log in and accept. New accounts get the "create a
+        // password" framing instead.
+        let action_line = if is_existing_user {
+            "To join, open this link and sign in to your existing TransactVault account:"
+        } else {
+            "To finish setting up your account, open this link and create a password:"
+        };
+        let cta_label = if is_existing_user {
+            "Sign in to accept"
+        } else {
+            "Accept invitation"
+        };
 
         // Conversational tone, no exclamation marks, no "Click here!",
         // and a clear opt-out path — all of which lower spam scores.
@@ -151,10 +168,10 @@ impl Mailer {
                <p>Hi,</p>\
                <p><strong>{inviter}</strong> added you to <strong>{brokerage}</strong> on \
                   TransactVault as a {role_label}.</p>\
-               <p>To finish setting up your account, open this link and create a password:</p>\
+               <p>{action_line}</p>\
                <p><a href=\"{link}\" \
                      style=\"background:#0f766e;color:#fff;padding:10px 18px;\
-                            border-radius:8px;text-decoration:none;display:inline-block\">Accept invitation</a></p>\
+                            border-radius:8px;text-decoration:none;display:inline-block\">{cta_label}</a></p>\
                <p style=\"color:#475569;font-size:0.9em\">If the button doesn't work, paste this URL into your browser:<br>\
                   <span style=\"word-break:break-all\">{link}</span></p>\
                <p style=\"color:#475569;font-size:0.9em\">If you weren't expecting this, just ignore the email — \
@@ -170,7 +187,7 @@ impl Mailer {
         let text = format!(
             "Hi,\n\n\
              {inviter} added you to {brokerage} on TransactVault as a {role_label}.\n\n\
-             To finish setting up your account, open this link and create a password:\n\n\
+             {action_line}\n\n\
              {link}\n\n\
              If you weren't expecting this, just ignore this email — the invitation expires \
              automatically. You can also reply directly to {inviter_email} if you have questions.\n\n\

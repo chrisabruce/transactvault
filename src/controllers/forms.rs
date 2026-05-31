@@ -24,8 +24,8 @@ use crate::controllers::render;
 use crate::error::AppError;
 use crate::state::AppState;
 use crate::templates::{
-    AdminFormSetDetailPage, AdminFormSetRow, AdminFormsPage, AppHeader, AppliesChoice,
-    BrokerFormRow, BrokerFormsPage, FormGroupView, FormSetOption,
+    AdminFormSetDetailPage, AdminFormSetRow, AdminFormsPage, AppliesChoice, BrokerFormRow,
+    BrokerFormsPage, FormGroupView, FormSetOption,
 };
 
 /// The standard group names a broker can drop a custom form into.
@@ -352,10 +352,7 @@ pub async fn broker_forms(
         })
         .collect();
 
-    let header = AppHeader::new(&user.name, &user.email, user.role, &brokerage.name, "forms")
-        .with_super_admin(crate::controllers::is_super_admin(&state, &user))
-        .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
-        .with_banner(crate::billing::banner_for(&brokerage));
+    let header = crate::controllers::common::build_app_header(&state, &user, "forms").await;
 
     let (picker_types, picker_sides, picker_conditions) = picker_choices(None);
     render(&BrokerFormsPage {
@@ -586,17 +583,7 @@ pub async fn admin_list(
     let (state_sets, local_sets): (Vec<_>, Vec<_>) =
         sets.into_iter().partition(|s| s.scope == "state");
 
-    let info = crate::billing::header_info_for_user(&state, &user).await;
-    let header = AppHeader::new(
-        &user.name,
-        &user.email,
-        user.role,
-        &info.brokerage_name,
-        "admin",
-    )
-    .with_super_admin(true)
-    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
-    .with_banner(info.banner);
+    let header = crate::controllers::common::build_app_header(&state, &user, "admin").await;
 
     render(&AdminFormsPage {
         app_name: &state.config.app_name,
@@ -771,17 +758,7 @@ pub async fn admin_set_detail(
         });
     }
 
-    let info = crate::billing::header_info_for_user(&state, &user).await;
-    let header = AppHeader::new(
-        &user.name,
-        &user.email,
-        user.role,
-        &info.brokerage_name,
-        "admin",
-    )
-    .with_super_admin(true)
-    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
-    .with_banner(info.banner);
+    let header = crate::controllers::common::build_app_header(&state, &user, "admin").await;
 
     let (picker_types, picker_sides, picker_conditions) = picker_choices(None);
     render(&AdminFormSetDetailPage {
@@ -818,6 +795,9 @@ pub async fn admin_add_group(
         return Err(AppError::invalid("Group name is required."));
     }
     let set_id = RecordId::new("form_set", key.as_str());
+    // Refuse to RELATE a child into a dangling parent — otherwise a
+    // stale URL silently creates orphan groups under a missing set.
+    assert_set_exists(&state.db, &set_id).await?;
     let sort_order = input.sort_order.unwrap_or(50);
     let created: Option<CreatedForm> = state
         .db
@@ -917,7 +897,13 @@ pub async fn admin_add_form(
     if code.is_empty() || name.is_empty() {
         return Err(AppError::invalid("Form code and name are required."));
     }
-    let group_id = RecordId::new("form_group", input.group_key.trim());
+    // Confirm the chosen group actually belongs to this set — stops
+    // SuperAdmin URL-mismatch errors from attaching a form to a group
+    // in an unrelated set.
+    let set_id = RecordId::new("form_set", key.as_str());
+    let group_key = input.group_key.trim();
+    assert_groups_in_set(&state.db, &set_id, &[group_key]).await?;
+    let group_id = RecordId::new("form_group", group_key);
     let required = matches!(input.required.as_deref(), Some("1" | "true" | "on" | "yes"));
     let (applies_types, applies_sides, applies_conditions) =
         applies_or_all(&input.applies_picker());
@@ -963,17 +949,109 @@ pub struct ReorderInput {
     pub order: String,
 }
 
+/// Verify that every group key in `keys` belongs to `set_id` via
+/// `set->has_group->form_group`. Returns `AppError::NotFound` if even
+/// one key is foreign — that closes the door on a SuperAdmin (or a
+/// crafted request) reaching into an unrelated set's groups by URL
+/// manipulation. Empty input is a no-op.
+async fn assert_groups_in_set(
+    db: &crate::state::Db,
+    set_id: &RecordId,
+    keys: &[&str],
+) -> Result<(), AppError> {
+    if keys.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<RecordId> = keys
+        .iter()
+        .map(|k| RecordId::new("form_group", *k))
+        .collect();
+    let mut q = db
+        .query(
+            "SELECT count() FROM $s->has_group->form_group \
+             WHERE id IN $ids GROUP ALL",
+        )
+        .bind(("s", set_id.clone()))
+        .bind(("ids", ids.clone()))
+        .await?;
+    #[derive(Debug, Deserialize, SurrealValue)]
+    struct Counted {
+        count: i64,
+    }
+    let row: Option<Counted> = q.take(0)?;
+    let found = row.map(|r| r.count).unwrap_or(0);
+    if found as usize != ids.len() {
+        return Err(AppError::NotFound);
+    }
+    Ok(())
+}
+
+/// Verify that every form key in `keys` belongs to `set_id`
+/// transitively via `set->has_group->form_group->has_form->form`.
+/// Same rationale as [`assert_groups_in_set`] — keeps each set's
+/// hierarchy tamper-proof from URL/form-body fuzzing.
+async fn assert_forms_in_set(
+    db: &crate::state::Db,
+    set_id: &RecordId,
+    keys: &[&str],
+) -> Result<(), AppError> {
+    if keys.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<RecordId> = keys.iter().map(|k| RecordId::new("form", *k)).collect();
+    let mut q = db
+        .query(
+            "SELECT count() FROM $s->has_group->form_group->has_form->form \
+             WHERE id IN $ids GROUP ALL",
+        )
+        .bind(("s", set_id.clone()))
+        .bind(("ids", ids.clone()))
+        .await?;
+    #[derive(Debug, Deserialize, SurrealValue)]
+    struct Counted {
+        count: i64,
+    }
+    let row: Option<Counted> = q.take(0)?;
+    let found = row.map(|r| r.count).unwrap_or(0);
+    if found as usize != ids.len() {
+        return Err(AppError::NotFound);
+    }
+    Ok(())
+}
+
+/// Confirm the set itself exists so we don't `RELATE` a child into a
+/// dangling parent when an admin pastes a stale key.
+async fn assert_set_exists(db: &crate::state::Db, set_id: &RecordId) -> Result<(), AppError> {
+    let mut q = db
+        .query("SELECT VALUE id FROM ONLY $s")
+        .bind(("s", set_id.clone()))
+        .await?;
+    let exists: Option<RecordId> = q.take(0)?;
+    if exists.is_none() {
+        return Err(AppError::NotFound);
+    }
+    Ok(())
+}
+
 /// Persist a new group order within a set: each `form_group`'s
 /// `sort_order` becomes its index in the dropped sequence. Returns 204
 /// (the client already moved the DOM; it only needs success/failure).
 pub async fn admin_reorder_groups(
     State(state): State<AppState>,
     SuperAdmin(_user): SuperAdmin,
-    Path(_set_key): Path<String>,
+    Path(set_key): Path<String>,
     Form(input): Form<ReorderInput>,
 ) -> Result<axum::http::StatusCode, AppError> {
-    for (i, key) in input.order.split(',').filter(|s| !s.is_empty()).enumerate() {
-        let gid = RecordId::new("form_group", key);
+    let set_id = RecordId::new("form_set", set_key.as_str());
+    let keys: Vec<&str> = input
+        .order
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    assert_groups_in_set(&state.db, &set_id, &keys).await?;
+    for (i, key) in keys.iter().enumerate() {
+        let gid = RecordId::new("form_group", *key);
         state
             .db
             .query("UPDATE $g SET sort_order = $o")
@@ -989,11 +1067,19 @@ pub async fn admin_reorder_groups(
 pub async fn admin_reorder_forms(
     State(state): State<AppState>,
     SuperAdmin(_user): SuperAdmin,
-    Path(_set_key): Path<String>,
+    Path(set_key): Path<String>,
     Form(input): Form<ReorderInput>,
 ) -> Result<axum::http::StatusCode, AppError> {
-    for (i, key) in input.order.split(',').filter(|s| !s.is_empty()).enumerate() {
-        let fid = RecordId::new("form", key);
+    let set_id = RecordId::new("form_set", set_key.as_str());
+    let keys: Vec<&str> = input
+        .order
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    assert_forms_in_set(&state.db, &set_id, &keys).await?;
+    for (i, key) in keys.iter().enumerate() {
+        let fid = RecordId::new("form", *key);
         state
             .db
             .query("UPDATE $f SET form_order = $o")
@@ -1015,6 +1101,8 @@ pub async fn admin_toggle_form(
     SuperAdmin(_user): SuperAdmin,
     Path(p): Path<ToggleFormPath>,
 ) -> Result<Redirect, AppError> {
+    let set_id = RecordId::new("form_set", p.key.as_str());
+    assert_forms_in_set(&state.db, &set_id, &[p.form_key.as_str()]).await?;
     let form_id = RecordId::new("form", p.form_key.as_str());
     state
         .db
@@ -1035,6 +1123,9 @@ pub async fn admin_edit_form(
     SuperAdmin(user): SuperAdmin,
     Path(p): Path<ToggleFormPath>,
 ) -> Result<axum::response::Html<String>, AppError> {
+    let set_id = RecordId::new("form_set", p.key.as_str());
+    assert_forms_in_set(&state.db, &set_id, &[p.form_key.as_str()]).await?;
+
     #[derive(Debug, Deserialize, SurrealValue)]
     struct LoadedForm {
         code: String,
@@ -1070,17 +1161,7 @@ pub async fn admin_edit_form(
     let set_meta: Option<SetMeta> = sq.take(0)?;
     let set_name = set_meta.map(|s| s.name).unwrap_or_default();
 
-    let info = crate::billing::header_info_for_user(&state, &user).await;
-    let header = AppHeader::new(
-        &user.name,
-        &user.email,
-        user.role,
-        &info.brokerage_name,
-        "admin",
-    )
-    .with_super_admin(true)
-    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
-    .with_banner(info.banner);
+    let header = crate::controllers::common::build_app_header(&state, &user, "admin").await;
 
     let (picker_types, picker_sides, picker_conditions) = picker_choices(Some((
         &form.applies_types,
@@ -1177,6 +1258,9 @@ pub async fn admin_update_form(
     Path(p): Path<ToggleFormPath>,
     Form(input): Form<EditAdminFormInput>,
 ) -> Result<Redirect, AppError> {
+    let set_id = RecordId::new("form_set", p.key.as_str());
+    assert_forms_in_set(&state.db, &set_id, &[p.form_key.as_str()]).await?;
+
     let name = input.name.trim().to_string();
     if name.is_empty() {
         return Err(AppError::invalid("Form name is required."));

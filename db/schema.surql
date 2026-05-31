@@ -205,6 +205,7 @@ DEFINE FIELD OVERWRITE token      ON invitation TYPE string ASSERT string::len($
 DEFINE FIELD OVERWRITE brokerage  ON invitation TYPE record<brokerage>;
 DEFINE FIELD OVERWRITE invited_by ON invitation TYPE record<user>;
 DEFINE FIELD OVERWRITE accepted   ON invitation TYPE bool DEFAULT false;
+DEFINE FIELD OVERWRITE declined   ON invitation TYPE bool DEFAULT false;
 DEFINE FIELD OVERWRITE created_at ON invitation TYPE datetime DEFAULT time::now();
 DEFINE INDEX OVERWRITE idx_invitation_token ON invitation FIELDS token UNIQUE;
 
@@ -326,10 +327,12 @@ DEFINE FIELD OVERWRITE kind ON audit_event TYPE string
         "signup_blocked_duplicate", "verify_success", "verify_failure",
         "login_success", "login_failure", "login_blocked_unverified",
         "logout", "invite_sent", "invite_resent", "invite_cancelled",
-        "invite_accepted", "admin_view",
+        "invite_accepted", "invite_declined", "admin_view",
         "document_deleted",
         "profile_updated", "password_changed", "avatar_updated",
         "brokerage_deleted", "transaction_deleted",
+        "transaction_reassigned",
+        "member_removed",
         "tier_created", "tier_updated",
         "brokerage_comp_granted", "brokerage_comp_revoked"
     ];

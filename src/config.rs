@@ -110,6 +110,52 @@ impl StripeConfig {
 }
 
 impl Config {
+    /// Minimal test config — every external integration disabled so
+    /// the AppState built from this config doesn't reach off-host:
+    /// Stripe client is None, Resend client is None, S3 endpoint is
+    /// a non-routable address. PoW disabled. Suitable for
+    /// `tower::ServiceExt::oneshot`-style HTTP tests.
+    #[cfg(test)]
+    pub fn for_tests() -> Self {
+        Self {
+            app_name: "TransactVault Test".into(),
+            base_url: "http://test.local".into(),
+            host: "127.0.0.1".into(),
+            port: 0,
+            pretty_logs: false,
+            surreal_url: "mem://".into(),
+            surreal_user: String::new(),
+            surreal_pass: String::new(),
+            surreal_ns: "test".into(),
+            surreal_db: "test".into(),
+            jwt_secret: "test-jwt-secret-at-least-32-chars-long".into(),
+            jwt_expiry_hours: 24,
+            super_admin_emails: vec!["admin@test".into()],
+            verification_expiry_hours: 24,
+            pow_difficulty_bits: 0,
+            signup_rate_per_hour: 1000,
+            login_rate_per_quarter_hour: 1000,
+            dev_reset_on_boot: false,
+            rustfs: RustFsConfig {
+                endpoint: "http://127.0.0.1:1".into(),
+                region: "us-east-1".into(),
+                access_key: "test".into(),
+                secret_key: "test".into(),
+                bucket: "test".into(),
+            },
+            email: EmailConfig {
+                api_key: String::new(),
+                from: "test@test.local".into(),
+                reply_to: None,
+            },
+            stripe: StripeConfig {
+                secret_key: String::new(),
+                webhook_secret: String::new(),
+                trial_days: 14,
+            },
+        }
+    }
+
     /// Read every setting from the process environment. Missing values fall
     /// back to development defaults, but `JWT_SECRET` must be overridden in
     /// any shared/production deployment.

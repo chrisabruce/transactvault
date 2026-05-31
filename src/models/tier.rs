@@ -19,23 +19,40 @@ use surrealdb::types::{RecordId, SurrealValue};
 #[allow(dead_code)]
 pub const UNLIMITED: i64 = -1;
 
+/// A pricing tier. Mirrors a Stripe Product + (primary) Price + an
+/// optional metered overage Price. The `slug` is the join key with
+/// `brokerage.plan`; `transaction_limit` + `overage_fee_cents_per_tx`
+/// drive [`crate::billing::enforce_transaction_limit`].
 #[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
 pub struct Tier {
     pub id: RecordId,
+    /// URL-safe identifier matching `brokerage.plan`. Stable across
+    /// renames; the human-facing `name` can drift independently.
     pub slug: String,
     pub name: String,
     pub description: String,
     pub feature_bullets: Vec<String>,
+    /// Monthly base price in cents; `0` for a free tier. Use
+    /// [`Self::price_display`] for the rendered string.
     pub price_cents: i64,
+    /// Stripe Product id. Populated when the tier is created if
+    /// Stripe is configured; `None` otherwise (the tier still
+    /// exists but can't be subscribed to).
     pub stripe_product_id: Option<String>,
     pub stripe_price_id: Option<String>,
     /// Second Stripe Price (metered) used to bill per-transaction
     /// overage. `None` if the tier hard-blocks at the limit instead.
     pub stripe_overage_price_id: Option<String>,
+    /// Per-tier cap. [`UNLIMITED`] (`-1`) means no cap.
     pub user_limit: i64,
+    /// Per-month transaction-create cap. [`UNLIMITED`] (`-1`) means
+    /// no cap. Combined with `overage_fee_cents_per_tx` the gate
+    /// either blocks or charges overage.
     pub transaction_limit: i64,
     pub overage_fee_cents_per_tx: Option<i64>,
     pub is_active: bool,
+    /// Archived tiers stay in the DB so existing subscribers keep
+    /// their grandfathered plan; new brokerages can't pick them.
     pub is_archived: bool,
     pub sort_order: i64,
     pub created_at: DateTime<Utc>,

@@ -120,6 +120,32 @@ pub struct VerifyResultPage<'a> {
     pub message: &'a str,
 }
 
+/// Landing for an authenticated user with no `works_at` edge —
+/// "you're not at any brokerage yet" plus any pending invites they can
+/// accept/decline. `redirect_now=true` is a sentinel for "the user
+/// actually has a brokerage; the template just bounces to /app" so the
+/// handler doesn't need a second response shape.
+#[derive(Template)]
+#[template(path = "pages/no_brokerage.html")]
+pub struct NoBrokeragePage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+    pub signed_in: bool,
+    pub user_name: &'a str,
+    pub user_email: &'a str,
+    pub invitations: Vec<NoBrokerageInvite>,
+    pub redirect_now: bool,
+}
+
+/// One pending invitation row on the no-brokerage landing.
+#[derive(Debug, Clone)]
+pub struct NoBrokerageInvite {
+    pub token: String,
+    pub role: String,
+    pub brokerage_name: String,
+    pub inviter_name: String,
+}
+
 #[derive(Template)]
 #[template(path = "pages/invite.html")]
 pub struct InvitePage<'a> {
@@ -130,6 +156,10 @@ pub struct InvitePage<'a> {
     pub brokerage_name: &'a str,
     pub inviter_name: &'a str,
     pub error: Option<&'a str>,
+    /// When true, hide the name+password form and show a "sign in to
+    /// accept" CTA instead — the recipient already has an account so
+    /// they should authenticate and accept from `/app/no-brokerage`.
+    pub prompt_login: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -137,13 +167,17 @@ pub struct InvitePage<'a> {
 // ---------------------------------------------------------------------------
 
 /// Per-page header data reused across every authenticated template.
-pub struct AppHeader<'a> {
-    pub user_name: &'a str,
-    pub user_email: &'a str,
+/// Owns its strings so callers can build it from short-lived borrows
+/// (`info.brokerage_name` is owned by the temporary `HeaderInfo`
+/// returned by [`crate::billing::header_info_for_user`]) without
+/// fighting lifetimes.
+pub struct AppHeader {
+    pub user_name: String,
+    pub user_email: String,
     pub user_initials: String,
     pub role: Role,
-    pub brokerage_name: &'a str,
-    pub active_nav: &'a str,
+    pub brokerage_name: String,
+    pub active_nav: String,
     pub is_super_admin: bool,
     /// URL-safe key for the signed-in user, used to compose the avatar
     /// URL `/app/users/{user_key}/avatar` for the header dropdown.
@@ -157,21 +191,22 @@ pub struct AppHeader<'a> {
     pub banner: Option<crate::billing::SubscriptionBanner>,
 }
 
-impl<'a> AppHeader<'a> {
+impl AppHeader {
     pub fn new(
-        user_name: &'a str,
-        user_email: &'a str,
+        user_name: impl Into<String>,
+        user_email: impl Into<String>,
         role: Role,
-        brokerage_name: &'a str,
-        active_nav: &'a str,
+        brokerage_name: impl Into<String>,
+        active_nav: impl Into<String>,
     ) -> Self {
+        let user_name = user_name.into();
         Self {
+            user_initials: initials(&user_name),
             user_name,
-            user_email,
-            user_initials: initials(user_name),
+            user_email: user_email.into(),
             role,
-            brokerage_name,
-            active_nav,
+            brokerage_name: brokerage_name.into(),
+            active_nav: active_nav.into(),
             is_super_admin: false,
             user_key: String::new(),
             has_avatar: false,
@@ -217,13 +252,36 @@ pub fn initials(name: &str) -> String {
 // App: transactions
 // ---------------------------------------------------------------------------
 
+/// Unassigned-transactions view + mass-reassign form. Renders only the
+/// transactions in the broker's brokerage that currently have no
+/// `owns` edge (e.g. left orphaned after an agent was removed).
+#[derive(Template)]
+#[template(path = "pages/unassigned.html")]
+pub struct UnassignedPage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+    pub signed_in: bool,
+    pub header: AppHeader,
+    pub transactions: Vec<Transaction>,
+    pub assignees: Vec<UnassignedAssignee>,
+}
+
+/// One option in the mass-reassign dropdown — every active member of
+/// the broker's brokerage.
+#[derive(Debug, Clone)]
+pub struct UnassignedAssignee {
+    pub key: String,
+    pub name: String,
+    pub role_label: String,
+}
+
 #[derive(Template)]
 #[template(path = "pages/transactions_list.html")]
 pub struct TransactionsListPage<'a> {
     pub app_name: &'a str,
     pub base_url: &'a str,
     pub signed_in: bool,
-    pub header: AppHeader<'a>,
+    pub header: AppHeader,
     /// First page of rows (subsequent pages stream in via the
     /// infinite-scroll fragment endpoint).
     pub transactions: Vec<Transaction>,
@@ -279,7 +337,7 @@ pub struct TransactionNewPage<'a> {
     pub app_name: &'a str,
     pub base_url: &'a str,
     pub signed_in: bool,
-    pub header: AppHeader<'a>,
+    pub header: AppHeader,
     pub error: Option<&'a str>,
     pub statuses: Vec<TransactionStatus>,
     pub types: Vec<TransactionType>,
@@ -293,7 +351,7 @@ pub struct ProfilePage<'a> {
     pub app_name: &'a str,
     pub base_url: &'a str,
     pub signed_in: bool,
-    pub header: AppHeader<'a>,
+    pub header: AppHeader,
     pub name: &'a str,
     pub email: &'a str,
     pub user_key: String,
@@ -308,7 +366,7 @@ pub struct TransactionEditPage<'a> {
     pub app_name: &'a str,
     pub base_url: &'a str,
     pub signed_in: bool,
-    pub header: AppHeader<'a>,
+    pub header: AppHeader,
     pub transaction: Transaction,
     pub transaction_key: String,
     pub statuses: Vec<TransactionStatus>,
@@ -329,7 +387,7 @@ pub struct TransactionShowPage<'a> {
     pub app_name: &'a str,
     pub base_url: &'a str,
     pub signed_in: bool,
-    pub header: AppHeader<'a>,
+    pub header: AppHeader,
     pub transaction: Transaction,
     pub transaction_key: String,
     pub compliance: CompliancePanel,
@@ -530,7 +588,7 @@ pub struct TeamPage<'a> {
     pub app_name: &'a str,
     pub base_url: &'a str,
     pub signed_in: bool,
-    pub header: AppHeader<'a>,
+    pub header: AppHeader,
     pub members: Vec<Member>,
     pub pending: Vec<Invitation>,
     pub invite_error: Option<&'a str>,
@@ -583,7 +641,7 @@ pub struct BrokerageAuditPage<'a> {
     pub app_name: &'a str,
     pub base_url: &'a str,
     pub signed_in: bool,
-    pub header: AppHeader<'a>,
+    pub header: AppHeader,
     pub events: Vec<AuditEvent>,
     pub kind_filter: String,
     pub query: String,
@@ -613,7 +671,7 @@ pub struct BrokerageDeletePage<'a> {
     pub app_name: &'a str,
     pub base_url: &'a str,
     pub signed_in: bool,
-    pub header: AppHeader<'a>,
+    pub header: AppHeader,
     pub brokerage_name: String,
     pub user_count: usize,
     pub transaction_count: usize,
@@ -632,7 +690,7 @@ pub struct SearchPage<'a> {
     pub app_name: &'a str,
     pub base_url: &'a str,
     pub signed_in: bool,
-    pub header: AppHeader<'a>,
+    pub header: AppHeader,
     pub query: &'a str,
     /// Selected status filter (matches the transactions list dropdown).
     pub status_filter: &'a str,
@@ -660,7 +718,7 @@ pub struct AdminUsersPage<'a> {
     pub app_name: &'a str,
     pub base_url: &'a str,
     pub signed_in: bool,
-    pub header: AppHeader<'a>,
+    pub header: AppHeader,
     pub users: Vec<AdminUser>,
     pub total: usize,
     pub verified_count: usize,
@@ -675,7 +733,7 @@ pub struct AdminAuditPage<'a> {
     pub app_name: &'a str,
     pub base_url: &'a str,
     pub signed_in: bool,
-    pub header: AppHeader<'a>,
+    pub header: AppHeader,
     pub events: Vec<AuditEvent>,
     pub kind_filter: String,
     pub query: String,
@@ -688,7 +746,7 @@ pub struct AdminTiersPage<'a> {
     pub app_name: &'a str,
     pub base_url: &'a str,
     pub signed_in: bool,
-    pub header: AppHeader<'a>,
+    pub header: AppHeader,
     pub tiers: Vec<crate::models::Tier>,
     pub stripe_enabled: bool,
     pub flash: Option<&'a str>,
@@ -700,7 +758,7 @@ pub struct AdminTierEditPage<'a> {
     pub app_name: &'a str,
     pub base_url: &'a str,
     pub signed_in: bool,
-    pub header: AppHeader<'a>,
+    pub header: AppHeader,
     /// `None` when rendering the "new tier" form; `Some` when editing.
     pub existing: Option<crate::models::Tier>,
     pub stripe_enabled: bool,
@@ -713,7 +771,7 @@ pub struct AdminBrokeragesPage<'a> {
     pub app_name: &'a str,
     pub base_url: &'a str,
     pub signed_in: bool,
-    pub header: AppHeader<'a>,
+    pub header: AppHeader,
     pub rows: Vec<AdminBrokerageRow>,
     /// Brokerages past their 60-day wind-down purge window. Rendered
     /// as a separate "pending deletion" section above the main list so
@@ -737,7 +795,7 @@ pub struct AdminBrokerageDetailPage<'a> {
     pub app_name: &'a str,
     pub base_url: &'a str,
     pub signed_in: bool,
-    pub header: AppHeader<'a>,
+    pub header: AppHeader,
     pub brokerage_key: String,
     pub brokerage_name: String,
     pub plan_slug: String,
@@ -781,7 +839,7 @@ pub struct BrokerFormsPage<'a> {
     pub app_name: &'a str,
     pub base_url: &'a str,
     pub signed_in: bool,
-    pub header: AppHeader<'a>,
+    pub header: AppHeader,
     pub state_name: String,
     pub localities: Vec<FormSetOption>,
     pub master_forms: Vec<BrokerFormRow>,
@@ -817,7 +875,7 @@ pub struct AdminFormsPage<'a> {
     pub app_name: &'a str,
     pub base_url: &'a str,
     pub signed_in: bool,
-    pub header: AppHeader<'a>,
+    pub header: AppHeader,
     pub state_sets: Vec<AdminFormSetRow>,
     pub local_sets: Vec<AdminFormSetRow>,
 }
@@ -838,7 +896,7 @@ pub struct AdminFormSetDetailPage<'a> {
     pub app_name: &'a str,
     pub base_url: &'a str,
     pub signed_in: bool,
-    pub header: AppHeader<'a>,
+    pub header: AppHeader,
     pub set_key: String,
     pub set_name: String,
     pub set_scope: String,
@@ -873,7 +931,7 @@ pub struct AdminFormEditPage<'a> {
     pub app_name: &'a str,
     pub base_url: &'a str,
     pub signed_in: bool,
-    pub header: AppHeader<'a>,
+    pub header: AppHeader,
     pub set_key: String,
     pub set_name: String,
     pub form_key: String,

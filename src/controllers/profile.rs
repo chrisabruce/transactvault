@@ -15,10 +15,9 @@ use serde::Deserialize;
 use crate::audit;
 use crate::auth::{CurrentUser, hash_password, verify_password};
 use crate::controllers::render;
-use crate::controllers::transactions::load_brokerage;
 use crate::error::AppError;
 use crate::state::AppState;
-use crate::templates::{AppHeader, ProfilePage};
+use crate::templates::ProfilePage;
 
 /// Hard cap on a raw avatar upload before cropping client-side. Real
 /// avatars are tens of KB after the canvas re-encodes to PNG, but the
@@ -318,17 +317,7 @@ async fn render_profile(
     profile_error: Option<&str>,
     password_error: Option<&str>,
 ) -> Result<Html<String>, AppError> {
-    let brokerage = load_brokerage(state, user).await?;
-    let header = AppHeader::new(
-        &user.name,
-        &user.email,
-        user.role,
-        &brokerage.name,
-        "profile",
-    )
-    .with_super_admin(crate::controllers::is_super_admin(state, user))
-    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
-    .with_banner(crate::billing::banner_for(&brokerage));
+    let header = crate::controllers::common::build_app_header(state, user, "profile").await;
 
     render(&ProfilePage {
         app_name: &state.config.app_name,

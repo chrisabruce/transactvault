@@ -22,7 +22,7 @@ use crate::models::Brokerage;
 use crate::state::AppState;
 use crate::templates::{
     AdminAuditPage, AdminBrokerageMember, AdminBrokerageRow, AdminBrokeragesPage, AdminUser,
-    AdminUsersPage, AppHeader,
+    AdminUsersPage,
 };
 
 #[derive(Debug, Deserialize)]
@@ -95,18 +95,7 @@ pub async fn users(
     let total = rows.len();
     let verified_count = rows.iter().filter(|r| r.email_verified).count();
     let unverified_count = total - verified_count;
-    let info = crate::billing::header_info_for_user(&state, &user).await;
-
-    let header = AppHeader::new(
-        &user.name,
-        &user.email,
-        user.role,
-        &info.brokerage_name,
-        "admin",
-    )
-    .with_super_admin(true)
-    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
-    .with_banner(info.banner);
+    let header = crate::controllers::common::build_app_header(&state, &user, "admin").await;
     render(&AdminUsersPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
@@ -219,17 +208,7 @@ pub async fn brokerages(
         })
         .collect();
 
-    let info = crate::billing::header_info_for_user(&state, &user).await;
-    let header = AppHeader::new(
-        &user.name,
-        &user.email,
-        user.role,
-        &info.brokerage_name,
-        "admin",
-    )
-    .with_super_admin(true)
-    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
-    .with_banner(info.banner);
+    let header = crate::controllers::common::build_app_header(&state, &user, "admin").await;
 
     let total_brokerages = rows.len() as u64;
     render(&AdminBrokeragesPage {
@@ -325,17 +304,7 @@ pub async fn brokerage_detail(
         .await?;
     let recent_events: Vec<crate::models::AuditEvent> = aq.take(0).unwrap_or_default();
 
-    let info = crate::billing::header_info_for_user(&state, &user).await;
-    let header = AppHeader::new(
-        &user.name,
-        &user.email,
-        user.role,
-        &info.brokerage_name,
-        "admin",
-    )
-    .with_super_admin(true)
-    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
-    .with_banner(info.banner);
+    let header = crate::controllers::common::build_app_header(&state, &user, "admin").await;
 
     // Pre-format every timestamp so the template is purely
     // presentational. `None` stays as the empty Option — the
@@ -428,18 +397,7 @@ pub async fn audit_log(
         });
     }
 
-    let info = crate::billing::header_info_for_user(&state, &user).await;
-
-    let header = AppHeader::new(
-        &user.name,
-        &user.email,
-        user.role,
-        &info.brokerage_name,
-        "admin",
-    )
-    .with_super_admin(true)
-    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
-    .with_banner(info.banner);
+    let header = crate::controllers::common::build_app_header(&state, &user, "admin").await;
     render(&AdminAuditPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,

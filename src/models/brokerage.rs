@@ -1,9 +1,19 @@
 //! `brokerage` table — the tenant account.
+//!
+//! One brokerage = one isolated workspace. Users join via the
+//! `works_at` graph edge; transactions and forms attach via
+//! `has_transaction` / `uses_state` / `uses_locality`. Every authz
+//! check ultimately comes down to "does this brokerage own that
+//! record?" so the [`Brokerage`] row's id is the universal tenant
+//! scope marker.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use surrealdb::types::{RecordId, SurrealValue};
 
+/// The tenant account. Holds Stripe state + the admin-toggleable
+/// complimentary override. Created on signup (one per signup) and
+/// outlives most of its members — users come and go via `works_at`.
 #[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
 pub struct Brokerage {
     pub id: RecordId,
@@ -47,6 +57,8 @@ pub struct Brokerage {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Minimal payload for creating a brokerage during signup. Stripe ids
+/// + subscription state are populated later when the broker subscribes.
 #[derive(Debug, Clone, Serialize, SurrealValue)]
 pub struct NewBrokerage {
     pub name: String,

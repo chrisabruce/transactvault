@@ -17,8 +17,8 @@ use tower_http::trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse, Tr
 use tracing::Level;
 
 use crate::controllers::{
-    admin, auth, checklists, comments, documents, forms, health, marketing, members, profile,
-    subscribe, tiers, transactions, webhooks,
+    admin, auth, checklists, comments, documents, forms, health, marketing, members, orphan,
+    profile, subscribe, tiers, transactions, webhooks,
 };
 use crate::state::AppState;
 
@@ -49,6 +49,11 @@ pub fn build(state: AppState) -> Router {
             get(transactions::list).post(transactions::create),
         )
         .route("/app/transactions/new", get(transactions::new_form))
+        .route(
+            "/app/transactions/unassigned",
+            get(transactions::unassigned_list),
+        )
+        .route("/app/transactions/reassign", post(transactions::reassign))
         .route("/app/transactions/{id}", get(transactions::show))
         .route(
             "/app/transactions/{id}/edit",
@@ -86,6 +91,7 @@ pub fn build(state: AppState) -> Router {
             post(members::cancel_invite),
         )
         .route("/app/team/{user_id}/role", post(members::change_role))
+        .route("/app/team/{user_id}/remove", post(members::remove_member))
         .route("/app/team/audit", get(members::audit_log))
         .route(
             "/app/team/delete-brokerage",
@@ -98,6 +104,9 @@ pub fn build(state: AppState) -> Router {
         .route("/app/users/{key}/avatar", get(profile::serve_avatar))
         .route("/app/subscribe/{slug}", get(subscribe::subscribe))
         .route("/app/billing/portal", get(subscribe::portal))
+        .route("/app/no-brokerage", get(orphan::landing))
+        .route("/app/invites/{token}/accept", post(orphan::accept))
+        .route("/app/invites/{token}/decline", post(orphan::decline))
         .route("/app/forms", get(forms::broker_forms))
         .route("/app/forms/locality", post(forms::set_locality))
         .route("/app/forms/hide/{key}", post(forms::toggle_hide))

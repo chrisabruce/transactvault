@@ -5,6 +5,14 @@
 //! (b) for agents, they also have an outbound `owns` edge to it.
 //! Brokers and coordinators see every transaction in their brokerage.
 
+// SurrealDB's `RecordId` has interior mutability through its lazily-init
+// regex caches, which trips clippy's `mutable_key_type` lint when it's
+// used as a `HashMap` / `HashSet` key. Hash + Eq are still deterministic
+// (computed from the table + key fields, not the cache state), so the
+// lint is a false positive for our usage — silence it module-wide so the
+// batched-query helpers can keep building tx-id-keyed maps.
+#![allow(clippy::mutable_key_type)]
+
 use axum::Form;
 use axum::extract::{Path, Query, State};
 use axum::response::{Html, IntoResponse, Redirect, Response};
@@ -21,9 +29,9 @@ use crate::models::{
 };
 use crate::state::AppState;
 use crate::templates::{
-    AppHeader, ChecklistGroup, ChecklistRow, CommentView, CompliancePanel, SearchDocument,
-    SearchPage, TransactionEditPage, TransactionNewPage, TransactionRowsFragment,
-    TransactionShowPage, TransactionsListPage,
+    ChecklistGroup, ChecklistRow, CommentView, CompliancePanel, SearchDocument, SearchPage,
+    TransactionEditPage, TransactionNewPage, TransactionRowsFragment, TransactionShowPage,
+    TransactionsListPage, UnassignedAssignee, UnassignedPage,
 };
 
 /// Default page size for the transactions list. Tuned for first-paint
@@ -186,7 +194,6 @@ pub async fn list(
     user: CurrentUser,
     Query(filters): Query<ListFilters>,
 ) -> Result<Html<String>, AppError> {
-    let brokerage = load_brokerage(&state, &user).await?;
     let mut transactions = load_visible_transactions(&state, &user).await?;
 
     // Stat-grid totals are computed on the FULL visible set, before any
@@ -305,16 +312,7 @@ pub async fn list(
 
     // Mounted at both `/app` and `/app/transactions`; same view, same
     // nav highlight — Transactions is the canonical entry point.
-    let header = AppHeader::new(
-        &user.name,
-        &user.email,
-        user.role,
-        &brokerage.name,
-        "transactions",
-    )
-    .with_super_admin(crate::controllers::is_super_admin(&state, &user))
-    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
-    .with_banner(crate::billing::banner_for(&brokerage));
+    let header = crate::controllers::common::build_app_header(&state, &user, "transactions").await;
     let active_filter = derive_active_filter(&status_filter, attention_on);
 
     render(&TransactionsListPage {
@@ -504,17 +502,7 @@ pub async fn new_form(
     State(state): State<AppState>,
     user: CurrentUser,
 ) -> Result<Html<String>, AppError> {
-    let brokerage = load_brokerage(&state, &user).await?;
-    let header = AppHeader::new(
-        &user.name,
-        &user.email,
-        user.role,
-        &brokerage.name,
-        "transactions",
-    )
-    .with_super_admin(crate::controllers::is_super_admin(&state, &user))
-    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
-    .with_banner(crate::billing::banner_for(&brokerage));
+    let header = crate::controllers::common::build_app_header(&state, &user, "transactions").await;
     render(&TransactionNewPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
@@ -693,7 +681,6 @@ pub async fn show(
     user: CurrentUser,
     Path(id): Path<String>,
 ) -> Result<Html<String>, AppError> {
-    let brokerage = load_brokerage(&state, &user).await?;
     let tx_id = RecordId::new("transaction", id.as_str());
     let tx = authorize_transaction(&state, &user, &tx_id).await?;
 
@@ -703,16 +690,7 @@ pub async fn show(
     let available_forms = available_forms(&groups);
     let transaction_comments = load_comments(&state, &tx.id).await?;
 
-    let header = AppHeader::new(
-        &user.name,
-        &user.email,
-        user.role,
-        &brokerage.name,
-        "transactions",
-    )
-    .with_super_admin(crate::controllers::is_super_admin(&state, &user))
-    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
-    .with_banner(crate::billing::banner_for(&brokerage));
+    let header = crate::controllers::common::build_app_header(&state, &user, "transactions").await;
     let tx_key = crate::db::record_key(&tx.id);
     let can_review = user.role.can_review();
     render(&TransactionShowPage {
@@ -848,7 +826,6 @@ pub async fn edit_form(
     user: CurrentUser,
     Path(id): Path<String>,
 ) -> Result<Html<String>, AppError> {
-    let brokerage = load_brokerage(&state, &user).await?;
     let tx_id = RecordId::new("transaction", id.as_str());
     let tx = authorize_transaction(&state, &user, &tx_id).await?;
 
@@ -863,16 +840,7 @@ pub async fn edit_form(
 
     let dropdowns_locked = any_item_reviewed(&state, &tx.id).await?;
 
-    let header = AppHeader::new(
-        &user.name,
-        &user.email,
-        user.role,
-        &brokerage.name,
-        "transactions",
-    )
-    .with_super_admin(crate::controllers::is_super_admin(&state, &user))
-    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
-    .with_banner(crate::billing::banner_for(&brokerage));
+    let header = crate::controllers::common::build_app_header(&state, &user, "transactions").await;
     let tx_key = crate::db::record_key(&tx.id);
     render(&TransactionEditPage {
         app_name: &state.config.app_name,
@@ -1244,7 +1212,6 @@ pub async fn search(
     user: CurrentUser,
     Query(input): Query<SearchInput>,
 ) -> Result<Html<String>, AppError> {
-    let brokerage = load_brokerage(&state, &user).await?;
     let query = input.q.unwrap_or_default();
     let needle = query.trim().to_ascii_lowercase();
     let status_filter = input.status.clone().unwrap_or_default();
@@ -1293,16 +1260,7 @@ pub async fn search(
 
     let sort_headers = build_search_sort_headers(&query, &status_filter, sort_key, sort_dir);
 
-    let header = AppHeader::new(
-        &user.name,
-        &user.email,
-        user.role,
-        &brokerage.name,
-        "search",
-    )
-    .with_super_admin(crate::controllers::is_super_admin(&state, &user))
-    .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
-    .with_banner(crate::billing::banner_for(&brokerage));
+    let header = crate::controllers::common::build_app_header(&state, &user, "search").await;
     render(&SearchPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
@@ -1421,6 +1379,28 @@ pub(crate) async fn load_visible_transactions(
     Ok(transactions)
 }
 
+/// Resolve a transaction record by ID after confirming the caller is
+/// allowed to see it. This is the single chokepoint every transaction
+/// mutation flows through — call it **before** any read or write that
+/// references a tx record id from URL/form input.
+///
+/// Two layers of access control, both required:
+///
+/// 1. **Brokerage scope** — the transaction must hang off the user's
+///    brokerage via the `has_transaction` edge. A foreign tx id
+///    returns [`AppError::NotFound`] (404, not 403) so cross-tenant
+///    probes can't enumerate other brokerages' record ids.
+/// 2. **Role scope** — agents must additionally have an outbound
+///    `owns` edge to the tx; brokers and coordinators
+///    ([`Role::sees_all_transactions`]) bypass this check. An agent
+///    asking about a teammate's tx gets [`AppError::Forbidden`].
+///
+/// # Errors
+///
+/// - `NotFound` — tx doesn't exist, or it does but isn't in this
+///   brokerage. Same code so the response leaks nothing.
+/// - `Forbidden` — tx exists in this brokerage but the agent doesn't
+///   own it (only reachable on the agent path).
 pub(crate) async fn authorize_transaction(
     state: &AppState,
     user: &CurrentUser,
@@ -1474,52 +1454,133 @@ async fn load_checklist(
     Ok(items)
 }
 
-#[derive(Debug, serde::Deserialize, SurrealValue)]
-struct NameOnly {
-    name: String,
-}
-
 /// Build the grouped checklist view: bucket items by group, attach
 /// per-item documents, and pre-render audit strings.
+///
+/// Every per-item lookup (documents, reviewer names, comments) used to
+/// fire one query per item — fine on small checklists but the dashboard
+/// `show` view loads ~30 items so we'd burn ~90 round-trips. This
+/// version batches each lookup into a single query and groups the
+/// results in Rust.
 async fn build_grouped_checklist(
     state: &AppState,
     items: Vec<ChecklistItem>,
     role: crate::auth::Role,
 ) -> Result<Vec<ChecklistGroup>, AppError> {
-    // Per-item documents — one query per item is fine for the volumes we
-    // expect; cheaper than a single mega-query that has to be split client-side.
-    let docs_per_item = futures::future::try_join_all(items.iter().map(|item| async {
-        let mut r = state
-            .db
-            .query("SELECT * FROM $i<-for_item<-document ORDER BY version DESC, created_at DESC")
-            .bind(("i", item.id.clone()))
-            .await?;
-        let docs: Vec<Document> = r.take(0).unwrap_or_default();
-        Ok::<Vec<Document>, AppError>(docs)
-    }))
-    .await?;
+    use std::collections::HashMap;
 
-    let audit_labels = futures::future::try_join_all(items.iter().map(|item| async move {
-        match (&item.reviewed_by, item.reviewed_at) {
+    let item_ids: Vec<RecordId> = items.iter().map(|i| i.id.clone()).collect();
+
+    // Documents: one query for every `for_item` edge across the
+    // checklist, then one query for the actual document rows.
+    let docs_per_item: HashMap<RecordId, Vec<Document>> = if item_ids.is_empty() {
+        HashMap::new()
+    } else {
+        #[derive(Debug, Deserialize, SurrealValue)]
+        struct DocEdge {
+            doc: RecordId,
+            item: RecordId,
+        }
+        let mut edge_q = state
+            .db
+            .query("SELECT in AS doc, out AS item FROM for_item WHERE out IN $items")
+            .bind(("items", item_ids.clone()))
+            .await?;
+        let edges: Vec<DocEdge> = edge_q.take(0).unwrap_or_default();
+        let doc_ids: Vec<RecordId> = edges.iter().map(|e| e.doc.clone()).collect();
+
+        let docs_by_id: HashMap<RecordId, Document> = if doc_ids.is_empty() {
+            HashMap::new()
+        } else {
+            let mut doc_q = state
+                .db
+                .query("SELECT * FROM document WHERE id IN $ids")
+                .bind(("ids", doc_ids))
+                .await?;
+            let docs: Vec<Document> = doc_q.take(0).unwrap_or_default();
+            docs.into_iter().map(|d| (d.id.clone(), d)).collect()
+        };
+
+        // Group by item id while preserving the original `version DESC,
+        // created_at DESC` order via in-place sort in Rust.
+        let mut by_item: HashMap<RecordId, Vec<Document>> = HashMap::new();
+        for e in edges {
+            if let Some(doc) = docs_by_id.get(&e.doc) {
+                by_item.entry(e.item).or_default().push(doc.clone());
+            }
+        }
+        for docs in by_item.values_mut() {
+            docs.sort_by(|a, b| {
+                b.version
+                    .cmp(&a.version)
+                    .then_with(|| b.created_at.cmp(&a.created_at))
+            });
+        }
+        by_item
+    };
+
+    // Reviewer names: one query for every distinct reviewer across the
+    // whole checklist (typically 1-2 unique users), then build labels.
+    let reviewer_ids: Vec<RecordId> = {
+        let mut seen: std::collections::HashSet<RecordId> = std::collections::HashSet::new();
+        items
+            .iter()
+            .filter_map(|i| i.reviewed_by.clone())
+            .filter(|id| seen.insert(id.clone()))
+            .collect()
+    };
+    let reviewer_names: HashMap<RecordId, String> = if reviewer_ids.is_empty() {
+        HashMap::new()
+    } else {
+        #[derive(Debug, Deserialize, SurrealValue)]
+        struct UserRow {
+            id: RecordId,
+            name: String,
+        }
+        let mut u_q = state
+            .db
+            .query("SELECT id, name FROM user WHERE id IN $ids")
+            .bind(("ids", reviewer_ids))
+            .await?;
+        let rows: Vec<UserRow> = u_q.take(0).unwrap_or_default();
+        rows.into_iter().map(|r| (r.id, r.name)).collect()
+    };
+    let audit_labels: Vec<String> = items
+        .iter()
+        .map(|item| match (&item.reviewed_by, item.reviewed_at) {
             (Some(uid), Some(when)) => {
-                let profile: Option<NameOnly> =
-                    state.db.select(uid.clone()).await.map_err(AppError::from)?;
-                let who = profile.map(|p| p.name).unwrap_or_else(|| "Someone".into());
+                let who = reviewer_names
+                    .get(uid)
+                    .cloned()
+                    .unwrap_or_else(|| "Someone".into());
                 let verb = match item.status() {
                     crate::models::ApprovalStatus::Approved => "Approved",
                     crate::models::ApprovalStatus::Denied => "Denied",
                     crate::models::ApprovalStatus::Pending => "Reviewed",
                 };
-                Ok::<_, AppError>(format!("{verb} by {who} on {}", when.format("%b %-d, %Y")))
+                format!("{verb} by {who} on {}", when.format("%b %-d, %Y"))
             }
-            _ => Ok::<_, AppError>(String::new()),
-        }
-    }))
-    .await?;
+            _ => String::new(),
+        })
+        .collect();
 
-    let comments_per_item =
-        futures::future::try_join_all(items.iter().map(|item| load_comments(state, &item.id)))
-            .await?;
+    // Comments: one batched query across every item, then bucket in
+    // Rust. Mirrors the projection shape used by `load_comments` so the
+    // template gets the same `CommentView` rows.
+    let comments_per_item: HashMap<RecordId, Vec<CommentView>> = if item_ids.is_empty() {
+        HashMap::new()
+    } else {
+        load_comments_for_targets(state, &item_ids).await?
+    };
+
+    let docs_in_order: Vec<Vec<Document>> = items
+        .iter()
+        .map(|i| docs_per_item.get(&i.id).cloned().unwrap_or_default())
+        .collect();
+    let comments_in_order: Vec<Vec<CommentView>> = items
+        .iter()
+        .map(|i| comments_per_item.get(&i.id).cloned().unwrap_or_default())
+        .collect();
 
     // Bucket rows by the group snapshotted on each item (name + order).
     // Groups are data-driven now, so we discover them from the items
@@ -1528,9 +1589,9 @@ async fn build_grouped_checklist(
 
     for (((item, docs), audit), comments) in items
         .into_iter()
-        .zip(docs_per_item)
+        .zip(docs_in_order)
         .zip(audit_labels)
-        .zip(comments_per_item)
+        .zip(comments_in_order)
     {
         let group_order = item.group_order;
         let group_name = item.group_name.clone();
@@ -1561,6 +1622,77 @@ async fn build_grouped_checklist(
         .map(|(order, name, items)| ChecklistGroup::build(name, order, items, role))
         .collect();
     Ok(groups)
+}
+
+/// Like [`load_comments`] but for a batch of targets. Returns a map
+/// `target → comments` so [`build_grouped_checklist`] can drop the
+/// per-item query and replace it with a single round trip.
+async fn load_comments_for_targets(
+    state: &AppState,
+    targets: &[RecordId],
+) -> Result<std::collections::HashMap<RecordId, Vec<CommentView>>, AppError> {
+    use std::collections::HashMap;
+
+    if targets.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let mut response = state
+        .db
+        .query(
+            "SELECT target, body, created_at, \
+                    author.id AS author_id, \
+                    author.name AS author_name, \
+                    author.avatar_storage_key AS author_avatar_key, \
+                    references_document.id AS ref_id, \
+                    references_document.filename AS ref_filename, \
+                    references_document.version AS ref_version \
+             FROM comment WHERE target IN $targets ORDER BY created_at ASC",
+        )
+        .bind(("targets", targets.to_vec()))
+        .await?;
+    #[derive(Debug, serde::Deserialize, SurrealValue)]
+    struct Row {
+        target: RecordId,
+        body: String,
+        author_id: Option<RecordId>,
+        author_name: Option<String>,
+        author_avatar_key: Option<String>,
+        created_at: chrono::DateTime<chrono::Utc>,
+        ref_id: Option<RecordId>,
+        ref_filename: Option<String>,
+        ref_version: Option<i64>,
+    }
+    let rows: Vec<Row> = response.take(0).unwrap_or_default();
+    let mut by_target: HashMap<RecordId, Vec<CommentView>> = HashMap::new();
+    for r in rows {
+        let referenced_document = match (r.ref_id, r.ref_filename, r.ref_version) {
+            (Some(id), Some(filename), Some(version)) => {
+                Some(crate::templates::ReferencedDocument {
+                    key: crate::db::record_key(&id),
+                    filename,
+                    version,
+                })
+            }
+            _ => None,
+        };
+        let author_name = r.author_name.unwrap_or_else(|| "Someone".into());
+        let author_initials = crate::templates::initials(&author_name);
+        let author_key = r
+            .author_id
+            .as_ref()
+            .map(crate::db::record_key)
+            .unwrap_or_default();
+        by_target.entry(r.target).or_default().push(CommentView {
+            body: r.body,
+            author_initials,
+            author_name,
+            author_key,
+            author_has_avatar: r.author_avatar_key.is_some(),
+            created_at: r.created_at,
+            referenced_document,
+        });
+    }
+    Ok(by_target)
 }
 
 /// Load comments attached to a single target (transaction or checklist
@@ -1688,6 +1820,20 @@ async fn needs_attention_flags(
     role: Role,
     brokerage_id: &RecordId,
 ) -> Result<Vec<bool>, AppError> {
+    needs_attention_flags_with(&state.db, transactions, role, brokerage_id).await
+}
+
+/// DB-only variant exposed for unit testing — see the `mod tests`
+/// block at the bottom of this file. The outer wrapper keeps handler
+/// call sites passing the familiar `&AppState`.
+async fn needs_attention_flags_with(
+    db: &crate::state::Db,
+    transactions: &[Transaction],
+    role: Role,
+    brokerage_id: &RecordId,
+) -> Result<Vec<bool>, AppError> {
+    use std::collections::{HashMap, HashSet};
+
     if transactions.is_empty() {
         return Ok(Vec::new());
     }
@@ -1702,62 +1848,109 @@ async fn needs_attention_flags(
         vec!["broker".to_string(), "coordinator".to_string()]
     };
 
-    // The set of users whose comments should flag a transaction —
-    // fetched once for the whole brokerage rather than per row.
-    let mut au = state
-        .db
+    // Closed transactions never flag — strip them up front so every
+    // batched query that follows only carries live ids.
+    let active_ids: Vec<RecordId> = transactions
+        .iter()
+        .filter(|t| {
+            !matches!(
+                t.status_enum(),
+                TransactionStatus::Sold
+                    | TransactionStatus::Canceled
+                    | TransactionStatus::Withdrawn
+            )
+        })
+        .map(|t| t.id.clone())
+        .collect();
+    if active_ids.is_empty() {
+        return Ok(vec![false; transactions.len()]);
+    }
+
+    // Comment-author roster — one query for the whole brokerage.
+    let mut au = db
         .query("SELECT VALUE in FROM works_at WHERE out = $b AND role IN $roles")
         .bind(("b", brokerage_id.clone()))
         .bind(("roles", author_roles))
         .await?;
     let comment_authors: Vec<RecordId> = au.take(0).unwrap_or_default();
 
-    let futures = transactions.iter().map(|t| {
-        let comment_authors = comment_authors.clone();
+    // Item → transaction map. One query produces both the comment-target
+    // universe (every item in every active tx) and the reverse lookup
+    // we need to attribute item-targeted comments back to their tx.
+    // (`in` is renamed via SQL `AS` because SurrealValue derive doesn't
+    // honour serde rename attributes.)
+    let mut im = db
+        .query("SELECT in AS tx, out AS item FROM has_item WHERE in IN $txs")
+        .bind(("txs", active_ids.clone()))
+        .await?;
+    #[derive(Debug, Deserialize, SurrealValue)]
+    struct ItemEdge {
+        tx: RecordId,
+        item: RecordId,
+    }
+    let edges: Vec<ItemEdge> = im.take(0)?;
+    let mut item_to_tx: HashMap<RecordId, RecordId> = HashMap::with_capacity(edges.len());
+    let mut all_items: Vec<RecordId> = Vec::with_capacity(edges.len());
+    for e in edges {
+        all_items.push(e.item.clone());
+        item_to_tx.insert(e.item, e.tx);
+    }
+
+    // Form signal — per-tx queries fanned out via `try_join_all` so
+    // they run concurrently (wall-clock = slowest single query, not
+    // sum). A single batched query against `checklist_item` would be
+    // nicer but the `<-for_item<-document` graph traversal only parses
+    // at the top of an expression, and `$item.<-…` isn't supported.
+    let form_sql_reviewer = "SELECT count() FROM $t->has_item->checklist_item \
+                             WHERE approval_status = 'pending' \
+                               AND array::len(<-for_item<-document) > 0 GROUP ALL";
+    let form_sql_agent = "SELECT count() FROM $t->has_item->checklist_item \
+                          WHERE approval_status = 'denied' GROUP ALL";
+    let form_sql = if reviewer_view {
+        form_sql_reviewer
+    } else {
+        form_sql_agent
+    };
+
+    let form_futures = active_ids.iter().map(|tx_id| {
+        let tx_id = tx_id.clone();
         async move {
-            if matches!(
-                t.status_enum(),
-                TransactionStatus::Sold
-                    | TransactionStatus::Canceled
-                    | TransactionStatus::Withdrawn
-            ) {
-                return Ok::<bool, AppError>(false);
-            }
-
-            // Form signal — denied (agent view) vs pending-with-upload
-            // (reviewer view).
-            let form_query = if reviewer_view {
-                "SELECT count() FROM $t->has_item->checklist_item \
-                 WHERE approval_status = 'pending' \
-                   AND array::len(<-for_item<-document) > 0 GROUP ALL"
-            } else {
-                "SELECT count() FROM $t->has_item->checklist_item \
-                 WHERE approval_status = 'denied' GROUP ALL"
-            };
-            let mut fr = state.db.query(form_query).bind(("t", t.id.clone())).await?;
-            let forms: Option<CountRow> = fr.take(0)?;
-            if forms.map(|c| c.count > 0).unwrap_or(false) {
-                return Ok(true);
-            }
-
-            // Comment signal — a note from the other role on the
-            // transaction or any of its checklist items.
-            let mut cr = state
-                .db
-                .query(
-                    "SELECT count() FROM comment \
-                     WHERE (target = $t OR target IN (SELECT VALUE id FROM $t->has_item->checklist_item)) \
-                       AND author IN $authors GROUP ALL",
-                )
-                .bind(("t", t.id.clone()))
-                .bind(("authors", comment_authors))
-                .await?;
-            let comments: Option<CountRow> = cr.take(0)?;
-            Ok(comments.map(|c| c.count > 0).unwrap_or(false))
+            let mut q = db.query(form_sql).bind(("t", tx_id.clone())).await?;
+            let row: Option<CountRow> = q.take(0)?;
+            Ok::<_, AppError>((tx_id, row.map(|c| c.count > 0).unwrap_or(false)))
         }
     });
-    let results = futures::future::try_join_all(futures).await?;
-    Ok(results)
+    let form_results = futures::future::try_join_all(form_futures).await?;
+    let mut flagged: HashSet<RecordId> = form_results
+        .into_iter()
+        .filter_map(|(t, hit)| hit.then_some(t))
+        .collect();
+
+    // Comment signal — pull every comment authored by a member of the
+    // other role in this brokerage, then filter the targets in Rust
+    // against our known tx + item sets. Fetching all of them in one
+    // query (instead of one per tx) keeps the DB load proportional to
+    // the comment volume in the brokerage, not the visible-tx count.
+    if !comment_authors.is_empty() {
+        let mut cr = db
+            .query("SELECT VALUE target FROM comment WHERE author IN $authors")
+            .bind(("authors", comment_authors))
+            .await?;
+        let hits: Vec<RecordId> = cr.take(0).unwrap_or_default();
+        let tx_set: HashSet<&RecordId> = active_ids.iter().collect();
+        for t in hits {
+            if tx_set.contains(&t) {
+                flagged.insert(t);
+            } else if let Some(tx) = item_to_tx.get(&t) {
+                flagged.insert(tx.clone());
+            }
+        }
+    }
+
+    Ok(transactions
+        .iter()
+        .map(|t| flagged.contains(&t.id))
+        .collect())
 }
 
 /// Count of transactions that need the viewer's attention. Thin
@@ -1778,31 +1971,55 @@ async fn search_documents(
     transactions: &[Transaction],
     needle: &str,
 ) -> Result<Vec<SearchDocument>, AppError> {
-    let lookups = transactions.iter().map(|t| async move {
-        let mut response = state
-            .db
-            .query("SELECT * FROM $t->has_document->document")
-            .bind(("t", t.id.clone()))
-            .await?;
-        let docs: Vec<Document> = response.take(0)?;
-        Ok::<_, AppError>((t.clone(), docs))
-    });
+    if transactions.is_empty() {
+        return Ok(Vec::new());
+    }
 
-    let pairs = futures::future::try_join_all(lookups).await?;
-    let matches: Vec<SearchDocument> = pairs
+    // One batched query for every visible tx instead of N parallel
+    // queries — same wall-clock on a hot connection, far less load
+    // when the visible set grows. The `AS` aliases dodge the
+    // `SurrealValue` derive's lack of serde-rename support and avoid
+    // shadowing the SurrealQL keywords `in` / `out`.
+    let tx_ids: Vec<RecordId> = transactions.iter().map(|t| t.id.clone()).collect();
+    let mut response = state
+        .db
+        .query("SELECT in AS tx, out AS doc FROM has_document WHERE in IN $ids")
+        .bind(("ids", tx_ids))
+        .await?;
+    #[derive(Debug, Deserialize, SurrealValue)]
+    struct Edge {
+        tx: RecordId,
+        doc: RecordId,
+    }
+    let edges: Vec<Edge> = response.take(0).unwrap_or_default();
+    if edges.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let doc_ids: Vec<RecordId> = edges.iter().map(|e| e.doc.clone()).collect();
+    let mut doc_q = state
+        .db
+        .query("SELECT * FROM document WHERE id IN $ids")
+        .bind(("ids", doc_ids))
+        .await?;
+    let docs: Vec<Document> = doc_q.take(0).unwrap_or_default();
+    let docs_by_id: std::collections::HashMap<RecordId, Document> =
+        docs.into_iter().map(|d| (d.id.clone(), d)).collect();
+    let txs_by_id: std::collections::HashMap<RecordId, &Transaction> =
+        transactions.iter().map(|t| (t.id.clone(), t)).collect();
+
+    let matches: Vec<SearchDocument> = edges
         .into_iter()
-        .flat_map(|(tx, docs)| {
-            docs.into_iter()
-                .filter(|d| {
-                    d.filename.to_ascii_lowercase().contains(needle)
-                        || d.form_code.to_ascii_lowercase().contains(needle)
-                })
-                .map(move |d| SearchDocument {
-                    document: d,
-                    transaction_key: crate::db::record_key(&tx.id),
-                    transaction_address: tx.property_address.clone(),
-                })
-                .collect::<Vec<_>>()
+        .filter_map(|e| {
+            let doc = docs_by_id.get(&e.doc)?.clone();
+            let tx = txs_by_id.get(&e.tx)?;
+            let hit = doc.filename.to_ascii_lowercase().contains(needle)
+                || doc.form_code.to_ascii_lowercase().contains(needle);
+            hit.then(|| SearchDocument {
+                document: doc,
+                transaction_key: crate::db::record_key(&tx.id),
+                transaction_address: tx.property_address.clone(),
+            })
         })
         .collect();
     Ok(matches)
@@ -1905,6 +2122,174 @@ async fn seed_default_checklist(
 // Local helpers
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Reassign — unassigned view + mass-reassign endpoint
+// ---------------------------------------------------------------------------
+
+/// GET `/app/transactions/unassigned` — broker view of transactions that
+/// have no `owns` edge (typically orphaned by a removed agent). Drives
+/// the mass-reassign UI: checkboxes + brokerage-member dropdown +
+/// Apply. Coordinators see it read-only; agents are bounced.
+pub async fn unassigned_list(
+    State(state): State<AppState>,
+    user: CurrentUser,
+) -> Result<Html<String>, AppError> {
+    if !user.role.is_broker() {
+        return Err(AppError::Forbidden);
+    }
+
+    let mut q = state
+        .db
+        .query(
+            "SELECT * FROM $b->has_transaction->transaction
+             WHERE array::len(<-owns<-user) = 0
+             ORDER BY created_at DESC",
+        )
+        .bind(("b", user.brokerage_id.clone()))
+        .await?;
+    let transactions: Vec<Transaction> = q.take(0)?;
+
+    // Brokerage members go into the dropdown. Brokers + coordinators
+    // are valid owners alongside agents — the broker might want to put
+    // themselves on a deal as the working agent.
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct MemberRow {
+        user_id: RecordId,
+        name: String,
+        role: String,
+    }
+    let mut m_q = state
+        .db
+        .query(
+            "SELECT in AS user_id, in.name AS name, role
+             FROM works_at WHERE out = $b ORDER BY in.name ASC",
+        )
+        .bind(("b", user.brokerage_id.clone()))
+        .await?;
+    let rows: Vec<MemberRow> = m_q.take(0)?;
+    let assignees = rows
+        .into_iter()
+        .filter_map(|r| {
+            Role::parse(&r.role).map(|role| UnassignedAssignee {
+                key: crate::db::record_key(&r.user_id),
+                name: r.name,
+                role_label: role.label().to_string(),
+            })
+        })
+        .collect();
+
+    let header = crate::controllers::common::build_app_header(&state, &user, "transactions").await;
+
+    render(&UnassignedPage {
+        app_name: &state.config.app_name,
+        base_url: &state.config.base_url,
+        signed_in: true,
+        header,
+        transactions,
+        assignees,
+    })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReassignInput {
+    pub assignee_key: String,
+    /// Comma-separated list of transaction keys. The unassigned page
+    /// posts every checked row in one shot; per-transaction reassign
+    /// from other entry points just sends one key.
+    pub tx_keys: String,
+}
+
+/// POST `/app/transactions/reassign` — broker-only. Apply a single
+/// `assignee` to one or more transactions (typically all the checked
+/// rows on the unassigned page). Each transaction's existing `owns`
+/// edges are cleared so reassignment is idempotent. Audits per tx.
+pub async fn reassign(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Form(input): Form<ReassignInput>,
+) -> Result<Redirect, AppError> {
+    if !user.role.is_broker() {
+        return Err(AppError::Forbidden);
+    }
+
+    let assignee_id = RecordId::new("user", input.assignee_key.trim());
+
+    // Confirm the assignee is in this brokerage — otherwise a broker
+    // could hand a transaction to a user from a different tenant.
+    let mut member_q = state
+        .db
+        .query("SELECT VALUE id FROM works_at WHERE in = $u AND out = $b LIMIT 1")
+        .bind(("u", assignee_id.clone()))
+        .bind(("b", user.brokerage_id.clone()))
+        .await?;
+    let member: Vec<RecordId> = member_q.take(0).unwrap_or_default();
+    if member.is_empty() {
+        return Err(AppError::invalid(
+            "That assignee isn't a member of your brokerage.",
+        ));
+    }
+
+    let tx_keys: Vec<String> = input
+        .tx_keys
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if tx_keys.is_empty() {
+        return Err(AppError::invalid(
+            "Select at least one transaction to reassign.",
+        ));
+    }
+
+    for key in tx_keys {
+        let tx_id = RecordId::new("transaction", key.as_str());
+
+        // Tenant check — has_transaction edge from THIS brokerage.
+        let mut ok_q = state
+            .db
+            .query("SELECT count() FROM has_transaction WHERE in = $b AND out = $t GROUP ALL")
+            .bind(("b", user.brokerage_id.clone()))
+            .bind(("t", tx_id.clone()))
+            .await?;
+        #[derive(serde::Deserialize, SurrealValue)]
+        struct CountRow {
+            count: i64,
+        }
+        let cnt: Option<CountRow> = ok_q.take(0)?;
+        if cnt.map(|c| c.count).unwrap_or(0) == 0 {
+            // Silently skip cross-tenant attempts — same as authorize.
+            continue;
+        }
+
+        // Replace any existing owns edges so the result is "exactly
+        // one owner = the new assignee", regardless of prior state.
+        state
+            .db
+            .query("DELETE owns WHERE out = $t")
+            .bind(("t", tx_id.clone()))
+            .await?;
+        state
+            .db
+            .query("RELATE $u->owns->$t")
+            .bind(("u", assignee_id.clone()))
+            .bind(("t", tx_id.clone()))
+            .await?;
+
+        crate::audit::record(
+            &state.db,
+            "transaction_reassigned",
+            Some(user.user_id.clone()),
+            Some(user.email.clone()),
+            None,
+            None,
+            Some(format!("tx={} → user={}", key, input.assignee_key)),
+        )
+        .await;
+    }
+
+    Ok(Redirect::to("/app/transactions/unassigned"))
+}
+
 /// Accept inputs like `$649,000`, `649000`, `649000.00`. Returns 0 on empty.
 fn parse_price_cents(input: &str) -> i64 {
     let cleaned: String = input
@@ -1917,5 +2302,349 @@ fn parse_price_cents(input: &str) -> i64 {
     match cleaned.parse::<f64>() {
         Ok(n) if n >= 0.0 => (n * 100.0).round() as i64,
         _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Coverage for the dashboard's "Needs attention" predicate. The
+    //! tests spin up an in-memory SurrealDB, apply the real schema, and
+    //! drive [`needs_attention_flags_with`] directly so we don't have
+    //! to stand up an `AppState` (storage / stripe / mailer) just to
+    //! exercise pure DB logic.
+    use super::*;
+    use crate::auth::Role;
+    use surrealdb::types::SurrealValue;
+
+    async fn make_db() -> crate::state::Db {
+        let db = surrealdb::engine::any::connect("mem://")
+            .await
+            .expect("mem connect");
+        db.use_ns("test").use_db("test").await.expect("use ns/db");
+        crate::db::apply_schema(&db).await.expect("apply schema");
+        db
+    }
+
+    #[derive(Debug, serde::Serialize, SurrealValue)]
+    struct NewBrokerage {
+        name: String,
+        plan: String,
+        is_complimentary: bool,
+    }
+
+    async fn insert_brokerage(db: &crate::state::Db) -> RecordId {
+        let b: Option<crate::models::Brokerage> = db
+            .create("brokerage")
+            .content(NewBrokerage {
+                name: "TestCo".into(),
+                plan: "starter".into(),
+                is_complimentary: true,
+            })
+            .await
+            .expect("create brokerage");
+        b.expect("brokerage").id
+    }
+
+    #[derive(Debug, serde::Serialize, SurrealValue)]
+    struct NewUser {
+        email: String,
+        name: String,
+        password_hash: String,
+        email_verified: bool,
+    }
+
+    async fn insert_user(db: &crate::state::Db, email: &str) -> RecordId {
+        let u: Option<crate::models::User> = db
+            .create("user")
+            .content(NewUser {
+                email: email.into(),
+                name: email.into(),
+                password_hash: "x".into(),
+                email_verified: true,
+            })
+            .await
+            .expect("create user");
+        u.expect("user").id
+    }
+
+    async fn put_user_in_brokerage(
+        db: &crate::state::Db,
+        user: &RecordId,
+        brokerage: &RecordId,
+        role: &str,
+    ) {
+        db.query("RELATE $u->works_at->$b SET role = $r")
+            .bind(("u", user.clone()))
+            .bind(("b", brokerage.clone()))
+            .bind(("r", role.to_string()))
+            .await
+            .expect("RELATE works_at");
+    }
+
+    #[derive(Debug, serde::Serialize, SurrealValue)]
+    struct NewTx {
+        property_address: String,
+        city: String,
+        apn: Option<String>,
+        postal_code: Option<String>,
+        price_cents: i64,
+        client_name: Option<String>,
+        mls_number: Option<String>,
+        office_file_number: Option<String>,
+        status: String,
+        transaction_type: String,
+        special_sales_condition: String,
+        sales_type: String,
+    }
+
+    async fn insert_tx(db: &crate::state::Db, brokerage: &RecordId, status: &str) -> Transaction {
+        let tx: Option<Transaction> = db
+            .create("transaction")
+            .content(NewTx {
+                property_address: format!("addr-{status}"),
+                city: "LA".into(),
+                apn: None,
+                postal_code: None,
+                price_cents: 1,
+                client_name: None,
+                mls_number: None,
+                office_file_number: None,
+                status: status.into(),
+                transaction_type: "residential".into(),
+                special_sales_condition: "none".into(),
+                sales_type: "listing".into(),
+            })
+            .await
+            .expect("create tx");
+        let tx = tx.expect("tx row");
+        db.query("RELATE $b->has_transaction->$t")
+            .bind(("b", brokerage.clone()))
+            .bind(("t", tx.id.clone()))
+            .await
+            .expect("RELATE has_transaction");
+        tx
+    }
+
+    #[derive(Debug, serde::Serialize, SurrealValue)]
+    struct NewItem {
+        title: String,
+        form_code: Option<String>,
+        group_name: String,
+        group_order: i64,
+        position: i64,
+        required: bool,
+        approval_status: String,
+    }
+
+    async fn insert_item(
+        db: &crate::state::Db,
+        tx_id: &RecordId,
+        approval_status: &str,
+    ) -> RecordId {
+        let it: Option<crate::models::ChecklistItem> = db
+            .create("checklist_item")
+            .content(NewItem {
+                title: "Test item".into(),
+                form_code: None,
+                group_name: "Test".into(),
+                group_order: 1,
+                position: 1,
+                required: true,
+                approval_status: approval_status.into(),
+            })
+            .await
+            .expect("create item");
+        let id = it.expect("item").id;
+        db.query("RELATE $t->has_item->$i")
+            .bind(("t", tx_id.clone()))
+            .bind(("i", id.clone()))
+            .await
+            .expect("RELATE has_item");
+        id
+    }
+
+    /// Attach a real document edge so "pending-with-upload" predicate
+    /// fires for reviewer view.
+    async fn attach_document(db: &crate::state::Db, item_id: &RecordId) {
+        #[derive(Debug, serde::Serialize, SurrealValue)]
+        struct NewDoc {
+            filename: String,
+            form_code: String,
+            content_type: String,
+            storage_key: String,
+            size_bytes: i64,
+            version: i64,
+        }
+        let doc: Option<crate::models::Document> = db
+            .create("document")
+            .content(NewDoc {
+                filename: "t.pdf".into(),
+                form_code: "MISC".into(),
+                content_type: "application/pdf".into(),
+                storage_key: "k".into(),
+                size_bytes: 1,
+                version: 1,
+            })
+            .await
+            .expect("create doc");
+        let id = doc.expect("doc").id;
+        db.query("RELATE $d->for_item->$i")
+            .bind(("d", id))
+            .bind(("i", item_id.clone()))
+            .await
+            .expect("RELATE for_item");
+    }
+
+    #[derive(Debug, serde::Serialize, SurrealValue)]
+    struct NewComment {
+        body: String,
+        target: RecordId,
+        author: RecordId,
+    }
+
+    async fn add_comment(db: &crate::state::Db, target: &RecordId, author: &RecordId) {
+        let _: Option<crate::models::Comment> = db
+            .create("comment")
+            .content(NewComment {
+                body: "note".into(),
+                target: target.clone(),
+                author: author.clone(),
+            })
+            .await
+            .expect("create comment");
+    }
+
+    // ---- empty input ----
+
+    #[tokio::test]
+    async fn empty_input_returns_empty() {
+        let db = make_db().await;
+        let b = insert_brokerage(&db).await;
+        let flags = needs_attention_flags_with(&db, &[], Role::Broker, &b)
+            .await
+            .expect("flags");
+        assert!(flags.is_empty());
+    }
+
+    // ---- closed statuses never flag ----
+
+    #[tokio::test]
+    async fn closed_statuses_never_flag() {
+        let db = make_db().await;
+        let b = insert_brokerage(&db).await;
+        let sold = insert_tx(&db, &b, "sold").await;
+        let canceled = insert_tx(&db, &b, "canceled").await;
+        let withdrawn = insert_tx(&db, &b, "withdrawn").await;
+        // Throw a denied item on each so the predicate WOULD fire if
+        // the status check weren't applied.
+        for tx in [&sold, &canceled, &withdrawn] {
+            insert_item(&db, &tx.id, "denied").await;
+        }
+        let flags = needs_attention_flags_with(
+            &db,
+            &[sold.clone(), canceled.clone(), withdrawn.clone()],
+            Role::Agent,
+            &b,
+        )
+        .await
+        .expect("flags");
+        assert_eq!(flags, vec![false, false, false]);
+    }
+
+    // ---- agent view ----
+
+    #[tokio::test]
+    async fn agent_view_flags_on_denied_item() {
+        let db = make_db().await;
+        let b = insert_brokerage(&db).await;
+        let tx = insert_tx(&db, &b, "active").await;
+        insert_item(&db, &tx.id, "denied").await;
+        let flags = needs_attention_flags_with(&db, &[tx], Role::Agent, &b)
+            .await
+            .expect("flags");
+        assert_eq!(flags, vec![true]);
+    }
+
+    #[tokio::test]
+    async fn agent_view_flags_on_reviewer_comment() {
+        let db = make_db().await;
+        let b = insert_brokerage(&db).await;
+        let tx = insert_tx(&db, &b, "active").await;
+        let broker = insert_user(&db, "broker@x.com").await;
+        put_user_in_brokerage(&db, &broker, &b, "broker").await;
+        add_comment(&db, &tx.id, &broker).await;
+        let flags = needs_attention_flags_with(&db, &[tx], Role::Agent, &b)
+            .await
+            .expect("flags");
+        assert_eq!(flags, vec![true]);
+    }
+
+    #[tokio::test]
+    async fn agent_view_ignores_self_authored_comments() {
+        // An agent's own comment shouldn't make their own row flag.
+        let db = make_db().await;
+        let b = insert_brokerage(&db).await;
+        let tx = insert_tx(&db, &b, "active").await;
+        let agent = insert_user(&db, "agent@x.com").await;
+        put_user_in_brokerage(&db, &agent, &b, "agent").await;
+        add_comment(&db, &tx.id, &agent).await;
+        let flags = needs_attention_flags_with(&db, &[tx], Role::Agent, &b)
+            .await
+            .expect("flags");
+        assert_eq!(flags, vec![false]);
+    }
+
+    // ---- reviewer view ----
+
+    #[tokio::test]
+    async fn reviewer_view_flags_on_pending_with_upload() {
+        let db = make_db().await;
+        let b = insert_brokerage(&db).await;
+        let tx = insert_tx(&db, &b, "active").await;
+        let item = insert_item(&db, &tx.id, "pending").await;
+        attach_document(&db, &item).await;
+        let flags = needs_attention_flags_with(&db, &[tx], Role::Broker, &b)
+            .await
+            .expect("flags");
+        assert_eq!(flags, vec![true]);
+    }
+
+    #[tokio::test]
+    async fn reviewer_view_does_not_flag_pending_without_upload() {
+        let db = make_db().await;
+        let b = insert_brokerage(&db).await;
+        let tx = insert_tx(&db, &b, "active").await;
+        insert_item(&db, &tx.id, "pending").await; // no document attached
+        let flags = needs_attention_flags_with(&db, &[tx], Role::Broker, &b)
+            .await
+            .expect("flags");
+        assert_eq!(flags, vec![false]);
+    }
+
+    #[tokio::test]
+    async fn reviewer_view_flags_on_agent_comment_on_item() {
+        let db = make_db().await;
+        let b = insert_brokerage(&db).await;
+        let tx = insert_tx(&db, &b, "active").await;
+        let item = insert_item(&db, &tx.id, "pending").await;
+        let agent = insert_user(&db, "agent@x.com").await;
+        put_user_in_brokerage(&db, &agent, &b, "agent").await;
+        add_comment(&db, &item, &agent).await;
+        let flags = needs_attention_flags_with(&db, &[tx], Role::Broker, &b)
+            .await
+            .expect("flags");
+        assert_eq!(flags, vec![true]);
+    }
+
+    #[tokio::test]
+    async fn no_signals_no_flag() {
+        let db = make_db().await;
+        let b = insert_brokerage(&db).await;
+        let tx = insert_tx(&db, &b, "active").await;
+        insert_item(&db, &tx.id, "approved").await;
+        let flags = needs_attention_flags_with(&db, &[tx], Role::Broker, &b)
+            .await
+            .expect("flags");
+        assert_eq!(flags, vec![false]);
     }
 }

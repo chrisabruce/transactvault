@@ -90,13 +90,31 @@ impl Role {
     }
 }
 
-/// Fully resolved principal: who they are, where they work, and what they can do.
+/// Fully resolved authenticated principal — who they are, where they
+/// work, and what they can do. Produced by the
+/// [`crate::auth::middleware::CurrentUser`] extractor on every
+/// authenticated route and consumed by every controller that needs
+/// tenant-scoped data access.
+///
+/// Use this — not raw [`Claims`] — for authorization decisions.
+/// `brokerage_id` is statically guaranteed (the extractor refuses
+/// to produce a `CurrentUser` for orphaned accounts); routes that
+/// need to handle brokerage-less users must use the looser
+/// [`crate::auth::middleware::LooseCurrentUser`] extractor instead.
 #[derive(Debug, Clone)]
 pub struct CurrentUser {
+    /// Stable `user:<key>` record id from the JWT.
     pub user_id: RecordId,
+    /// Brokerage the user belongs to right now (via the `works_at`
+    /// edge). Every authorized read/write is gated on this id — see
+    /// [`crate::controllers::transactions::authorize_transaction`].
     pub brokerage_id: RecordId,
     pub email: String,
     pub name: String,
+    /// Role inside the brokerage (broker / agent / coordinator).
+    /// Drives the `Role::*` capability checks scattered across the
+    /// handlers — `is_broker`, `can_review`, `can_change_roles`,
+    /// `sees_all_transactions`.
     pub role: Role,
     /// True if the user has uploaded an avatar. Lets templates decide
     /// between an `<img>` (pointing at the avatar endpoint) and the

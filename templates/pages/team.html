@@ -12,6 +12,11 @@
             <h1>Team</h1>
             <p class="subtitle">Everyone at {{ header.brokerage_name }}.</p>
         </section>
+        {% if header.role.is_broker() %}
+            <nav class="team-subnav" aria-label="Team tools">
+                <a href="/app/transactions/unassigned">Unassigned transactions</a>
+            </nav>
+        {% endif %}
     </header>
 
     {% match invite_error %}{% when Some with (msg) %}
@@ -71,6 +76,13 @@
                             </select>
                             <button type="submit" class="btn small">Update</button>
                         </form>
+                        <form method="post"
+                              action="/app/team/{{ member.user_key }}/remove"
+                              class="role-change"
+                              data-confirm="Remove {name} from the brokerage? Their account stays but they lose access to all transactions until they're invited again."
+                              data-confirm-name="{{ member.name }}">
+                            <button type="submit" class="btn small danger">Remove</button>
+                        </form>
                     {% else %}
                         <span class="chip role-{{ member.role.as_str() }}">{{ member.role.label() }}</span>
                     {% endif %}
@@ -108,7 +120,8 @@
                                     </form>
                                     <form method="post"
                                           action="/app/team/invite/{{ inv.token }}/cancel"
-                                          onsubmit="return confirm('Cancel the invitation for {{ inv.email }}? The invite link will stop working.');">
+                                          data-confirm="Cancel the invitation for {email}? The invite link will stop working."
+                                          data-confirm-email="{{ inv.email }}">
                                         <button type="submit" class="btn small danger">Cancel invite</button>
                                     </form>
                                 </div>

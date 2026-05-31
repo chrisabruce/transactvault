@@ -12,15 +12,28 @@ use surrealdb::types::{RecordId, SurrealValue};
 
 use crate::db::record_key;
 
+/// One uploaded file on a transaction. Lives in object storage at
+/// `storage_key`; the row is the catalog entry. Linked back to the
+/// transaction via `has_transaction`-style `has_document` edge, and to
+/// the uploading user via `uploaded`. May serve multiple checklist
+/// items through fan-out `for_item` edges (the same contract often
+/// satisfies several disclosures).
 #[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
 pub struct Document {
     pub id: RecordId,
     pub filename: String,
+    /// CAR form code this upload counts against (e.g. `"RPA"`).
+    /// `"MISC"` for transaction-level uploads not tied to a code.
     pub form_code: String,
+    /// Path in object storage (`brokerage/property/form_code/file`).
+    /// Never user-controlled — built by the upload handler.
     pub storage_key: String,
     pub size_bytes: i64,
     pub content_type: String,
     pub signed: bool,
+    /// Monotonic version number per `(transaction, form_code)`. New
+    /// uploads against the same slot bump the version; older rows are
+    /// preserved so audit history stays intact.
     pub version: i64,
     pub created_at: DateTime<Utc>,
 }

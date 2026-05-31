@@ -21,7 +21,7 @@ use chrono::{Datelike, NaiveDate, TimeZone, Utc};
 use crate::auth::CurrentUser;
 use crate::error::AppError;
 use crate::models::{Brokerage, Tier};
-use crate::state::AppState;
+use crate::state::{AppState, Db};
 
 /// Visual prominence of an in-app banner. Maps onto CSS classes in
 /// `main.css` (`.app-banner.info`, `.warn`, `.danger`).
@@ -125,7 +125,18 @@ pub async fn enforce_transaction_limit(
     state: &AppState,
     user: &CurrentUser,
 ) -> Result<LimitDecision, AppError> {
-    let brokerage: Option<Brokerage> = state.db.select(user.brokerage_id.clone()).await?;
+    enforce_transaction_limit_with(&state.db, &user.brokerage_id).await
+}
+
+/// DB-only variant of [`enforce_transaction_limit`] for unit tests
+/// (and any future caller that already holds a brokerage id without a
+/// full `CurrentUser`). The outer wrapper exists so handlers can keep
+/// passing `&AppState`, which is what their state extractor gives them.
+pub(crate) async fn enforce_transaction_limit_with(
+    db: &Db,
+    brokerage_id: &surrealdb::types::RecordId,
+) -> Result<LimitDecision, AppError> {
+    let brokerage: Option<Brokerage> = db.select(brokerage_id.clone()).await?;
     let Some(brokerage) = brokerage else {
         return Err(AppError::Forbidden);
     };
@@ -137,8 +148,7 @@ pub async fn enforce_transaction_limit(
     // Resolve the brokerage's tier via the slug stored on the row.
     // No matching tier → don't enforce (lets the trial/onboarding
     // flow create transactions before the broker subscribes).
-    let mut tq = state
-        .db
+    let mut tq = db
         .query("SELECT * FROM tier WHERE slug = $s LIMIT 1")
         .bind(("s", brokerage.plan.clone()))
         .await?;
@@ -157,8 +167,7 @@ pub async fn enforce_transaction_limit(
     let now = Utc::now();
     let start = month_start_utc(now.year(), now.month());
 
-    let mut cq = state
-        .db
+    let mut cq = db
         .query(
             "SELECT count() FROM $b->has_transaction->transaction
              WHERE created_at >= $start GROUP ALL",
@@ -217,7 +226,15 @@ pub async fn assert_brokerage_writable(
     state: &AppState,
     user: &CurrentUser,
 ) -> Result<(), AppError> {
-    let brokerage: Option<Brokerage> = state.db.select(user.brokerage_id.clone()).await?;
+    assert_brokerage_writable_with(&state.db, &user.brokerage_id).await
+}
+
+/// DB-only variant of [`assert_brokerage_writable`] for unit tests.
+pub(crate) async fn assert_brokerage_writable_with(
+    db: &Db,
+    brokerage_id: &surrealdb::types::RecordId,
+) -> Result<(), AppError> {
+    let brokerage: Option<Brokerage> = db.select(brokerage_id.clone()).await?;
     let Some(b) = brokerage else {
         return Err(AppError::Forbidden);
     };
@@ -331,5 +348,250 @@ fn build_banner(b: &Brokerage) -> Option<SubscriptionBanner> {
             })
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Billing-gate tests run against an in-memory SurrealDB. Each
+    //! test seeds just the brokerage (+ tier when relevant) it needs,
+    //! so they stay fast and don't depend on the full schema apply.
+    use super::*;
+    use surrealdb::types::{RecordId, SurrealValue};
+
+    async fn make_db() -> Db {
+        let db = surrealdb::engine::any::connect("mem://")
+            .await
+            .expect("mem connect");
+        db.use_ns("test").use_db("test").await.expect("use ns/db");
+        crate::db::apply_schema(&db).await.expect("apply schema");
+        db
+    }
+
+    /// Insert a brokerage with the given fields and return its id. Uses
+    /// SurrealDB's `CREATE` to let the engine pick the key.
+    async fn insert_brokerage(
+        db: &Db,
+        plan: &str,
+        subscription_status: Option<&str>,
+        is_complimentary: bool,
+    ) -> RecordId {
+        #[derive(Debug, serde::Serialize, SurrealValue)]
+        struct NewB {
+            name: String,
+            plan: String,
+            subscription_status: Option<String>,
+            is_complimentary: bool,
+        }
+        let created: Option<Brokerage> = db
+            .create("brokerage")
+            .content(NewB {
+                name: "TestCo".into(),
+                plan: plan.into(),
+                subscription_status: subscription_status.map(String::from),
+                is_complimentary,
+            })
+            .await
+            .expect("create brokerage");
+        created.expect("brokerage row").id
+    }
+
+    async fn insert_tier(db: &Db, slug: &str, limit: i64, overage_cents: Option<i64>) {
+        #[derive(Debug, serde::Serialize, SurrealValue)]
+        struct NewT {
+            slug: String,
+            name: String,
+            is_active: bool,
+            transaction_limit: i64,
+            overage_fee_cents_per_tx: Option<i64>,
+        }
+        let _: Option<Tier> = db
+            .create("tier")
+            .content(NewT {
+                slug: slug.into(),
+                name: format!("Tier {slug}"),
+                is_active: true,
+                transaction_limit: limit,
+                overage_fee_cents_per_tx: overage_cents,
+            })
+            .await
+            .expect("create tier");
+    }
+
+    // ---- assert_brokerage_writable ----
+
+    #[tokio::test]
+    async fn writable_active_is_allowed() {
+        let db = make_db().await;
+        let b = insert_brokerage(&db, "starter", Some("active"), false).await;
+        assert!(assert_brokerage_writable_with(&db, &b).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn writable_trialing_is_allowed() {
+        let db = make_db().await;
+        let b = insert_brokerage(&db, "starter", Some("trialing"), false).await;
+        assert!(assert_brokerage_writable_with(&db, &b).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn writable_canceling_stays_writable_until_period_ends() {
+        let db = make_db().await;
+        let b = insert_brokerage(&db, "starter", Some("canceling"), false).await;
+        assert!(assert_brokerage_writable_with(&db, &b).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn writable_past_due_is_blocked() {
+        let db = make_db().await;
+        let b = insert_brokerage(&db, "starter", Some("past_due"), false).await;
+        let err = assert_brokerage_writable_with(&db, &b).await.unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(msg.to_lowercase().contains("payment"), "msg was: {msg}");
+    }
+
+    #[tokio::test]
+    async fn writable_wind_down_is_blocked() {
+        let db = make_db().await;
+        let b = insert_brokerage(&db, "starter", Some("wind_down"), false).await;
+        assert!(assert_brokerage_writable_with(&db, &b).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn writable_complimentary_bypasses_status() {
+        // Comp accounts stay writable even with the worst status.
+        let db = make_db().await;
+        let b = insert_brokerage(&db, "starter", Some("wind_down"), true).await;
+        assert!(assert_brokerage_writable_with(&db, &b).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn writable_missing_brokerage_is_forbidden() {
+        let db = make_db().await;
+        let phantom = RecordId::new("brokerage", "does_not_exist");
+        assert!(matches!(
+            assert_brokerage_writable_with(&db, &phantom).await,
+            Err(AppError::Forbidden)
+        ));
+    }
+
+    // ---- enforce_transaction_limit ----
+
+    #[tokio::test]
+    async fn limit_complimentary_is_allowed() {
+        let db = make_db().await;
+        let b = insert_brokerage(&db, "starter", Some("active"), true).await;
+        // No tier, no transactions, no limit applies.
+        assert!(matches!(
+            enforce_transaction_limit_with(&db, &b).await,
+            Ok(LimitDecision::Allowed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn limit_unlimited_tier_is_allowed() {
+        let db = make_db().await;
+        let b = insert_brokerage(&db, "pro", Some("active"), false).await;
+        insert_tier(&db, "pro", -1, None).await; // -1 = unlimited
+        assert!(matches!(
+            enforce_transaction_limit_with(&db, &b).await,
+            Ok(LimitDecision::Allowed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn limit_under_cap_is_allowed() {
+        let db = make_db().await;
+        let b = insert_brokerage(&db, "starter", Some("active"), false).await;
+        insert_tier(&db, "starter", 10, None).await;
+        // No transactions yet → 0 < 10.
+        assert!(matches!(
+            enforce_transaction_limit_with(&db, &b).await,
+            Ok(LimitDecision::Allowed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn limit_no_tier_match_is_allowed() {
+        // Brand-new signup with a plan slug that doesn't resolve to a
+        // tier row yet should not be blocked from creating their first
+        // transaction.
+        let db = make_db().await;
+        let b = insert_brokerage(&db, "unrecognized", Some("trialing"), false).await;
+        assert!(matches!(
+            enforce_transaction_limit_with(&db, &b).await,
+            Ok(LimitDecision::Allowed)
+        ));
+    }
+
+    #[tokio::test]
+    async fn limit_at_cap_with_overage_returns_overage() {
+        // Seed enough transactions to hit the cap, plus a tier with an
+        // overage fee — the gate should allow with `AllowedAsOverage`.
+        let db = make_db().await;
+        let b = insert_brokerage(&db, "metered", Some("active"), false).await;
+        insert_tier(&db, "metered", 1, Some(500)).await;
+        seed_tx_this_month(&db, &b).await;
+        match enforce_transaction_limit_with(&db, &b).await {
+            Ok(LimitDecision::AllowedAsOverage { .. }) => {}
+            other => panic!("expected AllowedAsOverage, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn limit_at_cap_without_overage_is_blocked() {
+        let db = make_db().await;
+        let b = insert_brokerage(&db, "starter", Some("active"), false).await;
+        insert_tier(&db, "starter", 1, None).await;
+        seed_tx_this_month(&db, &b).await;
+        assert!(matches!(
+            enforce_transaction_limit_with(&db, &b).await,
+            Err(AppError::Validation(_))
+        ));
+    }
+
+    /// Helper: create a transaction record and the `has_transaction`
+    /// edge linking it to `brokerage`, dated now (so it falls in the
+    /// current calendar month the gate counts against).
+    async fn seed_tx_this_month(db: &Db, brokerage: &RecordId) {
+        #[derive(Debug, serde::Serialize, SurrealValue)]
+        struct NewTx {
+            property_address: String,
+            city: String,
+            apn: Option<String>,
+            postal_code: Option<String>,
+            price_cents: i64,
+            client_name: Option<String>,
+            mls_number: Option<String>,
+            office_file_number: Option<String>,
+            status: String,
+            transaction_type: String,
+            special_sales_condition: String,
+            sales_type: String,
+        }
+        let tx: Option<crate::models::Transaction> = db
+            .create("transaction")
+            .content(NewTx {
+                property_address: "123 Test".into(),
+                city: "LA".into(),
+                apn: None,
+                postal_code: None,
+                price_cents: 1,
+                client_name: None,
+                mls_number: None,
+                office_file_number: None,
+                status: "active".into(),
+                transaction_type: "residential".into(),
+                special_sales_condition: "none".into(),
+                sales_type: "listing".into(),
+            })
+            .await
+            .expect("create tx");
+        let tx_id = tx.expect("tx row").id;
+        db.query("RELATE $b->has_transaction->$t")
+            .bind(("b", brokerage.clone()))
+            .bind(("t", tx_id))
+            .await
+            .expect("RELATE has_transaction");
     }
 }

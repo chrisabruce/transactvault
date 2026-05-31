@@ -44,7 +44,8 @@
         <form method="post"
               action="/app/team/delete-brokerage"
               class="danger-form"
-              onsubmit="return confirm('FINAL WARNING — this permanently deletes {{ brokerage_name }} and all its data. There is no undo. Continue?');">
+              data-confirm="FINAL WARNING — this permanently deletes {name} and all its data. There is no undo. Continue?"
+              data-confirm-name="{{ brokerage_name }}">
             <label>
                 <span>Type the brokerage name to confirm</span>
                 <input type="text"

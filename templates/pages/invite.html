@@ -14,24 +14,32 @@
             <p class="alert error" role="alert">{{ msg }}</p>
         {% when None %}{% endmatch %}
 
-        <form method="post" action="/invite/{{ invitation.token }}">
-            <fieldset>
-                <legend class="visually-hidden">Accept invitation</legend>
-                <label>
-                    <span>Your name</span>
-                    <input type="text" name="name" required autocomplete="name">
-                </label>
-                <label>
-                    <span>Email</span>
-                    <input type="email" value="{{ invitation.email }}" disabled>
-                </label>
-                <label>
-                    <span>Create a password</span>
-                    <input type="password" name="password" required minlength="8" autocomplete="new-password">
-                </label>
-            </fieldset>
-            <button type="submit">Accept &amp; sign in</button>
-        </form>
+        {% if prompt_login %}
+            <p>This email already has a TransactVault account. Sign in to accept the invitation.</p>
+            <p>
+                <a class="btn" href="/login?next=/app/no-brokerage">Sign in to accept</a>
+            </p>
+            <p class="meta">Once you're signed in, head to the "No brokerage" page to confirm or decline the invite.</p>
+        {% else %}
+            <form method="post" action="/invite/{{ invitation.token }}">
+                <fieldset>
+                    <legend class="visually-hidden">Accept invitation</legend>
+                    <label>
+                        <span>Your name</span>
+                        <input type="text" name="name" required autocomplete="name">
+                    </label>
+                    <label>
+                        <span>Email</span>
+                        <input type="email" value="{{ invitation.email }}" disabled>
+                    </label>
+                    <label>
+                        <span>Create a password</span>
+                        <input type="password" name="password" required minlength="8" autocomplete="new-password">
+                    </label>
+                </fieldset>
+                <button type="submit">Accept &amp; sign in</button>
+            </form>
+        {% endif %}
     </section>
 </main>
 {% endblock %}

@@ -158,7 +158,9 @@
                                                             <form method="post"
                                                                   action="/app/documents/{{ doc.url_key() }}/delete"
                                                                   class="doc-delete"
-                                                                  onsubmit="return confirm('Delete {{ doc.filename }} (v{{ doc.version }})? This cannot be undone.');">
+                                                                  data-confirm="Delete {filename} (v{version})? This cannot be undone."
+                                                                  data-confirm-filename="{{ doc.filename }}"
+                                                                  data-confirm-version="{{ doc.version }}">
                                                                 <button type="submit" class="btn ghost small danger" title="Remove this upload">Delete</button>
                                                             </form>
                                                         {% endif %}

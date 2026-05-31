@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block title %}No brokerage — {{ app_name }}{% endblock %}
+{% block body_class %}page-app{% endblock %}
+
+{% block body %}
+{% if redirect_now %}
+    {# Defensive: handler hit the page with a user who actually has a
+       brokerage — bounce client-side rather than rendering a confusing
+       empty state. The server can't redirect once it commits to render. #}
+    <script>window.location.replace("/app");</script>
+{% endif %}
+
+<header class="site-header lightweight-header">
+    <a class="brand" href="/">{{ app_name }}</a>
+    <nav>
+        <span class="meta">{{ user_email }}</span>
+        <form method="post" action="/logout" class="inline-form">
+            <button type="submit" class="btn ghost small">Sign out</button>
+        </form>
+    </nav>
+</header>
+
+<main class="auth-shell">
+    <section class="auth-card" aria-labelledby="orphan-heading">
+        <h1 id="orphan-heading">You're not at a brokerage yet</h1>
+        <p>
+            Hi {{ user_name }} — your account isn't currently attached to a brokerage on
+            {{ app_name }}, so there are no transactions for you to work on. A broker can
+            invite you at any time.
+        </p>
+
+        {% if !invitations.is_empty() %}
+            <h2>Pending invitations</h2>
+            <ul class="invite-list" role="list">
+                {% for inv in invitations %}
+                    <li class="invite-card">
+                        <p class="invite-card-title">
+                            <strong>{{ inv.brokerage_name }}</strong>
+                            <span class="meta">— invited by {{ inv.inviter_name }} as {{ inv.role }}</span>
+                        </p>
+                        <div class="invite-card-actions">
+                            <form method="post" action="/app/invites/{{ inv.token }}/accept" class="inline-form">
+                                <button type="submit" class="btn">Accept</button>
+                            </form>
+                            <form method="post" action="/app/invites/{{ inv.token }}/decline" class="inline-form">
+                                <button type="submit" class="btn ghost">Decline</button>
+                            </form>
+                        </div>
+                    </li>
+                {% endfor %}
+            </ul>
+        {% else %}
+            <p class="empty-state">
+                No pending invitations. Ask a broker to invite <code>{{ user_email }}</code>
+                and the request will appear here.
+            </p>
+        {% endif %}
+    </section>
+</main>
+{% endblock %}
