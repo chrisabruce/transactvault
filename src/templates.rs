@@ -60,6 +60,34 @@ pub struct PricingTierView {
     /// `brokerage.plan`. Drives the "Current plan" pill on the card
     /// and the disabled-style CTA.
     pub is_current: bool,
+    /// Worked examples that show what a typical month costs at this
+    /// tier: one at the limit, one over. Pre-computed in the
+    /// controller so the template doesn't carry pricing math. Empty
+    /// when the tier is `Unlimited` (no overage to demonstrate).
+    pub scenarios: Vec<PricingScenario>,
+    /// Optional comparison footnote shown beneath the scenarios —
+    /// "At 100 txs/mo, Dotloop costs ~$X for the same team size."
+    /// `None` when no apples-to-apples reference exists.
+    pub comparison_note: Option<String>,
+    /// Display-ready overage rate, e.g. `"$3.00"`, or `None` when the
+    /// tier hard-blocks at the limit. Preformatted here so the template
+    /// stays free of arithmetic.
+    pub overage_per_tx_display: Option<String>,
+}
+
+/// One row in the "what would I pay?" example table on a tier card.
+/// Computed server-side so the rendered numbers are guaranteed
+/// consistent with the live tier configuration — nothing about the
+/// math is duplicated in the template.
+#[derive(Debug, Clone)]
+pub struct PricingScenario {
+    /// "60 transactions / month" — the input volume.
+    pub label: String,
+    /// "$249" — the resulting total cost as a display string.
+    pub total: String,
+    /// Short qualifier: "included", "5 over", "all-in". Helps the
+    /// reader spot which scenario crosses the limit.
+    pub qualifier: &'static str,
 }
 
 /// Public brand book at `/brand` — the canonical guide for designers,

@@ -49,12 +49,40 @@
                             {% endif %}
                         </header>
                         <p class="price">{{ view.tier.price_display() }}<small>/month</small></p>
-                        <p class="plan-limit">{{ view.tier.transaction_limit_display() }}{% if view.tier.user_limit >= 0 %} · {{ view.tier.user_limit_display() }} users{% endif %}</p>
+                        <p class="plan-limit">{{ view.tier.transaction_limit_display() }}{% if view.tier.user_limit < 0 %} · Unlimited users{% else %} · {{ view.tier.user_limit_display() }} users{% endif %}</p>
                         <ul class="plan-features" role="list">
                             {% for bullet in view.tier.feature_bullets %}
                                 <li>{{ bullet }}</li>
                             {% endfor %}
                         </ul>
+
+                        {# Worked-example block. Shown only when the controller
+                           computed scenarios — i.e., the tier has a finite
+                           transaction limit. Unlimited tiers skip it because
+                           the math collapses to "always the base price". #}
+                        {% if !view.scenarios.is_empty() %}
+                            <details class="plan-scenarios">
+                                <summary>What would I actually pay?</summary>
+                                <table class="scenario-table" aria-label="Cost examples for {{ view.tier.name }}">
+                                    <tbody>
+                                        {% for s in view.scenarios %}
+                                            <tr>
+                                                <th scope="row">{{ s.label }}</th>
+                                                <td class="scenario-total">{{ s.total }}<small>/mo</small></td>
+                                                <td class="scenario-qualifier">{{ s.qualifier }}</td>
+                                            </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                                {% if let Some(note) = view.comparison_note %}
+                                    <p class="scenario-note">{{ note }}</p>
+                                {% endif %}
+                                {% if let Some(rate) = view.overage_per_tx_display %}
+                                    <p class="scenario-fineprint">Overage billed at the end of each month at {{ rate }} per transaction past the included limit.</p>
+                                {% endif %}
+                            </details>
+                        {% endif %}
+
                         {% if view.is_current %}
                             <span class="btn secondary disabled" aria-disabled="true">{{ view.button_label }}</span>
                         {% else %}
@@ -79,8 +107,8 @@
                 <p>Download every file after cancellation — no rush.</p>
             </article>
             <article>
-                <strong>Save 15% annually</strong>
-                <p>Prefer yearly? Billed once, 15% off every plan.</p>
+                <strong>Save 17% annually</strong>
+                <p>Pay yearly and get two months free on every plan.</p>
             </article>
         </section>
     </section>

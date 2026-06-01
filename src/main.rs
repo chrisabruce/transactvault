@@ -88,15 +88,25 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("connecting to object storage")?;
 
+    let mailer = email::Mailer::new(&config.email);
+    let stripe_client = stripe::Stripe::new(&config.stripe);
+
+    // Seed the default three-tier pricing model if no tiers exist yet.
+    // Idempotent (skips when any tier row is present) and stays correct
+    // with Stripe in either state: when configured, each tier
+    // round-trips through `Stripe::sync_tier` to create the Product +
+    // Price pair; when not, the tier seeds without Stripe IDs and an
+    // admin re-saves it from `/admin/tiers` later to attach Stripe.
+    db::seed_tiers(&db, &stripe_client)
+        .await
+        .context("seeding default pricing tiers")?;
+
     if config.dev_reset_on_boot {
         storage
             .dev_wipe_bucket()
             .await
             .context("DEV-ONLY storage wipe (DEV_RESET_ON_BOOT was set)")?;
     }
-
-    let mailer = email::Mailer::new(&config.email);
-    let stripe_client = stripe::Stripe::new(&config.stripe);
 
     let state = AppState::new(db, storage, mailer, stripe_client, config.clone());
     let app = router::build(state);

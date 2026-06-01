@@ -8,6 +8,35 @@ the bottom-right of every page.
 
 ## June 2026
 
+### v0.3.0 — New pricing model with worked examples
+
+We've introduced a **three-tier pricing model** built around a simple
+principle: every plan includes **unlimited team members**. Most competitors
+charge per-user, which punishes brokerages for putting their compliance
+officers, transaction coordinators, and admins on the system. We don't.
+
+- **Solo — $79/month.** 15 transactions/month included. Built for indie
+  shops and new teams up to about 15 agents. Overage at $4 per transaction.
+- **Brokerage — $249/month.** 75 transactions/month. The sweet spot for
+  established California brokerages (15–50 agents). Adds custom form sets,
+  per-agent compliance scoring, and chat support. Overage at $3.
+- **Office — $599/month.** 300 transactions/month. Multi-office and
+  franchise operations (50+ agents). Adds SSO, API access, identity-
+  verified e-signatures, and dedicated onboarding. Overage at $2.
+
+The public pricing page now shows **a "What would I actually pay?"
+expandable on every plan card**, with worked examples at half-limit, at
+the limit, and over the limit — so prospects can confirm the math
+matches their actual transaction volume before signing up. Each card
+also carries a one-line comparison to Dotloop, SkySlope, or BrokerMint
+at the same volume so the cost gap is visible.
+
+**Annual billing** now saves you **two full months** (17% off) instead
+of the previous 15%.
+
+Existing brokerages on a custom plan are unaffected — these defaults
+only seed on a fresh install.
+
 ### v0.2.1 — Changelog in the admin area
 
 Super-admins now have a **Changelog** page under `/admin/changelog`. It shows

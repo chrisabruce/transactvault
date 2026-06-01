@@ -18,7 +18,9 @@ use crate::config::Config;
 
 pub mod forms;
 mod seed;
+mod tier_seed;
 pub use seed::seed_forms;
+pub use tier_seed::seed_tiers;
 
 /// Extract the key portion of a SurrealDB [`RecordId`] as a URL-safe
 /// string.

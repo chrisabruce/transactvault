@@ -3498,6 +3498,93 @@ a.external {
 .drag-cell { text-align: center; white-space: nowrap; }
 
 /* --------------------------------------------------------------------------
+   Pricing-page scenario block. Each plan card carries a collapsible
+   "What would I actually pay?" details element with worked examples at
+   half-limit / at-limit / over-limit transaction counts and a one-line
+   competitor comparison. Kept deliberately low-key so it doesn't fight
+   the feature bullets for attention; opens on click for prospects who
+   want the math.
+   -------------------------------------------------------------------------- */
+.plan-scenarios {
+    margin-top: var(--sp-3);
+    padding: var(--sp-3) var(--sp-4);
+    background: var(--color-surface-alt);
+    border-radius: 8px;
+    border: 1px solid var(--color-line);
+}
+.plan-scenarios > summary {
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--color-brand-ink);
+    font-size: var(--fs-sm);
+    list-style: none;
+}
+.plan-scenarios > summary::marker,
+.plan-scenarios > summary::-webkit-details-marker { display: none; }
+.plan-scenarios > summary::before {
+    content: "▸ ";
+    color: var(--color-brand);
+    margin-right: 0.15em;
+    transition: transform 120ms;
+    display: inline-block;
+}
+.plan-scenarios[open] > summary::before { content: "▾ "; }
+
+.scenario-table {
+    width: 100%;
+    margin-top: var(--sp-3);
+    font-size: var(--fs-sm);
+    border-collapse: collapse;
+}
+.scenario-table th,
+.scenario-table td {
+    text-align: left;
+    padding: 0.3rem 0;
+    vertical-align: baseline;
+    border-bottom: 1px dashed var(--color-line);
+}
+.scenario-table tr:last-child th,
+.scenario-table tr:last-child td { border-bottom: 0; }
+.scenario-table th {
+    font-weight: 500;
+    color: var(--color-body);
+}
+.scenario-total {
+    font-weight: 700;
+    color: var(--color-brand-ink);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    padding-right: var(--sp-3) !important;
+    white-space: nowrap;
+}
+.scenario-total small {
+    font-weight: 500;
+    color: var(--color-muted);
+    font-size: 0.75em;
+    margin-left: 0.15em;
+}
+.scenario-qualifier {
+    color: var(--color-muted);
+    font-style: italic;
+    font-size: 0.85em;
+    text-align: right;
+}
+.scenario-note {
+    margin: var(--sp-3) 0 0;
+    padding-top: var(--sp-2);
+    border-top: 1px solid var(--color-line);
+    font-size: 0.85em;
+    color: var(--color-body);
+    line-height: 1.5;
+}
+.scenario-fineprint {
+    margin: var(--sp-2) 0 0;
+    font-size: 0.78em;
+    color: var(--color-muted);
+    line-height: 1.4;
+}
+
+/* --------------------------------------------------------------------------
    Admin changelog page. The current-version panel reads the build at a
    glance; the article wraps the markdown→HTML output so headings, lists,
    and emphasis from CHANGELOG.md render cleanly without bespoke classes.
