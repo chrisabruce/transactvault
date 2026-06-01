@@ -8,6 +8,21 @@ the bottom-right of every page.
 
 ## June 2026
 
+### v0.3.1 — Switched email provider to Postmark
+
+We've moved transactional email — verification links, welcome notes,
+team invites, price-change notifications, and trial-ending reminders —
+from Resend to **Postmark**. There's no visible change in the messages
+themselves; the switch is for deliverability headroom (Postmark's
+sole focus is transactional, and their inbox-placement rates have been
+consistently better in our testing).
+
+**For self-hosted deployments**: the environment variables changed.
+`RESEND_API_KEY` → `POSTMARK_SERVER_TOKEN`; `RESEND_FROM` →
+`POSTMARK_FROM`; `RESEND_REPLY_TO` → `POSTMARK_REPLY_TO`; and a new
+optional `POSTMARK_MESSAGE_STREAM` (defaults to `outbound`). See the
+README for the full set.
+
 ### v0.3.0 — New pricing model with worked examples
 
 We've introduced a **three-tier pricing model** built around a simple

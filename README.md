@@ -7,7 +7,7 @@ Modern real estate transaction management for California brokerages. A Rust + Ax
 - **Rust 2024** with Axum 0.8, Tokio, Tower
 - **SurrealDB v3** (graph-first; `RecordId` everywhere, no string IDs)
 - **RustFS** for S3-compatible object storage (documents, versioned uploads)
-- **Resend** for transactional email (welcome + invitation messages)
+- **Postmark** for transactional email (welcome + invitation messages)
 - **Stripe** (`async-stripe`) for subscription billing — admin-managed tiers sync as Stripe Products/Prices
 - **Askama 0.14** server-side templating
 - **Datastar** CDN for progressive enhancement (loaded in `base.html`)
@@ -43,10 +43,20 @@ cargo run                               # app on :37420
 
 ### Email delivery
 
-`RESEND_API_KEY` is empty by default — outbound messages (welcome + team
-invites) are logged at INFO level instead of delivered. To turn on real
-delivery, set `RESEND_API_KEY` and `RESEND_FROM` (a domain you've verified
-with Resend). `RESEND_REPLY_TO` is optional.
+`POSTMARK_SERVER_TOKEN` is empty by default — outbound messages (welcome +
+team invites) are logged at INFO level instead of delivered. To turn on real
+delivery, set:
+
+- `POSTMARK_SERVER_TOKEN` — the per-server token from Postmark → Servers →
+  API Tokens (not the account-level API token).
+- `POSTMARK_FROM` — a verified Sender Signature or domain in your
+  Postmark account.
+- `POSTMARK_REPLY_TO` — optional; default reply-to address. Invitation
+  emails always override this with the inviter's email so replies route
+  to a real human.
+- `POSTMARK_MESSAGE_STREAM` — optional; defaults to `outbound` (Postmark's
+  default transactional stream). Set to a custom stream slug if you want
+  to split invite vs welcome analytics or use separate suppression lists.
 
 ### Object storage
 
@@ -97,7 +107,7 @@ Tier mechanics:
 db/schema.surql           SCHEMAFULL tables + graph relations (incl. tier + brokerage.stripe_*)
 src/
 ├── main.rs               startup, logging, listener
-├── config.rs             env-driven config (Stripe, RustFS, Resend, JWT…)
+├── config.rs             env-driven config (Stripe, RustFS, Postmark, JWT…)
 ├── router.rs             routes: public marketing + /app + /admin + /healthcheck
 ├── state.rs              AppState (db + config + Stripe + Mailer + storage)
 ├── error.rs              AppError + IntoResponse

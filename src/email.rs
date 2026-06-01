@@ -1,66 +1,235 @@
-//! Transactional email via Resend.
+//! Transactional email via Postmark.
 //!
 //! The mailer is always present in `AppState` but becomes a no-op when
-//! `RESEND_API_KEY` is empty — outbound messages are logged at INFO level
-//! instead of delivered. This keeps local development one-command while
-//! making production wiring a single env-var flip.
+//! `POSTMARK_SERVER_TOKEN` is empty — outbound messages are logged at
+//! INFO level instead of delivered. This keeps local development
+//! one-command while making production wiring a single env-var flip.
+//!
+//! ## Why a hand-rolled client
+//!
+//! The Postmark REST API we touch is a single `POST /email` call. A
+//! third-party `postmark`-named crate would add more transitive deps
+//! than the ~60 lines of HTTP plumbing here. `reqwest` is already a
+//! direct dependency, so the client is just a typed JSON body + a
+//! token header.
+//!
+//! ## Failure mode
+//!
+//! Every send is fire-and-forget at the call site: we **log and
+//! swallow** transport / API errors rather than propagating them up
+//! through `?`. The reason is the same as the original Resend
+//! implementation — a flaky email provider should never cause a
+//! user-facing 500 on signup or invite. The audit log captures the
+//! action either way (invite issued, account verified, etc.), so a
+//! lost message is recoverable via "Resend email" from the team page.
 
-use resend_rs::Resend;
-use resend_rs::types::CreateEmailBaseOptions;
+use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
 
 use crate::config::EmailConfig;
 
-/// Clonable email transport. Safe to clone — `Resend` internally wraps an
-/// `Arc<reqwest::Client>`, and the config is a small struct of Strings.
+/// Postmark API endpoint. Their docs (postmarkapp.com/developer) pin
+/// this URL — it has been stable since 2014 and there's no regional
+/// variant for us to care about.
+const POSTMARK_ENDPOINT: &str = "https://api.postmarkapp.com/email";
+
+/// Clonable email transport. Cheap to clone — every member is either a
+/// String or an `Arc`-wrapped reqwest client. When `client` is `None`
+/// the mailer is in soft-off mode (logs instead of delivers).
 #[derive(Clone)]
 pub struct Mailer {
-    client: Option<Resend>,
+    /// `None` when `POSTMARK_SERVER_TOKEN` was empty at startup. Every
+    /// send path checks this first and short-circuits to a log line.
+    client: Option<PostmarkClient>,
     from: String,
     reply_to: Option<String>,
+    message_stream: String,
+}
+
+/// Inner Postmark HTTP client. Holds the server token + a reqwest
+/// client wrapped in `Arc` so cheap `Clone` of `Mailer` doesn't rebuild
+/// the connection pool.
+#[derive(Clone)]
+struct PostmarkClient {
+    http: Arc<reqwest::Client>,
+    server_token: String,
+}
+
+/// Wire shape Postmark expects. Field names use the `PascalCase` the
+/// Postmark JSON API demands — `#[serde(rename_all)]` rewrites them on
+/// serialization so the Rust struct stays idiomatic.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct SendRequest<'a> {
+    from: &'a str,
+    to: &'a str,
+    subject: &'a str,
+    html_body: &'a str,
+    text_body: &'a str,
+    message_stream: &'a str,
+    /// Postmark accepts `ReplyTo` as a comma-separated list, but we
+    /// only ever populate a single address. `None` omits the field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reply_to: Option<&'a str>,
+}
+
+/// Postmark response. We care about `ErrorCode` (`0` = success) and
+/// `MessageID` (for the success log) — everything else is logged as
+/// the wire string on failure.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct SendResponse {
+    #[serde(default)]
+    error_code: i64,
+    #[serde(default)]
+    message_id: String,
+    #[serde(default)]
+    message: String,
 }
 
 impl Mailer {
     pub fn new(cfg: &EmailConfig) -> Self {
-        let client = cfg.is_enabled().then(|| Resend::new(&cfg.api_key));
-        if client.is_none() {
-            tracing::warn!("RESEND_API_KEY is empty — email delivery is disabled");
-        }
+        let client = if cfg.is_enabled() {
+            // The default reqwest client is fine: connection pooling
+            // is on, default TLS via rustls (per Cargo.toml feature).
+            // Wrap in Arc so cheap-clone semantics survive into every
+            // `AppState` clone the router hands out per request.
+            Some(PostmarkClient {
+                http: Arc::new(reqwest::Client::new()),
+                server_token: cfg.server_token.clone(),
+            })
+        } else {
+            tracing::warn!(
+                "POSTMARK_SERVER_TOKEN is empty — email delivery is disabled (messages will be logged)"
+            );
+            None
+        };
         Self {
             client,
             from: cfg.from.clone(),
             reply_to: cfg.reply_to.clone(),
+            message_stream: cfg.message_stream.clone(),
         }
     }
 
-    /// Send a rendered message. Logs and swallows transport errors: a flaky
-    /// email provider should never cause a user-facing 500 on signup or
-    /// invite, so we warn-and-continue rather than propagate.
+    /// Send a rendered message with the configured default `Reply-To`
+    /// (or none, if not configured). Logs and swallows transport errors
+    /// so a flaky provider never produces a user-facing 500.
     async fn send(&self, to: &str, subject: &str, html: String, text: String) {
+        self.send_inner(to, subject, &html, &text, self.reply_to.as_deref())
+            .await;
+    }
+
+    /// Send with a per-message `Reply-To` override. Falls back to the
+    /// configured global reply-to when the per-message value is empty,
+    /// so callers that forget to populate it still route replies
+    /// somewhere sensible.
+    async fn send_with_reply(
+        &self,
+        to: &str,
+        reply_to: &str,
+        subject: &str,
+        html: String,
+        text: String,
+    ) {
+        let effective = if reply_to.is_empty() {
+            self.reply_to.as_deref()
+        } else {
+            Some(reply_to)
+        };
+        self.send_inner(to, subject, &html, &text, effective).await;
+    }
+
+    /// The one place that talks to Postmark. Both public `send` paths
+    /// funnel through here so the soft-off log line, error handling,
+    /// and request shape all live in a single function.
+    async fn send_inner(
+        &self,
+        to: &str,
+        subject: &str,
+        html: &str,
+        text: &str,
+        reply_to: Option<&str>,
+    ) {
         let Some(client) = self.client.as_ref() else {
-            tracing::info!(%to, %subject, "email (suppressed — no RESEND_API_KEY)");
+            tracing::info!(%to, %subject, "email (suppressed — no POSTMARK_SERVER_TOKEN)");
             return;
         };
 
-        let mut opts = CreateEmailBaseOptions::new(&self.from, [to.to_string()], subject)
-            .with_html(&html)
-            .with_text(&text);
-        if let Some(reply) = self.reply_to.as_deref() {
-            opts = opts.with_reply(reply);
-        }
+        let body = SendRequest {
+            from: &self.from,
+            to,
+            subject,
+            html_body: html,
+            text_body: text,
+            message_stream: &self.message_stream,
+            reply_to,
+        };
 
-        match client.emails.send(opts).await {
-            Ok(resp) => tracing::info!(%to, id = ?resp.id, %subject, "email sent"),
-            Err(err) => tracing::warn!(%to, %subject, error = %err, "email send failed"),
+        let response = client
+            .http
+            .post(POSTMARK_ENDPOINT)
+            .header("Accept", "application/json")
+            .header("X-Postmark-Server-Token", &client.server_token)
+            .json(&body)
+            .send()
+            .await;
+
+        match response {
+            Ok(resp) => {
+                let status = resp.status();
+                match resp.json::<SendResponse>().await {
+                    Ok(parsed) if parsed.error_code == 0 => {
+                        tracing::info!(
+                            %to,
+                            id = %parsed.message_id,
+                            %subject,
+                            "email sent"
+                        );
+                    }
+                    Ok(parsed) => {
+                        // Postmark non-zero ErrorCode — message rejected
+                        // by the API (e.g. unverified Sender Signature,
+                        // recipient on suppression list). We log every
+                        // detail Postmark gives us so the next admin
+                        // troubleshooting an undeliverable invite can
+                        // act on the code, not guess.
+                        tracing::warn!(
+                            %to,
+                            %subject,
+                            error_code = parsed.error_code,
+                            message = %parsed.message,
+                            "postmark rejected message"
+                        );
+                    }
+                    Err(e) => {
+                        // 2xx with an unparseable body shouldn't happen,
+                        // but if it does we still want to know the
+                        // status that came back.
+                        tracing::warn!(
+                            %to,
+                            %subject,
+                            %status,
+                            error = %e,
+                            "postmark response body could not be parsed"
+                        );
+                    }
+                }
+            }
+            Err(err) => {
+                tracing::warn!(%to, %subject, error = %err, "postmark request failed");
+            }
         }
     }
 
-    /// Verify-your-email — first message a new signup receives. Until they
-    /// click the link, the account is in `pending_verification` and they
-    /// can't log in. This is what stops the "users got welcome emails but
-    /// didn't sign up" abuse vector.
+    /// Verify-your-email — first message a new signup receives. Until
+    /// they click the link the account is in `pending_verification`
+    /// and they can't log in. This is what stops the "users got
+    /// welcome emails but didn't sign up" abuse vector.
     pub async fn send_verify(&self, to: &str, name: &str, link: &str) {
-        // Log the link in dev (when delivery is disabled) so testers can
-        // copy-paste from the log instead of needing real email.
+        // Log the link in dev (when delivery is disabled) so testers
+        // can copy-paste from the log instead of needing real email.
         if self.client.is_none() {
             tracing::info!(%to, %link, "verify link (dev — email suppressed)");
         }
@@ -94,8 +263,8 @@ impl Mailer {
             .await;
     }
 
-    /// Greet a freshly-signed-up broker — sent only AFTER verification, so
-    /// it's never delivered to victims of signup abuse.
+    /// Greet a freshly-signed-up broker — sent only AFTER verification,
+    /// so it's never delivered to victims of signup abuse.
     pub async fn send_welcome(&self, to: &str, name: &str, brokerage: &str, app_url: &str) {
         let html = format!(
             "<!doctype html><html><body style=\"font-family:system-ui,sans-serif;color:#0f172a\">\
@@ -197,40 +366,6 @@ impl Mailer {
             .await;
     }
 
-    /// Internal: same as `send`, but with a per-message `Reply-To` override.
-    /// Used for invites so replies route to the inviter.
-    async fn send_with_reply(
-        &self,
-        to: &str,
-        reply_to: &str,
-        subject: &str,
-        html: String,
-        text: String,
-    ) {
-        let Some(client) = self.client.as_ref() else {
-            tracing::info!(%to, %reply_to, %subject, "email (suppressed — no RESEND_API_KEY)");
-            return;
-        };
-
-        let mut opts = CreateEmailBaseOptions::new(&self.from, [to.to_string()], subject)
-            .with_html(&html)
-            .with_text(&text)
-            .with_reply(reply_to);
-        // Fall back to the configured global reply-to if the per-message
-        // value happens to be empty — keeps existing config-driven setups
-        // working even when a caller forgets to populate it.
-        if reply_to.is_empty()
-            && let Some(global) = self.reply_to.as_deref()
-        {
-            opts = opts.with_reply(global);
-        }
-
-        match client.emails.send(opts).await {
-            Ok(resp) => tracing::info!(%to, id = ?resp.id, %subject, "email sent"),
-            Err(err) => tracing::warn!(%to, %subject, error = %err, "email send failed"),
-        }
-    }
-
     /// Notify a broker that their tier's monthly price has changed.
     /// The new amount applies on the next billing cycle, so this is
     /// purely informational — Stripe handles the proration when their
@@ -313,4 +448,65 @@ fn html_escape(s: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
+}
+
+#[cfg(test)]
+mod tests {
+    //! The mailer's network paths can't be exercised without a live
+    //! Postmark server, so these tests pin the construction surface
+    //! and the soft-off behavior — the two things most likely to
+    //! silently regress when somebody touches `EmailConfig`.
+
+    use super::*;
+
+    #[test]
+    fn empty_token_yields_soft_off_mailer() {
+        let cfg = EmailConfig {
+            server_token: String::new(),
+            from: "x@y".into(),
+            reply_to: None,
+            message_stream: "outbound".into(),
+        };
+        let m = Mailer::new(&cfg);
+        assert!(
+            m.client.is_none(),
+            "empty POSTMARK_SERVER_TOKEN must produce a no-op mailer"
+        );
+    }
+
+    #[test]
+    fn token_present_builds_a_client() {
+        let cfg = EmailConfig {
+            server_token: "test-token".into(),
+            from: "x@y".into(),
+            reply_to: Some("reply@y".into()),
+            message_stream: "outbound".into(),
+        };
+        let m = Mailer::new(&cfg);
+        assert!(
+            m.client.is_some(),
+            "non-empty token must yield a Postmark client"
+        );
+        assert_eq!(m.reply_to.as_deref(), Some("reply@y"));
+        assert_eq!(m.message_stream, "outbound");
+    }
+
+    #[tokio::test]
+    async fn soft_off_send_does_not_panic_and_returns_quickly() {
+        // Belt-and-suspenders: if anything is wired wrong, the soft-off
+        // path that runs in dev (and on every empty-token deploy) would
+        // be the first thing to break. Tokio's runtime is enough; no
+        // network reachable here.
+        let cfg = EmailConfig {
+            server_token: String::new(),
+            from: "x@y".into(),
+            reply_to: None,
+            message_stream: "outbound".into(),
+        };
+        let m = Mailer::new(&cfg);
+        m.send_verify("user@example", "Test", "https://app.test/verify/abc")
+            .await;
+        m.send_welcome("user@example", "Test", "Acme RE", "https://app.test")
+            .await;
+    }
 }

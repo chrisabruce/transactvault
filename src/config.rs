@@ -70,18 +70,27 @@ pub struct RustFsConfig {
     pub bucket: String,
 }
 
-/// Resend transactional email settings. An empty `api_key` disables the
-/// transport — messages are logged but not delivered.
+/// Postmark transactional email settings. An empty `server_token`
+/// disables the transport — messages are logged at INFO level but not
+/// delivered, which keeps local dev one-command.
+///
+/// `message_stream` controls which Postmark stream the message is
+/// posted to — Postmark requires this field on every send. Default is
+/// `"outbound"` (every Postmark server has a default outbound stream);
+/// override via `POSTMARK_MESSAGE_STREAM` if you've defined a custom
+/// stream for, say, separating invite emails from welcome emails so
+/// they have independent analytics + suppression lists.
 #[derive(Debug, Clone)]
 pub struct EmailConfig {
-    pub api_key: String,
+    pub server_token: String,
     pub from: String,
     pub reply_to: Option<String>,
+    pub message_stream: String,
 }
 
 impl EmailConfig {
     pub fn is_enabled(&self) -> bool {
-        !self.api_key.is_empty()
+        !self.server_token.is_empty()
     }
 }
 
@@ -112,9 +121,10 @@ impl StripeConfig {
 impl Config {
     /// Minimal test config — every external integration disabled so
     /// the AppState built from this config doesn't reach off-host:
-    /// Stripe client is None, Resend client is None, S3 endpoint is
-    /// a non-routable address. PoW disabled. Suitable for
-    /// `tower::ServiceExt::oneshot`-style HTTP tests.
+    /// Stripe client is None, Postmark token is empty (mailer logs
+    /// instead of sending), S3 endpoint is a non-routable address.
+    /// PoW disabled. Suitable for `tower::ServiceExt::oneshot`-style
+    /// HTTP tests.
     #[cfg(test)]
     pub fn for_tests() -> Self {
         Self {
@@ -144,9 +154,10 @@ impl Config {
                 bucket: "test".into(),
             },
             email: EmailConfig {
-                api_key: String::new(),
+                server_token: String::new(),
                 from: "test@test.local".into(),
                 reply_to: None,
+                message_stream: "outbound".into(),
             },
             stripe: StripeConfig {
                 secret_key: String::new(),
@@ -217,12 +228,13 @@ impl Config {
                 bucket: env_or("RUSTFS_BUCKET", "transactvault"),
             },
             email: EmailConfig {
-                api_key: env_or("RESEND_API_KEY", ""),
+                server_token: env_or("POSTMARK_SERVER_TOKEN", ""),
                 from: env_or(
-                    "RESEND_FROM",
+                    "POSTMARK_FROM",
                     "TransactVault <no-reply@transactvault.example>",
                 ),
-                reply_to: env::var("RESEND_REPLY_TO").ok().filter(|s| !s.is_empty()),
+                reply_to: env::var("POSTMARK_REPLY_TO").ok().filter(|s| !s.is_empty()),
+                message_stream: env_or("POSTMARK_MESSAGE_STREAM", "outbound"),
             },
             stripe: StripeConfig {
                 secret_key: env_or("STRIPE_SECRET_KEY", ""),
