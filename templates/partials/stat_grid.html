@@ -4,7 +4,7 @@
    highlight the currently-applied filter. Number colors per the
    corrections set: Total black, Needs Attention red, Active green,
    Pending orange, Sold blue. #}
-<section class="stat-grid" aria-label="Key metrics">
+<section id="stat-grid" class="stat-grid" aria-label="Key metrics">
     <a class="stat-card{% if active_filter == "total" %} is-active{% endif %}"
        href="/app/transactions"
        aria-current="{% if active_filter == "total" %}page{% else %}false{% endif %}">

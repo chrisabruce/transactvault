@@ -18,6 +18,7 @@ mod controllers;
 mod db;
 mod email;
 mod error;
+mod events;
 mod forms;
 mod models;
 mod router;
@@ -26,6 +27,13 @@ mod state;
 mod storage;
 mod stripe;
 mod templates;
+
+/// User-visible product version, sourced from `Cargo.toml`. Rendered in
+/// the footer of every page so support tickets can include the exact
+/// build they're talking to. Single source of truth: bump `version` in
+/// `Cargo.toml` per release; everything downstream picks it up at
+/// compile time.
+pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg(test)]
 mod tests_http;

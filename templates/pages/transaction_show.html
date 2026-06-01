@@ -72,6 +72,7 @@
                        wall of forms. Native <details> — no JS needed. #}
                     <details class="checklist-group{% if group.complete() %} complete{% endif %}"
                              data-group-key="{{ group.name }}"
+                             {% if group.has_attention(can_review) %}data-attention="true"{% endif %}
                              {% if group.open_by_default || group.has_attention(can_review) %}open{% endif %}>
                         <summary class="checklist-group-header">
                             <h3>{{ group.name }}</h3>

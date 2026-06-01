@@ -21,8 +21,8 @@ use crate::error::AppError;
 use crate::models::Brokerage;
 use crate::state::AppState;
 use crate::templates::{
-    AdminAuditPage, AdminBrokerageMember, AdminBrokerageRow, AdminBrokeragesPage, AdminUser,
-    AdminUsersPage,
+    AdminAuditPage, AdminBrokerageMember, AdminBrokerageRow, AdminBrokeragesPage,
+    AdminChangelogPage, AdminUser, AdminUsersPage,
 };
 
 #[derive(Debug, Deserialize)]
@@ -478,4 +478,53 @@ pub async fn toggle_brokerage_comp(
     .await;
 
     Ok(Redirect::to("/admin/brokerages?flash=comp_toggled"))
+}
+
+/// Compile-time bundled CHANGELOG.md. Single source of truth lives at
+/// the repo root; embedding it means the running build always serves
+/// the version of the changelog that shipped with it (no risk of
+/// reading the file from disk and getting a newer edit pre-deploy).
+///
+/// `include_str!` is relative to *this file*'s directory
+/// (`src/controllers/`), so `../../CHANGELOG.md` reaches the repo root.
+const CHANGELOG_MD: &str = include_str!("../../CHANGELOG.md");
+
+/// `GET /admin/changelog` — render the bundled `CHANGELOG.md` as HTML
+/// for super-admins. Useful in cloud deployments where shelling into
+/// the container to `cat CHANGELOG.md` isn't an option, and for support
+/// teams who want to confirm what shipped at a glance.
+///
+/// Markdown source is trusted (it's a repo file, compiled in), so the
+/// HTML is emitted unescaped via the Askama `safe` filter. If we ever
+/// accept user-supplied markdown, that decision needs to flip.
+pub async fn changelog(
+    State(state): State<AppState>,
+    SuperAdmin(user): SuperAdmin,
+) -> Result<Html<String>, AppError> {
+    let body_html = render_markdown(CHANGELOG_MD);
+    let header = crate::controllers::common::build_app_header(&state, &user, "admin").await;
+    render(&AdminChangelogPage {
+        app_name: &state.config.app_name,
+        base_url: &state.config.base_url,
+        signed_in: true,
+        header,
+        body_html,
+        version: crate::APP_VERSION,
+    })
+}
+
+/// Render CommonMark to HTML using pulldown-cmark. Tables, strikethrough,
+/// and task lists are enabled because the changelog already uses them;
+/// raw-HTML passthrough is intentionally NOT enabled — the input is
+/// trusted but there's no reason to widen the surface.
+fn render_markdown(input: &str) -> String {
+    use pulldown_cmark::{Options, Parser, html};
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_TABLES);
+    options.insert(Options::ENABLE_STRIKETHROUGH);
+    options.insert(Options::ENABLE_TASKLISTS);
+    let parser = Parser::new_ext(input, options);
+    let mut out = String::with_capacity(input.len() + input.len() / 4);
+    html::push_html(&mut out, parser);
+    out
 }

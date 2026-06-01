@@ -43,6 +43,8 @@ pub fn build(state: AppState) -> Router {
         // handler detects which URL it was reached at and sets the
         // nav highlight accordingly.
         .route("/app", get(transactions::list))
+        .route("/app/stats", get(transactions::stats_fragment))
+        .route("/app/stats/stream", get(transactions::stats_stream))
         .route("/app/search", get(transactions::search))
         .route(
             "/app/transactions",
@@ -147,7 +149,8 @@ pub fn build(state: AppState) -> Router {
             "/admin/forms/{key}/forms/{form_key}/edit",
             get(forms::admin_edit_form).post(forms::admin_update_form),
         )
-        .route("/admin/audit", get(admin::audit_log));
+        .route("/admin/audit", get(admin::audit_log))
+        .route("/admin/changelog", get(admin::changelog));
 
     Router::new()
         .merge(public)

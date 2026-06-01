@@ -10,6 +10,21 @@
 // another transaction in a new tab doesn't carry over preferences that
 // would surprise the user across deals.
 //
+// **Attention-aware.** Groups the server flags with `data-attention`
+// (the reviewer's "you need to look here" signal) are FORCED open by
+// `restore()` regardless of what the user persisted. This is the fix
+// for the bug where a compliance officer would open a transaction and
+// see every group collapsed because the agent had walked through and
+// collapsed groups while uploading — the server knows there's pending
+// work to review, and that beats stale per-session state.
+//
+// We also only persist on USER-driven toggles. The earlier version
+// also persisted on `beforeunload`, which captured every group's
+// then-current open/closed state (including the server's defaults).
+// That meant the first page-leave wrote choices the user never made,
+// which then haunted later visits. The current handler writes only
+// when the user actually clicks a disclosure summary.
+//
 // The compliance panel exposes its tx key via `data-tx-key` on the
 // `<section id="compliance-panel">` wrapper, and every group carries
 // its own `data-group-key` (the raw category name). If either is
@@ -39,6 +54,15 @@
 
     function restore() {
         eachGroup(function (txKey, groupKey, el) {
+            // Attention groups always win — never collapse one that
+            // the server says needs the viewer's eyes. The user can
+            // still manually collapse it after reading; that toggle
+            // will persist for the rest of the session (no-op here
+            // because we re-open on every load while attention holds).
+            if (el.dataset.attention === "true") {
+                el.setAttribute("open", "");
+                return;
+            }
             var saved;
             try {
                 saved = sessionStorage.getItem(keyFor(txKey, groupKey));
@@ -53,20 +77,6 @@
         });
     }
 
-    function persist() {
-        eachGroup(function (txKey, groupKey, el) {
-            try {
-                sessionStorage.setItem(
-                    keyFor(txKey, groupKey),
-                    el.open ? "open" : "closed"
-                );
-            } catch (e) {
-                // Same fail-soft posture as `restore()` — the worst
-                // case is that the reload re-applies server defaults.
-            }
-        });
-    }
-
     // Run as early as the DOM is parsed so the user never sees the
     // wrong open state flash before our restore.
     if (document.readyState === "loading") {
@@ -75,10 +85,13 @@
         restore();
     }
 
-    // Capture every toggle (event delegation handles groups inserted
-    // by future morphs). `toggle` doesn't bubble in older Firefox, so
-    // we attach in capture phase on the document to catch it before
-    // it ever stops.
+    // Capture every USER toggle. Event delegation handles groups
+    // inserted by future morphs. `toggle` doesn't bubble in older
+    // Firefox so we attach in capture phase on the document.
+    //
+    // We intentionally do NOT persist on `beforeunload` — that would
+    // capture server defaults the user never chose, which is what
+    // caused the "everything collapsed when compliance opens" bug.
     document.addEventListener(
         "toggle",
         function (e) {
@@ -98,11 +111,4 @@
         },
         true
     );
-
-    // The upload flow calls `window.location.reload()` on success. By
-    // the time `beforeunload` fires our toggle handler has already
-    // persisted everything, but this is a belt-and-suspenders sweep
-    // in case a reload happens via another path (e.g. status update
-    // form submission) without an intervening toggle event.
-    window.addEventListener("beforeunload", persist);
 })();

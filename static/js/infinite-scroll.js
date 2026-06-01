@@ -1,88 +1,119 @@
-// Infinite-scroll trigger for the transactions list.
+// Server-rendered infinite scroll, data-attribute driven so the
+// transactions list, audit log, search results, and any future
+// paginated surface can share one implementation.
 //
-// The list page renders the first page of rows server-side. The last
-// <li> on each page is a sentinel with `data-tx-sentinel="<url>"` where
-// the URL hits the same controller with `?page=N&fragment=rows`. When
-// the sentinel scrolls into view we fetch that URL, append the
-// returned rows in place of the sentinel, and the new server-rendered
-// sentinel (if any) is wired up automatically.
+// MARKUP CONTRACT
+// ---------------
+// The container holds the rows. Each page's last row is a "sentinel"
+// carrying the URL of the next page. When the sentinel scrolls into
+// view we GET that URL, parse the fragment, splice the new rows in
+// place of the old sentinel, and the new sentinel (if any) gets
+// observed automatically.
 //
-// Uses IntersectionObserver natively rather than Datastar directives
-// because Datastar's HTML-response merge defaults to morphing the
-// entire response into the page (Idiomorph), and append-into-list isn't
-// a one-liner in current Datastar idioms. Same UX, ~30 lines, no
-// version-drift risk on the CDN bundle.
+//   <ul data-infinite-list>                           ← container
+//       <li>…</li>                                    ← rows
+//       <li class="infinite-sentinel"                 ← sentinel
+//           data-next-url="/app?page=2&fragment=rows"
+//           aria-hidden="true">…</li>
+//   </ul>
+//
+// For tables, set `data-wrap="tbody"` on the container. Browsers
+// refuse to parse a bare `<tr>` as a top-level child of `<template>`,
+// so the fragment gets wrapped in a `<table><tbody>` first:
+//
+//   <tbody data-infinite-list data-wrap="tbody">
+//       <tr>…</tr>
+//       <tr class="infinite-sentinel" data-next-url="…">…</tr>
+//   </tbody>
+//
+// No JSON, no shared global state — everything's driven by the markup
+// the server already emits. Each container is independent, so two
+// paginated lists on the same page work without interfering.
 (function () {
     "use strict";
 
-    var list = document.getElementById("tx-list");
-    if (!list || !("IntersectionObserver" in window)) return;
+    if (!("IntersectionObserver" in window)) return;
 
-    // Guard against the sentinel firing twice during fast scroll: once
-    // a request is in flight for a given URL, ignore subsequent hits
-    // for the same URL until it resolves or fails.
-    var inFlight = new Set();
+    var SENTINEL = ".infinite-sentinel";
 
-    function observe(sentinel) {
-        if (!sentinel || !sentinel.dataset || !sentinel.dataset.txSentinel) return;
-        var observer = new IntersectionObserver(function (entries, obs) {
-            entries.forEach(function (entry) {
-                if (!entry.isIntersecting) return;
-                obs.disconnect();
-                loadMore(sentinel);
-            });
-        }, { rootMargin: "200px 0px" });
-        observer.observe(sentinel);
-    }
+    // Per-instance state lives in a closure created when we mount the
+    // container, so two lists on one page don't share in-flight sets
+    // or accidentally cross-fetch.
+    function mount(container) {
+        var inFlight = new Set();
+        var wrap = container.dataset.wrap === "tbody";
 
-    function loadMore(sentinel) {
-        var url = sentinel.dataset.txSentinel;
-        if (!url || inFlight.has(url)) return;
-        inFlight.add(url);
-
-        fetch(url, {
-            credentials: "same-origin",
-            headers: { "Accept": "text/html" }
-        })
-            .then(function (resp) {
-                if (!resp.ok) throw new Error("HTTP " + resp.status);
-                return resp.text();
-            })
-            .then(function (html) {
-                // Parse the fragment into a detached fragment so we can
-                // pluck out only the <li> children. The server returns
-                // raw rows + an optional new sentinel — no wrapping
-                // <html>/<body>.
-                var tpl = document.createElement("template");
-                tpl.innerHTML = html.trim();
-                var newRows = Array.from(tpl.content.children);
-
-                // Insert the new rows in place of the old sentinel,
-                // then drop the old sentinel itself.
-                newRows.forEach(function (row) {
-                    list.insertBefore(row, sentinel);
+        function observe(sentinel) {
+            if (!sentinel || !sentinel.dataset || !sentinel.dataset.nextUrl) return;
+            var io = new IntersectionObserver(function (entries, obs) {
+                entries.forEach(function (entry) {
+                    if (!entry.isIntersecting) return;
+                    obs.disconnect();
+                    loadMore(sentinel);
                 });
-                var nextSentinel = list.querySelector(".transaction-sentinel:not([data-wired])");
-                sentinel.parentNode.removeChild(sentinel);
+            }, { rootMargin: "200px 0px" });
+            io.observe(sentinel);
+        }
 
-                inFlight.delete(url);
-                // Wire the next sentinel (the one we just appended).
-                if (nextSentinel) {
-                    nextSentinel.setAttribute("data-wired", "1");
-                    observe(nextSentinel);
-                }
+        function parseFragment(html) {
+            var tpl = document.createElement("template");
+            // For table-row fragments, browsers drop bare <tr> nodes
+            // unless they're parented under <table><tbody>. We add the
+            // wrapper, then extract the tbody's children — the wrapper
+            // itself is discarded.
+            if (wrap) {
+                tpl.innerHTML = "<table><tbody>" + html.trim() + "</tbody></table>";
+                var tbody = tpl.content.querySelector("tbody");
+                return tbody ? Array.from(tbody.children) : [];
+            }
+            tpl.innerHTML = html.trim();
+            return Array.from(tpl.content.children);
+        }
+
+        function loadMore(sentinel) {
+            var url = sentinel.dataset.nextUrl;
+            if (!url || inFlight.has(url)) return;
+            inFlight.add(url);
+
+            fetch(url, {
+                credentials: "same-origin",
+                headers: { "Accept": "text/html" }
             })
-            .catch(function (err) {
-                console.warn("infinite-scroll: fetch failed", err);
-                inFlight.delete(url);
-                // Leave the sentinel in place so a manual reload retries.
-            });
+                .then(function (resp) {
+                    if (!resp.ok) throw new Error("HTTP " + resp.status);
+                    return resp.text();
+                })
+                .then(function (html) {
+                    var newRows = parseFragment(html);
+                    newRows.forEach(function (row) {
+                        container.insertBefore(row, sentinel);
+                    });
+                    // The new sentinel (if any) is whatever rows
+                    // we just inserted left behind — find the
+                    // un-wired one and observe it.
+                    var next = container.querySelector(SENTINEL + ":not([data-wired])");
+                    sentinel.parentNode.removeChild(sentinel);
+                    inFlight.delete(url);
+                    if (next) {
+                        next.setAttribute("data-wired", "1");
+                        observe(next);
+                    }
+                })
+                .catch(function (err) {
+                    console.warn("infinite-scroll: fetch failed", err);
+                    inFlight.delete(url);
+                    // Leave the sentinel in place so a manual reload
+                    // (scroll up + back down, or a page refresh)
+                    // retries.
+                });
+        }
+
+        var first = container.querySelector(SENTINEL);
+        if (first) {
+            first.setAttribute("data-wired", "1");
+            observe(first);
+        }
     }
 
-    // Initial wiring.
-    var first = list.querySelector(".transaction-sentinel");
-    if (first) {
-        first.setAttribute("data-wired", "1");
-        observe(first);
-    }
+    document.querySelectorAll("[data-infinite-list]").forEach(mount);
 })();

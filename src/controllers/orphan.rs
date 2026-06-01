@@ -81,6 +81,9 @@ pub async fn accept(
         .bind(("i", invite.id.clone()))
         .await?;
 
+    let target_user_id = user.user_id.clone();
+    let invite_brokerage = invite.brokerage.clone();
+
     crate::audit::record(
         &state.db,
         "invite_accepted",
@@ -91,6 +94,18 @@ pub async fn accept(
         None,
     )
     .await;
+
+    // Brokerage-side: the joined brokerage's dashboards may want to
+    // surface the new member (counts, etc.).
+    state
+        .events
+        .publish(crate::events::Event::BrokerageMutation(invite_brokerage));
+    // Target-user-side: their membership just transitioned from "none"
+    // to "member" — any live stream they had open against the
+    // no-brokerage landing should drop and reconnect against /app.
+    state
+        .events
+        .publish(crate::events::Event::UserMembershipChanged(target_user_id));
 
     Ok(Redirect::to("/app"))
 }

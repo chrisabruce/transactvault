@@ -9,7 +9,7 @@
     </tr>
 {% endfor %}
 {% if has_next_page %}
-    <tr class="audit-sentinel" data-audit-sentinel="{{ next_url }}" aria-hidden="true">
+    <tr class="infinite-sentinel" data-next-url="{{ next_url }}" aria-hidden="true">
         <td colspan="6"><span class="loader">Loading more…</span></td>
     </tr>
 {% endif %}

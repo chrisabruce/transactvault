@@ -26,7 +26,7 @@
     </li>
 {% endfor %}
 {% if has_next_page %}
-    <li class="transaction-sentinel" data-tx-sentinel="{{ next_url }}" aria-hidden="true">
+    <li class="infinite-sentinel" data-next-url="{{ next_url }}" aria-hidden="true">
         <span class="loader">Loading more…</span>
     </li>
 {% endif %}

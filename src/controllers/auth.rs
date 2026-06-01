@@ -738,6 +738,21 @@ pub async fn accept_invite(
     )
     .await;
 
+    // Brokerage-side: the joined brokerage's dashboards may want to
+    // reflect the new member.
+    state
+        .events
+        .publish(crate::events::Event::BrokerageMutation(
+            invitation.brokerage.clone(),
+        ));
+    // Target-user-side: harmless on the freshly-created account (no
+    // existing SSE streams), but published for symmetry with the
+    // orphan-accept path so future stream surfaces don't need to
+    // special-case the source of the membership change.
+    state
+        .events
+        .publish(crate::events::Event::UserMembershipChanged(user.id.clone()));
+
     set_session_cookie(&state, &cookies, &user.id)?;
     Ok(Redirect::to("/app").into_response())
 }

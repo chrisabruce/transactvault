@@ -7,6 +7,7 @@ use surrealdb::engine::any::Any;
 
 use crate::config::Config;
 use crate::email::Mailer;
+use crate::events::Events;
 use crate::security::RateLimiter;
 use crate::storage::Storage;
 use crate::stripe::Stripe;
@@ -27,6 +28,13 @@ pub struct AppState {
     /// `"<scope>:<ip>"` so different scopes (signup, login, …) live in
     /// independent buckets.
     pub rate_limiter: RateLimiter,
+    /// In-process pub/sub for live dashboard updates. Every mutating
+    /// handler publishes a [`crate::events::Event::BrokerageMutation`]
+    /// after committing so any open SSE stream tied to that brokerage
+    /// can re-render. Membership-changing handlers also publish
+    /// [`crate::events::Event::UserMembershipChanged`] so the target
+    /// user's live streams drop and reconnect with their new role.
+    pub events: Events,
 }
 
 impl AppState {
@@ -38,6 +46,7 @@ impl AppState {
             stripe,
             config: Arc::new(config),
             rate_limiter: RateLimiter::new(),
+            events: Events::new(),
         }
     }
 
@@ -62,6 +71,7 @@ impl AppState {
             stripe: crate::stripe::Stripe::new(&config.stripe),
             config: Arc::new(config),
             rate_limiter: RateLimiter::new(),
+            events: Events::new(),
         }
     }
 }

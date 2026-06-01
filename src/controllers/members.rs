@@ -359,10 +359,25 @@ pub async fn change_role(
     state
         .db
         .query("UPDATE works_at SET role = $r WHERE in = $u AND out = $b")
-        .bind(("u", target_user_id))
+        .bind(("u", target_user_id.clone()))
         .bind(("b", user.brokerage_id.clone()))
         .bind(("r", new_role.as_str().to_string()))
         .await?;
+
+    // Brokerage-side: any subscriber's "what can this person do" view
+    // could be affected — refresh the dashboards.
+    state
+        .events
+        .publish(crate::events::Event::BrokerageMutation(
+            user.brokerage_id.clone(),
+        ));
+    // Target-user-side: their own role just shifted. If they have an
+    // open SSE stream, kick it so the next reconnect re-runs their
+    // CurrentUser extractor with the new role rather than continuing
+    // to render under the role they had at connect time.
+    state
+        .events
+        .publish(crate::events::Event::UserMembershipChanged(target_user_id));
 
     Ok(Redirect::to("/app/team"))
 }
@@ -465,6 +480,20 @@ pub async fn remove_member(
         Some(format!("removed {} ({})", existing.email, existing.role)),
     )
     .await;
+
+    // Brokerage-side: dashboards in this brokerage may show different
+    // counts now that one less member is in play.
+    state
+        .events
+        .publish(crate::events::Event::BrokerageMutation(
+            user.brokerage_id.clone(),
+        ));
+    // Target-user-side: if the removed user has any live SSE stream
+    // open against this brokerage, kick it immediately so they stop
+    // receiving data from a brokerage they no longer belong to.
+    state
+        .events
+        .publish(crate::events::Event::UserMembershipChanged(target_user_id));
 
     Ok(Redirect::to("/app/team"))
 }

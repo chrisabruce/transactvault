@@ -267,6 +267,49 @@ async fn seed_item(state: &AppState, tx: &RecordId, status: &str) -> RecordId {
     id
 }
 
+/// Same as `seed_item` but lets the caller override the group name —
+/// used by tests that need multiple items in distinct groups.
+async fn seed_item_in_group(
+    state: &AppState,
+    tx: &RecordId,
+    status: &str,
+    group_name: &str,
+) -> RecordId {
+    #[derive(serde::Serialize, SurrealValue)]
+    struct NewItem {
+        title: String,
+        form_code: Option<String>,
+        group_name: String,
+        group_order: i64,
+        position: i64,
+        required: bool,
+        approval_status: String,
+    }
+    let it: Option<crate::models::ChecklistItem> = state
+        .db
+        .create("checklist_item")
+        .content(NewItem {
+            title: format!("Item in {group_name}"),
+            form_code: None,
+            group_name: group_name.into(),
+            group_order: 1,
+            position: 1,
+            required: true,
+            approval_status: status.into(),
+        })
+        .await
+        .expect("create item");
+    let id = it.expect("item row").id;
+    state
+        .db
+        .query("RELATE $t->has_item->$i")
+        .bind(("t", tx.clone()))
+        .bind(("i", id.clone()))
+        .await
+        .expect("has_item edge");
+    id
+}
+
 async fn seed_doc_on_item(state: &AppState, item: &RecordId) {
     #[derive(serde::Serialize, SurrealValue)]
     struct NewDoc {
@@ -1421,6 +1464,239 @@ async fn create_transaction_requires_address_or_apn() {
 // at the DB layer. Closes the user-reported "only deny comments seem to
 // flag" suspicion.
 // ---------------------------------------------------------------------------
+
+/// User bug report: agent uploads files into several groups, then
+/// compliance opens the transaction and sees ALL groups collapsed —
+/// no idea what to review. The fix is whatever makes `has_attention`
+/// fire for groups that contain pending+upload items.
+///
+/// The template renders `<details ... open>` whenever
+/// `open_by_default || has_attention(can_review)` is true. For a
+/// compliance viewer `open_by_default == false`, so the bug is either
+/// (a) `has_attention` returns false despite the upload (likely a
+/// data-load issue in `build_grouped_checklist`), or (b) the JS
+/// state-persistence is overriding the server-rendered `open`.
+///
+/// This test pins the server-side answer: render the page as
+/// compliance and check the raw HTML has `open` on every group that
+/// contains a pending+upload item.
+#[tokio::test]
+async fn compliance_sees_groups_open_after_agent_uploads() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let agent = seed_user(&app.state, "agent@a").await;
+    join(&app.state, &agent, &b, "agent").await;
+    let officer = seed_user(&app.state, "co@a").await;
+    join(&app.state, &officer, &b, "coordinator").await;
+    let tx = seed_tx(&app.state, &b, Some(&agent)).await;
+
+    // Create three items in three different groups, each with an
+    // uploaded document — mirroring "agent uploaded into different
+    // categories." Override the default `group_name` from `seed_item`
+    // so the groups are distinct.
+    let groups = [
+        "Mandatory Disclosures",
+        "Listing Contracts",
+        "Escrow Documents",
+    ];
+    for name in groups {
+        let item = seed_item_in_group(&app.state, &tx, "pending", name).await;
+        seed_doc_on_item(&app.state, &item).await;
+    }
+
+    let (status, body) = authed_get(
+        &app,
+        &officer,
+        &format!("/app/transactions/{}", crate::db::record_key(&tx)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Server must emit `data-attention="true"` on every group with a
+    // pending+upload item — that's the marker the client-side
+    // `checklist-state.js` checks before honoring sessionStorage.
+    // Without this, stale "closed" entries from an earlier session
+    // (typically the agent walking through groups to upload into
+    // each) would override the compliance officer's first view.
+    let attention_count = body.matches("data-attention=\"true\"").count();
+    assert_eq!(
+        attention_count,
+        groups.len(),
+        "expected one data-attention marker per group with uploads, got {attention_count}"
+    );
+    for name in groups {
+        assert!(
+            body.contains(&format!(r#"data-group-key="{name}""#)),
+            "group {name:?} should render in the page"
+        );
+    }
+}
+
+/// `/app/stats` returns the same `<section id="stat-grid">` fragment
+/// that the full dashboard renders, with live counters reflecting the
+/// caller's brokerage. The dashboard wraps it in
+/// `data-on-interval__15s` so Datastar morphs the numbers in place
+/// without a page reload when another user changes state.
+#[tokio::test]
+async fn stats_fragment_serves_morph_target_for_dashboard_polling() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    join(&app.state, &broker, &b, "broker").await;
+    // Two transactions: one active, one sold.
+    seed_tx(&app.state, &b, Some(&broker)).await;
+    let sold = seed_tx(&app.state, &b, Some(&broker)).await;
+    app.state
+        .db
+        .query("UPDATE $t SET status = 'sold'")
+        .bind(("t", sold))
+        .await
+        .expect("update status");
+
+    let (status, body) = authed_get(&app, &broker, "/app/stats").await;
+    assert_eq!(status, StatusCode::OK);
+    // The response must carry the matching id so Idiomorph can find
+    // the in-page element to morph into.
+    assert!(
+        body.contains(r#"id="stat-grid""#),
+        "fragment must carry id=\"stat-grid\" for the morph match"
+    );
+    // Numbers are accurate — 2 total, 1 active, 1 sold.
+    assert!(body.contains(">2<"), "total should be 2");
+    assert!(body.contains(">1<"), "active and sold each =1");
+}
+
+/// `/app/stats/stream` opens a long-lived Server-Sent Events response.
+/// We can't `to_bytes` it (the stream never ends), so this test peeks
+/// at headers + the first body chunk to verify:
+///   - the response is `text/event-stream` (Datastar's signal that this
+///     is a push channel, not a one-shot patch);
+///   - the initial event the handler emits is a Datastar
+///     `datastar-patch-elements` event carrying the `stat-grid`
+///     fragment, so the client morphs fresh numbers in immediately on
+///     connect rather than waiting for the first mutation.
+#[tokio::test]
+async fn stats_stream_pushes_initial_patch_event_on_connect() {
+    use axum::body::Body;
+    use axum::extract::ConnectInfo;
+    use axum::http::Request;
+    use http_body_util::BodyExt;
+    use std::net::SocketAddr;
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    join(&app.state, &broker, &b, "broker").await;
+    seed_tx(&app.state, &b, Some(&broker)).await;
+
+    let cookie = session_cookie(&app, &broker);
+    let mut req = Request::builder()
+        .uri("/app/stats/stream")
+        .header("cookie", cookie)
+        .body(Body::empty())
+        .expect("build request");
+    req.extensions_mut().insert(ConnectInfo::<SocketAddr>(
+        "127.0.0.1:0".parse().expect("loopback addr"),
+    ));
+
+    let response = app
+        .router
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("router oneshot");
+    assert_eq!(response.status(), StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        content_type.starts_with("text/event-stream"),
+        "expected SSE content-type, got {content_type:?}"
+    );
+
+    // Read just enough of the stream to see the first event — anything
+    // beyond ~250ms means the handler isn't emitting the initial
+    // event eagerly and the dashboard would show stale numbers until
+    // someone else mutates state. Reading frames-as-they-arrive (not
+    // `to_bytes`) avoids waiting for the stream's never-coming end.
+    let mut body = response.into_body();
+    let mut buf = String::new();
+    let deadline = Duration::from_millis(500);
+    let started = std::time::Instant::now();
+    while started.elapsed() < deadline && !buf.contains("stat-grid") {
+        let next = timeout(Duration::from_millis(250), body.frame()).await;
+        match next {
+            Ok(Some(Ok(frame))) => {
+                if let Some(data) = frame.data_ref() {
+                    buf.push_str(&String::from_utf8_lossy(data));
+                }
+            }
+            Ok(Some(Err(_))) | Ok(None) => break,
+            Err(_) => break, // timeout on this frame; keep looping
+        }
+    }
+
+    assert!(
+        buf.contains("event: datastar-patch-elements"),
+        "first SSE event should be Datastar patch-elements; saw: {buf:?}"
+    );
+    assert!(
+        buf.contains("stat-grid"),
+        "patch body must carry the stat-grid id for morph match; saw: {buf:?}"
+    );
+}
+
+/// `/admin/changelog` renders the bundled `CHANGELOG.md` as HTML for
+/// super-admins, with the running build version shown prominently. The
+/// test config wires `admin@test` as the lone super-admin (see
+/// `Config::for_tests`) — anyone else hitting the route gets a 403, so
+/// the route is also implicitly a gate test.
+#[tokio::test]
+async fn admin_changelog_renders_version_and_bundled_markdown() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let admin = seed_user(&app.state, "admin@test").await;
+    join(&app.state, &admin, &b, "broker").await;
+
+    let (status, body) = authed_get(&app, &admin, "/admin/changelog").await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Build version from Cargo.toml lands in the page header.
+    let v = env!("CARGO_PKG_VERSION");
+    assert!(
+        body.contains(v),
+        "page should show running version v{v}; saw body of {} bytes",
+        body.len()
+    );
+
+    // Pulldown rendered the bundled CHANGELOG.md, so a known heading
+    // from that file is present as real `<h1>` HTML, not as raw `#`.
+    assert!(
+        body.contains("<h1>What's new</h1>"),
+        "CHANGELOG.md should have been rendered as HTML, not raw markdown"
+    );
+
+    // Admin subnav exposes the link so super-admins can navigate to it.
+    assert!(
+        body.contains(r#"href="/admin/changelog""#),
+        "admin subnav should link to /admin/changelog"
+    );
+
+    // Non-admin gets blocked.
+    let other = seed_user(&app.state, "broker@a").await;
+    join(&app.state, &other, &b, "broker").await;
+    let (forbidden, _) = authed_get(&app, &other, "/admin/changelog").await;
+    assert_eq!(
+        forbidden,
+        StatusCode::FORBIDDEN,
+        "non-super-admin must NOT reach the changelog page"
+    );
+}
 
 #[tokio::test]
 async fn standalone_item_comment_endpoint_writes_a_flaggable_comment() {

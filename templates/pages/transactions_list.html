@@ -15,7 +15,29 @@
         <a class="btn" href="/app/transactions/new">+ New transaction</a>
     </header>
 
-    {% include "partials/stat_grid.html" %}
+    {# The stat grid is reactive in real time. On page load Datastar
+       opens a Server-Sent Events connection to `/app/stats/stream`,
+       and the server pushes a fresh `<section id="stat-grid">`
+       fragment every time something in this brokerage changes (an
+       approve, deny, comment, upload, status change, reassign, or
+       new transaction). Idiomorph matches by id and morphs the
+       numbers in place — no page reload, no polling.
+
+       `data-on-load` runs once when the host div enters the DOM, so
+       wrapping the stat-grid include here keeps the host stable
+       across morphs while the inner `<section id="stat-grid">` is
+       what gets replaced.
+
+       The status + attention params come from the current page URL
+       so the pushed fragment highlights the same card the user
+       clicked into. The server scopes the stream to the caller's
+       brokerage + role at connect time and re-verifies membership
+       on every event — if a role change or removal lands mid-stream,
+       the server closes the connection and the client reconnects
+       with fresh authorization. #}
+    <div data-on-load="@get('/app/stats/stream?status={{ filter_status }}{% if attention_on %}&attention=1{% endif %}')">
+        {% include "partials/stat_grid.html" %}
+    </div>
 
     {% include "partials/tx_toolbar.html" %}
 
@@ -42,7 +64,7 @@
                 {% endfor %}
                 <span class="tx-list-col is-spacer" aria-hidden="true"></span>
             </header>
-            <ul id="tx-list" role="list">
+            <ul id="tx-list" data-infinite-list role="list">
                 {% include "partials/transaction_rows.html" %}
             </ul>
         </section>

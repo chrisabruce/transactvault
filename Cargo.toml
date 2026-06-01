@@ -1,12 +1,12 @@
 [package]
 name = "transactvault"
-version = "0.1.0"
+version = "0.2.1"
 edition = "2024"
 description = "TransactVault — modern real estate transaction management for California brokerages."
 # Proprietary, all rights reserved — source is public on GitHub for
 # transparency and security review, NOT under an OSI-approved license.
-# See LICENSE for full terms and commercial-licensing contact.
-license-file = "LICENSE"
+# See LICENSE.md for full terms and commercial-licensing contact.
+license-file = "LICENSE.md"
 publish = false
 
 [dependencies]
@@ -52,9 +52,17 @@ hmac = "0.12"
 hex = "0.4"
 rand = "0.8"
 urlencoding = "2"
+# Markdown → HTML for the in-app changelog viewer. CommonMark-compliant,
+# pure-Rust, no JS-bridge. Used by the admin changelog page to render
+# CHANGELOG.md without bundling a frontend renderer.
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
+# Test-only: read SSE response bodies one frame at a time so tests
+# can assert on the first event without `to_bytes` hanging on the
+# stream's never-coming end.
+http-body-util = "0.1"
 
 [profile.release]
 lto = "thin"

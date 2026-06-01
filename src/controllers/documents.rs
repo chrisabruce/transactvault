@@ -248,6 +248,12 @@ pub async fn upload(
         }
     }
 
+    state
+        .events
+        .publish(crate::events::Event::BrokerageMutation(
+            user.brokerage_id.clone(),
+        ));
+
     Ok(Redirect::to(&format!("/app/transactions/{id}")))
 }
 
@@ -373,6 +379,12 @@ pub async fn delete(
         )),
     )
     .await;
+
+    state
+        .events
+        .publish(crate::events::Event::BrokerageMutation(
+            user.brokerage_id.clone(),
+        ));
 
     let tx_key = crate::db::record_key(&tx_id);
     Ok(Redirect::to(&format!("/app/transactions/{tx_key}")))

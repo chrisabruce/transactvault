@@ -116,6 +116,12 @@ pub async fn create(
         .bind(("c", item.id))
         .await?;
 
+    state
+        .events
+        .publish(crate::events::Event::BrokerageMutation(
+            user.brokerage_id.clone(),
+        ));
+
     Ok(Redirect::to(&format!("/app/transactions/{id}")))
 }
 
@@ -210,6 +216,12 @@ async fn set_approval(
     {
         crate::controllers::comments::insert_comment(state, user, item_ref, text).await?;
     }
+
+    state
+        .events
+        .publish(crate::events::Event::BrokerageMutation(
+            user.brokerage_id.clone(),
+        ));
 
     let key = crate::db::record_key(&tx_id);
     Ok(Redirect::to(&format!("/app/transactions/{key}")))

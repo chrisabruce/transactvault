@@ -181,7 +181,7 @@ what they would be running. **Visibility is not a grant of rights.**
 
 You may not copy, fork (beyond GitHub's read-only inspection), modify, build,
 run, host, or redistribute this software without a separate written commercial
-license. See [LICENSE](./LICENSE) for the full terms and contact information
+license. See [LICENSE.md](./LICENSE.md) for the full terms and contact information
 for commercial licensing.
 
 This is **not** an open-source project. The package metadata in `Cargo.toml`

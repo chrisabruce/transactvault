@@ -21,6 +21,11 @@
 </head>
 <body class="{% block body_class %}page-public{% endblock %}">
     {% block body %}{% endblock %}
+    {#- Build identifier in the page footer. Single source of truth is
+        the `version` field in `Cargo.toml`; `crate::APP_VERSION` is the
+        `env!("CARGO_PKG_VERSION")` constant defined in `main.rs`. Update
+        Cargo's version on each release and the footer follows. -#}
+    <footer class="app-version-footer" aria-label="Build version">v{{ crate::APP_VERSION }}</footer>
     <script src="/static/js/confirm-action.js" defer></script>
     <script type="module" src="https://cdn.jsdelivr.net/npm/@starfederation/datastar@1.0.0-RC.6/dist/datastar.js"></script>
 </body>

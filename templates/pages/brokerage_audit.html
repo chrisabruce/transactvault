@@ -41,7 +41,7 @@
                     <th scope="col">Detail</th>
                 </tr>
             </thead>
-            <tbody id="audit-list">
+            <tbody id="audit-list" data-infinite-list data-wrap="tbody">
                 {% include "partials/audit_rows.html" %}
                 {% if events.is_empty() %}
                     <tr><td colspan="6" class="empty-row">No events match your filters.</td></tr>
@@ -50,5 +50,5 @@
         </table>
     </section>
 </main>
-<script src="/static/js/audit-infinite-scroll.js" defer></script>
+<script src="/static/js/infinite-scroll.js" defer></script>
 {% endblock %}

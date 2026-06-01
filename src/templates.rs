@@ -729,6 +729,23 @@ pub struct AdminUsersPage<'a> {
 }
 
 #[derive(Template)]
+#[template(path = "pages/admin_changelog.html")]
+pub struct AdminChangelogPage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+    pub signed_in: bool,
+    pub header: AppHeader,
+    /// Pre-rendered HTML from `CHANGELOG.md`. Built once per request
+    /// via [`pulldown_cmark`]; trusted source (compiled-in repo file)
+    /// so it's emitted as `{{ … |safe }}` rather than auto-escaped.
+    pub body_html: String,
+    /// Current build version, mirrored from `CARGO_PKG_VERSION` so the
+    /// page can show "Currently running vX.Y.Z" prominently alongside
+    /// the changelog itself.
+    pub version: &'static str,
+}
+
+#[derive(Template)]
 #[template(path = "pages/admin_audit.html")]
 pub struct AdminAuditPage<'a> {
     pub app_name: &'a str,
@@ -961,6 +978,28 @@ pub struct AdminFormRow {
     pub required: bool,
     pub is_active: bool,
     pub form_order: i64,
+}
+
+/// Stat-grid HTML rendered standalone for the Datastar polling
+/// endpoint at `GET /app/stats`. The dashboard wraps the in-page
+/// stat-grid include with a `data-on-interval` element that fetches
+/// this fragment every few seconds; Idiomorph matches `id="stat-grid"`
+/// in the response against the same id on the page and morphs the
+/// numbers in place — no page reload, no flicker.
+///
+/// Fields mirror the parent page's stat-grid context exactly so the
+/// shared partial template (`partials/stat_grid.html`) renders the
+/// same way whether it's pulled in from the full page or this
+/// fragment.
+#[derive(Template)]
+#[template(path = "partials/stat_grid.html")]
+pub struct StatGridFragment {
+    pub total: usize,
+    pub active_count: usize,
+    pub pending_count: usize,
+    pub needs_attention: usize,
+    pub sold_count: usize,
+    pub active_filter: String,
 }
 
 /// One row on the brokerages admin page: name + already-human-formatted

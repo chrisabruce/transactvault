@@ -3497,12 +3497,101 @@ a.external {
 .drag-col { width: 1.5rem; }
 .drag-cell { text-align: center; white-space: nowrap; }
 
+/* --------------------------------------------------------------------------
+   Admin changelog page. The current-version panel reads the build at a
+   glance; the article wraps the markdown→HTML output so headings, lists,
+   and emphasis from CHANGELOG.md render cleanly without bespoke classes.
+   -------------------------------------------------------------------------- */
+.build-version-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--sp-1);
+    padding: var(--sp-4) var(--sp-5);
+}
+.build-version-panel .label {
+    margin: 0;
+    font-size: var(--fs-sm);
+    color: var(--color-muted);
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+}
+.build-version-panel .version-large {
+    margin: 0;
+    font-size: var(--fs-2xl);
+    font-weight: 700;
+    color: var(--color-brand-ink);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+}
+.build-version-panel .version-large .version-prefix {
+    color: var(--color-mute-soft);
+    font-weight: 500;
+    margin-right: 0.05em;
+}
+.build-version-panel .hint {
+    margin: 0;
+    color: var(--color-muted);
+    font-size: var(--fs-sm);
+}
+
+.changelog-article {
+    padding: var(--sp-5) var(--sp-6);
+    line-height: 1.6;
+}
+.changelog-article h1 { font-size: var(--fs-xl); margin-top: 0; }
+.changelog-article h2 {
+    font-size: var(--fs-lg);
+    margin-top: var(--sp-6);
+    padding-top: var(--sp-4);
+    border-top: 1px solid var(--color-line);
+}
+.changelog-article h2:first-of-type { border-top: 0; padding-top: 0; margin-top: var(--sp-4); }
+.changelog-article h3 { font-size: var(--fs-md); margin-top: var(--sp-5); color: var(--color-brand-ink); }
+.changelog-article h4 { font-size: var(--fs-base); margin-top: var(--sp-4); color: var(--color-body); }
+.changelog-article ul,
+.changelog-article ol { padding-left: 1.25rem; }
+.changelog-article li { margin: 0.25rem 0; }
+.changelog-article p { margin: var(--sp-2) 0; }
+.changelog-article hr {
+    border: 0;
+    border-top: 1px solid var(--color-line);
+    margin: var(--sp-5) 0;
+}
+.changelog-article code {
+    background: var(--color-surface-alt);
+    padding: 0.05rem 0.3rem;
+    border-radius: 4px;
+    font-size: 0.85em;
+}
+.changelog-article em { color: var(--color-muted); }
+
+/* --------------------------------------------------------------------------
+   Version footer. Tiny, low-contrast strip at the bottom of every page so
+   support tickets can include the exact build the user was on. Sticks to
+   the bottom-right rather than centering across the full page so it
+   doesn't compete with content.
+   -------------------------------------------------------------------------- */
+.app-version-footer {
+    position: fixed;
+    bottom: var(--sp-2);
+    right: var(--sp-3);
+    z-index: 1;
+    font-size: 0.6875rem;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+    color: var(--color-mute-soft);
+    pointer-events: none;
+    user-select: none;
+}
+
 /* --- print: clean handoff if a designer hits Cmd-P -------------------- */
 @media print {
     .site-header,
     .site-footer,
     .brand-toc,
-    .brand-hero-actions { display: none !important; }
+    .brand-hero-actions,
+    .app-version-footer { display: none !important; }
     .brand-shell { grid-template-columns: 1fr; padding: 0; gap: 0; }
     .brand-section { page-break-inside: avoid; }
     .brand-hero { padding: 1.5rem 0; }

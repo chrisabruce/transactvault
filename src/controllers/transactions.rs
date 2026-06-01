@@ -13,15 +13,22 @@
 // batched-query helpers can keep building tx-id-keyed maps.
 #![allow(clippy::mutable_key_type)]
 
+use std::convert::Infallible;
+use std::time::Duration;
+
+use askama::Template;
 use axum::Form;
 use axum::extract::{Path, Query, State};
+use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Redirect, Response};
+use futures::stream::Stream;
 use serde::Deserialize;
 use surrealdb::types::{RecordId, SurrealValue};
 
 use crate::auth::{CurrentUser, Role};
 use crate::controllers::render;
 use crate::error::AppError;
+use crate::events::Event as BrokerEvent;
 use crate::forms::{self, FormGroup};
 use crate::models::{
     Brokerage, ChecklistItem, Document, NewChecklistItem, NewTransaction, SalesType,
@@ -30,8 +37,8 @@ use crate::models::{
 use crate::state::AppState;
 use crate::templates::{
     ChecklistGroup, ChecklistRow, CommentView, CompliancePanel, SearchDocument, SearchPage,
-    TransactionEditPage, TransactionNewPage, TransactionRowsFragment, TransactionShowPage,
-    TransactionsListPage, UnassignedAssignee, UnassignedPage,
+    StatGridFragment, TransactionEditPage, TransactionNewPage, TransactionRowsFragment,
+    TransactionShowPage, TransactionsListPage, UnassignedAssignee, UnassignedPage,
 };
 
 /// Default page size for the transactions list. Tuned for first-paint
@@ -452,6 +459,228 @@ fn is_truthy(v: &Option<String>) -> bool {
     matches!(v.as_deref(), Some("1" | "true" | "on" | "yes"))
 }
 
+/// `GET /app/stats` — stat-grid fragment for the dashboard's Datastar
+/// polling element. Returns the same `<section id="stat-grid">` HTML
+/// the full page renders, so Idiomorph can morph it in place when
+/// another user mutates state (approving an item, denying, posting an
+/// item comment, etc.) and the viewer's Needs Attention number
+/// shifts without a full page reload.
+///
+/// `status` + `attention` query params come straight from the page's
+/// current URL so the highlighted card on the polled response matches
+/// what was rendered on first paint.
+pub async fn stats_fragment(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Query(filters): Query<ListFilters>,
+) -> Result<Html<String>, AppError> {
+    let transactions = load_visible_transactions(&state, &user).await?;
+    let totals = stat_grid_totals(&state, &transactions, user.role, &user.brokerage_id).await?;
+    let status_filter = filters.status.clone().unwrap_or_default();
+    let attention_on = is_truthy(&filters.attention);
+    let active_filter = derive_active_filter(&status_filter, attention_on).to_string();
+    render(&StatGridFragment {
+        total: totals.total,
+        active_count: totals.active_count,
+        pending_count: totals.pending_count,
+        needs_attention: totals.needs_attention,
+        sold_count: totals.sold_count,
+        active_filter,
+    })
+}
+
+/// Lightweight membership re-check used by the SSE stream between events.
+/// Same shape as the load_session lookup in [`crate::auth::middleware`]
+/// but returns just `(brokerage_id, role)` — the two facts we need to
+/// decide whether the open stream is still authorized.
+#[derive(Debug, Deserialize, SurrealValue)]
+struct StreamMembership {
+    brokerage: RecordId,
+    role: String,
+}
+
+async fn current_membership(db: &crate::state::Db, user_id: &RecordId) -> Option<(RecordId, Role)> {
+    let mut q = db
+        .query("SELECT out AS brokerage, role FROM works_at WHERE in = $u LIMIT 1")
+        .bind(("u", user_id.clone()))
+        .await
+        .ok()?;
+    let row: Option<StreamMembership> = q.take(0).ok()?;
+    let row = row?;
+    let role = Role::parse(&row.role)?;
+    Some((row.brokerage, role))
+}
+
+/// Render the stat-grid HTML for a given subscriber, given their CURRENT
+/// (re-verified) role + brokerage. `active_filter` is the highlighted
+/// card on the dashboard — captured once at connect time from the query
+/// string and held constant for the connection's lifetime so morphs
+/// don't suddenly shift which card is hot.
+async fn render_stat_html(
+    state: &AppState,
+    user_id: &RecordId,
+    brokerage_id: &RecordId,
+    role: Role,
+    active_filter: &str,
+) -> Result<String, AppError> {
+    let probe = CurrentUser {
+        user_id: user_id.clone(),
+        brokerage_id: brokerage_id.clone(),
+        email: String::new(),
+        name: String::new(),
+        role,
+        has_avatar: false,
+    };
+    let transactions = load_visible_transactions(state, &probe).await?;
+    let totals = stat_grid_totals(state, &transactions, role, brokerage_id).await?;
+    let html = StatGridFragment {
+        total: totals.total,
+        active_count: totals.active_count,
+        pending_count: totals.pending_count,
+        needs_attention: totals.needs_attention,
+        sold_count: totals.sold_count,
+        active_filter: active_filter.to_string(),
+    }
+    .render()?;
+    Ok(html)
+}
+
+/// Format a stat-grid HTML fragment as a Datastar `datastar-patch-elements`
+/// SSE event. Datastar parses the `elements <html>` body and morphs the
+/// matching `id` in place — for us that's `<section id="stat-grid">`.
+fn stat_patch_event(html: &str) -> SseEvent {
+    SseEvent::default()
+        .event("datastar-patch-elements")
+        .data(format!("elements {html}"))
+}
+
+/// `GET /app/stats/stream` — Server-Sent Events stream that pushes a
+/// fresh stat-grid fragment whenever some other action inside the
+/// subscriber's brokerage shifts their dashboard numbers. Replaces the
+/// older 15-second polling endpoint; that route ([`stats_fragment`])
+/// stays available as a manual refresh / fallback.
+///
+/// ## Lifecycle
+///
+/// 1. The `CurrentUser` extractor authenticates the request and proves
+///    the caller is a member of a brokerage at connect time.
+/// 2. The handler subscribes to the in-process bus
+///    ([`crate::events::Events`]) and emits an initial event so the
+///    page replaces any stale numbers it shipped with on first paint.
+/// 3. For every [`BrokerEvent::BrokerageMutation`] aimed at the
+///    subscriber's brokerage, the handler **re-runs the membership
+///    lookup** before rendering — defense in depth against a role
+///    change or removal that somehow didn't surface as an explicit
+///    [`BrokerEvent::UserMembershipChanged`] event. If the row is gone,
+///    or the brokerage / role differs from what the connection opened
+///    with, the stream closes and the client's `EventSource` reconnects
+///    against the latest extractor state.
+/// 4. For [`BrokerEvent::UserMembershipChanged`] events naming this
+///    user, the handler closes immediately so the next reconnect picks
+///    up the new role / brokerage.
+/// 5. `Lagged` from the broadcast receiver triggers a single re-render
+///    — a missed event is harmless because the render reads from
+///    current DB state, not an event payload.
+///
+/// ## Security
+///
+/// Every emitted fragment is the result of the same queries the
+/// non-streaming `stats_fragment` runs, scoped by the
+/// **re-verified** brokerage_id + role on each event. A demoted broker
+/// who is mid-stream when their role changes never sees a single byte
+/// computed under their old role — the stream either closes (via the
+/// explicit `UserMembershipChanged` event) or the per-event recheck
+/// detects the drift and closes there. The `EventSource` client then
+/// reconnects, which re-runs `CurrentUser` and produces a fresh
+/// authorized stream.
+///
+/// ## Keepalive
+///
+/// 15-second SSE comments keep proxies / load balancers from idling
+/// the connection out during quiet periods. They're invisible to the
+/// browser-side `EventSource` parser.
+pub async fn stats_stream(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Query(filters): Query<ListFilters>,
+) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
+    let active_filter = derive_active_filter(
+        filters.status.as_deref().unwrap_or(""),
+        is_truthy(&filters.attention),
+    )
+    .to_string();
+    let user_id = user.user_id.clone();
+    let initial_brokerage = user.brokerage_id.clone();
+    let initial_role = user.role;
+    let mut rx = state.events.subscribe();
+
+    let stream = async_stream::stream! {
+        // Initial event: page may have rendered with stats from a few
+        // milliseconds ago — push fresh numbers immediately on connect.
+        if let Ok(html) = render_stat_html(&state, &user_id, &initial_brokerage, initial_role, &active_filter).await {
+            yield Ok(stat_patch_event(&html));
+        }
+
+        let mut current_brokerage = initial_brokerage;
+        let mut current_role = initial_role;
+
+        loop {
+            use tokio::sync::broadcast::error::RecvError;
+            let recv = rx.recv().await;
+            let should_render = match recv {
+                Ok(BrokerEvent::UserMembershipChanged(uid)) if uid == user_id => {
+                    // Membership changed — drop the connection; client
+                    // EventSource auto-reconnects and re-runs the
+                    // CurrentUser extractor against the new role.
+                    break;
+                }
+                Ok(BrokerEvent::BrokerageMutation(bid)) if bid == current_brokerage => {
+                    // Defense in depth: re-verify membership BEFORE
+                    // rendering. A handler that publishes
+                    // BrokerageMutation without also publishing
+                    // UserMembershipChanged — or one of those events
+                    // simply being lost to broadcast lag — must not
+                    // produce a render under stale authorization.
+                    let Some((bid_now, role_now)) = current_membership(&state.db, &user_id).await else {
+                        // User no longer belongs to any brokerage.
+                        break;
+                    };
+                    if bid_now != current_brokerage || role_now != current_role {
+                        // Membership shifted under our feet — close and
+                        // let the client reconnect with fresh role.
+                        break;
+                    }
+                    current_brokerage = bid_now;
+                    current_role = role_now;
+                    true
+                }
+                Ok(_) => false,
+                Err(RecvError::Lagged(_)) => {
+                    // Slow consumer; re-render once from current state
+                    // — every render reads the DB fresh so a missed
+                    // event has no effect on correctness.
+                    true
+                }
+                Err(RecvError::Closed) => break,
+            };
+
+            if should_render && let Ok(html) = render_stat_html(
+                &state,
+                &user_id,
+                &current_brokerage,
+                current_role,
+                &active_filter,
+            )
+            .await
+            {
+                yield Ok(stat_patch_event(&html));
+            }
+        }
+    };
+
+    Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
+}
+
 /// Build the canonical list URL for a given (filter, page, sort) tuple.
 /// Used to compose the "next page" link for the infinite-scroll sentinel
 /// and each clickable sortable-column header — every filter / sort
@@ -668,6 +897,10 @@ pub async fn create(
         );
     }
 
+    state
+        .events
+        .publish(BrokerEvent::BrokerageMutation(user.brokerage_id.clone()));
+
     let key = crate::db::record_key(&tx.id);
     Ok(Redirect::to(&format!("/app/transactions/{key}")))
 }
@@ -737,6 +970,10 @@ pub async fn update_status(
         .bind(("t", tx_id.clone()))
         .bind(("s", input.status))
         .await?;
+
+    state
+        .events
+        .publish(BrokerEvent::BrokerageMutation(user.brokerage_id.clone()));
 
     Ok(Redirect::to(&format!("/app/transactions/{id}")).into_response())
 }
@@ -813,6 +1050,10 @@ pub async fn delete(
         )
         .bind(("t", tx_id.clone()))
         .await?;
+
+    state
+        .events
+        .publish(BrokerEvent::BrokerageMutation(user.brokerage_id.clone()));
 
     Ok(Redirect::to("/app/transactions?flash=tx_deleted"))
 }
@@ -997,6 +1238,10 @@ pub async fn update(
     if dropdowns_changed {
         reconcile_checklist(&state, &tx_id, new_type, new_condition, new_sales).await?;
     }
+
+    state
+        .events
+        .publish(BrokerEvent::BrokerageMutation(user.brokerage_id.clone()));
 
     Ok(Redirect::to(&format!("/app/transactions/{id}")))
 }
@@ -2324,6 +2569,10 @@ pub async fn reassign(
         )
         .await;
     }
+
+    state
+        .events
+        .publish(BrokerEvent::BrokerageMutation(user.brokerage_id.clone()));
 
     Ok(Redirect::to("/app/transactions/unassigned"))
 }
