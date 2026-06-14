@@ -25,10 +25,23 @@
     <div class="reorder-groups" data-reorder="/admin/forms/{{ set_key }}/reorder_groups">
     {% for group in groups %}
         <section class="panel" data-reorder-key="{{ group.key }}">
-            <h2>
+            <div class="group-head">
                 <span class="drag-handle" data-reorder-handle title="Drag to reorder group" aria-hidden="true">⠿</span>
-                {{ group.name }} <small class="meta">(order {{ group.sort_order }})</small>
-            </h2>
+                <form method="post" action="/admin/forms/{{ set_key }}/groups/{{ group.key }}/rename" class="group-rename">
+                    <label class="visually-hidden" for="gname-{{ group.key }}">Group name</label>
+                    <input id="gname-{{ group.key }}" type="text" name="name" value="{{ group.name }}" required>
+                    <button type="submit" class="btn small ghost">Rename</button>
+                </form>
+                <small class="meta">order {{ group.sort_order }}</small>
+                <form method="post"
+                      action="/admin/forms/{{ set_key }}/groups/{{ group.key }}/delete"
+                      class="inline-form group-delete"
+                      data-confirm="Delete the “{name}” group and all {count} form(s) inside it? This removes them from the library permanently. Existing transactions keep their copies. This cannot be undone."
+                      data-confirm-name="{{ group.name }}"
+                      data-confirm-count="{{ group.forms.len() }}">
+                    <button type="submit" class="btn small danger">Delete group</button>
+                </form>
+            </div>
             {% if group.forms.is_empty() %}
                 <p class="meta">No forms in this group yet.</p>
             {% else %}
@@ -54,9 +67,17 @@
                                 <td class="actions">
                                     <a href="/admin/forms/{{ set_key }}/forms/{{ f.key }}/edit" class="btn small ghost">Edit</a>
                                     <form method="post" action="/admin/forms/{{ set_key }}/forms/{{ f.key }}/toggle" class="inline-form">
-                                        <button type="submit" class="btn small {% if f.is_active %}danger{% else %}secondary{% endif %}">
+                                        <button type="submit" class="btn small {% if f.is_active %}warn{% else %}secondary{% endif %}">
                                             {% if f.is_active %}Deactivate{% else %}Activate{% endif %}
                                         </button>
+                                    </form>
+                                    <form method="post"
+                                          action="/admin/forms/{{ set_key }}/forms/{{ f.key }}/delete"
+                                          class="inline-form"
+                                          data-confirm="Delete form {code} ({name})? This removes it from the library permanently. Existing transactions keep their copies. This cannot be undone."
+                                          data-confirm-code="{{ f.code }}"
+                                          data-confirm-name="{{ f.name }}">
+                                        <button type="submit" class="btn small danger">Delete</button>
                                     </form>
                                 </td>
                             </tr>

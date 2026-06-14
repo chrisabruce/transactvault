@@ -8,6 +8,27 @@ the bottom-right of every page.
 
 ## June 2026
 
+### v0.3.2 — Full control over the forms library (admin)
+
+Super-admins can now fully manage the forms library from
+**Admin → Forms → (a library)**:
+
+- **Delete any form** in any group, with a confirmation prompt. This
+  removes it from the library permanently so it's never offered on new
+  transactions again. (Existing transactions keep the copies they were
+  created with — deleting a library form never touches documents in
+  active deals.)
+- **Deactivate / reactivate any form** — a reversible alternative to
+  delete. A deactivated form stays in the library but stops appearing
+  when new transactions are created; reactivate it anytime.
+- **Rename any group** inline — the new name shows up on every
+  transaction created afterward.
+- **Delete a whole group**, with confirmation, which also removes every
+  form inside it.
+
+Per-form **edit** (name, order, required flag, and applicability) was
+already available and is unchanged.
+
 ### v0.3.1 — Switched email provider to Postmark
 
 We've moved transactional email — verification links, welcome notes,

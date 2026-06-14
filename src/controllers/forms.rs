@@ -1115,6 +1115,146 @@ pub async fn admin_toggle_form(
     )))
 }
 
+/// POST `/admin/forms/{set_key}/forms/{form_key}/delete` — permanently
+/// remove a form definition from the library, along with every edge
+/// that references it (`has_form` parent link, plus any brokerage
+/// `hides_form` / `owns_form` edges pointing at it).
+///
+/// **Scope of the delete.** This removes the *library catalog* entry
+/// only. Uploaded documents in live transactions are tagged by a
+/// string `form_code`, not linked to this row, so they are
+/// intentionally left untouched — deleting a library form must never
+/// cascade into destroying compliance records inside active deals.
+/// Checklist items already seeded onto existing transactions likewise
+/// keep their snapshotted copies. The effect is purely "this form
+/// stops being offered to new transactions, forever."
+///
+/// For a reversible hide, use [`admin_toggle_form`] (deactivate)
+/// instead — that keeps the definition and lets it be re-activated.
+pub async fn admin_delete_form(
+    State(state): State<AppState>,
+    SuperAdmin(_user): SuperAdmin,
+    Path(p): Path<ToggleFormPath>,
+) -> Result<Redirect, AppError> {
+    let set_id = RecordId::new("form_set", p.key.as_str());
+    assert_forms_in_set(&state.db, &set_id, &[p.form_key.as_str()]).await?;
+    let form_id = RecordId::new("form", p.form_key.as_str());
+    // Edges first, then the row — same ordering discipline as the
+    // transaction hard-delete so nothing is left dangling mid-wipe.
+    state
+        .db
+        .query(
+            "BEGIN TRANSACTION;
+             DELETE has_form   WHERE out = $f;
+             DELETE hides_form WHERE out = $f;
+             DELETE owns_form  WHERE out = $f;
+             DELETE $f;
+             COMMIT TRANSACTION;",
+        )
+        .bind(("f", form_id))
+        .await?;
+    Ok(Redirect::to(&format!(
+        "/admin/forms/{}?flash=form_deleted",
+        p.key
+    )))
+}
+
+/// Path for group-scoped admin actions: the owning set + the target
+/// group. Both keys are validated against each other via
+/// [`assert_groups_in_set`] before any mutation.
+#[derive(Debug, Deserialize)]
+pub struct GroupPath {
+    pub key: String,
+    pub group_key: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RenameGroupInput {
+    pub name: String,
+}
+
+/// POST `/admin/forms/{set_key}/groups/{group_key}/rename` — change a
+/// group's display name. New transactions resolve their checklist
+/// group label from `form_group.name` (see
+/// [`crate::db::forms::resolve_for_set`]), so the rename takes effect
+/// for every transaction created afterward. Already-created
+/// transactions keep the group name snapshotted onto their checklist
+/// items and are unaffected.
+pub async fn admin_rename_group(
+    State(state): State<AppState>,
+    SuperAdmin(_user): SuperAdmin,
+    Path(p): Path<GroupPath>,
+    Form(input): Form<RenameGroupInput>,
+) -> Result<Redirect, AppError> {
+    let name = input.name.trim().to_string();
+    if name.is_empty() {
+        return Err(AppError::invalid("Group name is required."));
+    }
+    let set_id = RecordId::new("form_set", p.key.as_str());
+    assert_groups_in_set(&state.db, &set_id, &[p.group_key.as_str()]).await?;
+    let gid = RecordId::new("form_group", p.group_key.as_str());
+    state
+        .db
+        .query("UPDATE $g SET name = $n")
+        .bind(("g", gid))
+        .bind(("n", name))
+        .await?;
+    Ok(Redirect::to(&format!(
+        "/admin/forms/{}?flash=group_renamed",
+        p.key
+    )))
+}
+
+/// POST `/admin/forms/{set_key}/groups/{group_key}/delete` — remove a
+/// group and every form it contains, plus all the edges along the way.
+///
+/// Same data-safety boundary as [`admin_delete_form`]: this clears the
+/// library catalog only. Documents and checklist items already present
+/// on live transactions are tagged by string `form_code` / snapshotted
+/// at creation, so they survive — the deletion just stops these forms
+/// from being offered to new transactions.
+pub async fn admin_delete_group(
+    State(state): State<AppState>,
+    SuperAdmin(_user): SuperAdmin,
+    Path(p): Path<GroupPath>,
+) -> Result<Redirect, AppError> {
+    let set_id = RecordId::new("form_set", p.key.as_str());
+    assert_groups_in_set(&state.db, &set_id, &[p.group_key.as_str()]).await?;
+    let gid = RecordId::new("form_group", p.group_key.as_str());
+
+    // Gather the forms this group owns so their reverse edges
+    // (`hides_form` / `owns_form` pointing in from brokerages) can be
+    // purged too — those don't hang off the group, so a blind
+    // group-scoped delete would leave them dangling.
+    let mut fq = state
+        .db
+        .query("SELECT VALUE id FROM $g->has_form->form")
+        .bind(("g", gid.clone()))
+        .await?;
+    let form_ids: Vec<RecordId> = fq.take(0).unwrap_or_default();
+
+    state
+        .db
+        .query(
+            "BEGIN TRANSACTION;
+             DELETE hides_form WHERE out IN $forms;
+             DELETE owns_form  WHERE out IN $forms;
+             DELETE has_form   WHERE in  = $g;
+             DELETE form       WHERE id  IN $forms;
+             DELETE has_group  WHERE out = $g;
+             DELETE $g;
+             COMMIT TRANSACTION;",
+        )
+        .bind(("g", gid))
+        .bind(("forms", form_ids))
+        .await?;
+
+    Ok(Redirect::to(&format!(
+        "/admin/forms/{}?flash=group_deleted",
+        p.key
+    )))
+}
+
 /// GET `/admin/forms/{set_key}/forms/{form_key}/edit` — render the
 /// per-form edit page with applicability checkboxes pre-populated
 /// from the stored `applies_*` arrays.

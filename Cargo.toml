@@ -1,6 +1,6 @@
 [package]
 name = "transactvault"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 description = "TransactVault — modern real estate transaction management for California brokerages."
 # Proprietary, all rights reserved — source is public on GitHub for

@@ -132,6 +132,14 @@ pub fn build(state: AppState) -> Router {
         .route("/admin/forms/sets", post(forms::admin_create_set))
         .route("/admin/forms/{key}", get(forms::admin_set_detail))
         .route("/admin/forms/{key}/groups", post(forms::admin_add_group))
+        .route(
+            "/admin/forms/{key}/groups/{group_key}/rename",
+            post(forms::admin_rename_group),
+        )
+        .route(
+            "/admin/forms/{key}/groups/{group_key}/delete",
+            post(forms::admin_delete_group),
+        )
         .route("/admin/forms/{key}/forms", post(forms::admin_add_form))
         .route(
             "/admin/forms/{key}/reorder_groups",
@@ -144,6 +152,10 @@ pub fn build(state: AppState) -> Router {
         .route(
             "/admin/forms/{key}/forms/{form_key}/toggle",
             post(forms::admin_toggle_form),
+        )
+        .route(
+            "/admin/forms/{key}/forms/{form_key}/delete",
+            post(forms::admin_delete_form),
         )
         .route(
             "/admin/forms/{key}/forms/{form_key}/edit",

@@ -1698,6 +1698,118 @@ async fn admin_changelog_renders_version_and_bundled_markdown() {
     );
 }
 
+/// Super-admin form-library management: a form can be deleted, a group
+/// can be renamed, and a group can be deleted (cascading to its forms).
+/// All three are gated to super-admins and validated against the owning
+/// set, and deletes purge the graph edges so nothing dangles.
+#[tokio::test]
+async fn admin_can_delete_forms_rename_and_delete_groups() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let admin = seed_user(&app.state, "admin@test").await;
+    join(&app.state, &admin, &b, "broker").await;
+
+    // Seed a small library: set → group g1 (forms f1, f2) + group g2 (form f3).
+    app.state
+        .db
+        .query(
+            "CREATE form_set:tset SET scope = 'state', name = 'TestSet';
+             CREATE form_group:g1 SET name = 'Group One', sort_order = 1;
+             CREATE form_group:g2 SET name = 'Group Two', sort_order = 2;
+             CREATE form:f1 SET code = 'F1', name = 'Form One';
+             CREATE form:f2 SET code = 'F2', name = 'Form Two';
+             CREATE form:f3 SET code = 'F3', name = 'Form Three';
+             RELATE form_set:tset->has_group->form_group:g1;
+             RELATE form_set:tset->has_group->form_group:g2;
+             RELATE form_group:g1->has_form->form:f1;
+             RELATE form_group:g1->has_form->form:f2;
+             RELATE form_group:g2->has_form->form:f3;",
+        )
+        .await
+        .expect("seed form library");
+
+    async fn count(app: &TestApp, surql: &str) -> i64 {
+        #[derive(serde::Deserialize, SurrealValue)]
+        struct C {
+            count: i64,
+        }
+        let mut q = app.state.db.query(surql).await.expect("count query");
+        let row: Option<C> = q.take(0).expect("count row");
+        row.map(|c| c.count).unwrap_or(0)
+    }
+
+    // --- Delete a single form ------------------------------------------------
+    let (s, _) = authed_post(&app, &admin, "/admin/forms/tset/forms/f1/delete", "").await;
+    assert!(s.is_redirection(), "delete-form should redirect on success");
+    assert_eq!(
+        count(&app, "SELECT count() FROM form WHERE id = form:f1 GROUP ALL").await,
+        0,
+        "form f1 row should be gone"
+    );
+    assert_eq!(
+        count(&app, "SELECT count() FROM has_form WHERE out = form:f1 GROUP ALL").await,
+        0,
+        "f1's has_form edge should be gone"
+    );
+    assert_eq!(
+        count(&app, "SELECT count() FROM form WHERE id = form:f2 GROUP ALL").await,
+        1,
+        "sibling form f2 must be untouched"
+    );
+
+    // --- Rename a group ------------------------------------------------------
+    let (s, _) = authed_post(
+        &app,
+        &admin,
+        "/admin/forms/tset/groups/g1/rename",
+        "name=Renamed+Group",
+    )
+    .await;
+    assert!(s.is_redirection(), "rename-group should redirect on success");
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct NameRow {
+        name: String,
+    }
+    let mut nq = app
+        .state
+        .db
+        .query("SELECT name FROM ONLY form_group:g1")
+        .await
+        .expect("name query");
+    let row: Option<NameRow> = nq.take(0).expect("name row");
+    assert_eq!(row.map(|r| r.name).as_deref(), Some("Renamed Group"));
+
+    // --- Delete a group (cascades to its forms) ------------------------------
+    let (s, _) = authed_post(&app, &admin, "/admin/forms/tset/groups/g2/delete", "").await;
+    assert!(s.is_redirection(), "delete-group should redirect on success");
+    assert_eq!(
+        count(&app, "SELECT count() FROM form_group WHERE id = form_group:g2 GROUP ALL").await,
+        0,
+        "group g2 should be gone"
+    );
+    assert_eq!(
+        count(&app, "SELECT count() FROM form WHERE id = form:f3 GROUP ALL").await,
+        0,
+        "form f3 inside the deleted group should be gone too"
+    );
+    assert_eq!(
+        count(&app, "SELECT count() FROM has_group WHERE out = form_group:g2 GROUP ALL").await,
+        0,
+        "g2's has_group edge should be gone"
+    );
+
+    // --- Auth gate: a non-super-admin cannot delete forms --------------------
+    let other = seed_user(&app.state, "broker@a").await;
+    join(&app.state, &other, &b, "broker").await;
+    let (forbidden, _) = authed_post(&app, &other, "/admin/forms/tset/forms/f2/delete", "").await;
+    assert_eq!(forbidden, StatusCode::FORBIDDEN);
+    assert_eq!(
+        count(&app, "SELECT count() FROM form WHERE id = form:f2 GROUP ALL").await,
+        1,
+        "form f2 must survive a forbidden delete attempt"
+    );
+}
+
 #[tokio::test]
 async fn standalone_item_comment_endpoint_writes_a_flaggable_comment() {
     // Persistence check, not behavior check — the per-item comment

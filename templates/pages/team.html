@@ -54,41 +54,71 @@
 
     <section class="panel" aria-labelledby="members-heading">
         <h2 id="members-heading">Members</h2>
-        <ul class="member-list" role="list">
-            {% for member in members %}
-                <li class="member-card">
-                    {% if member.has_avatar %}
-                        <img class="avatar" src="/app/users/{{ member.user_key }}/avatar" alt="">
-                    {% else %}
-                        <span class="avatar" aria-hidden="true">{{ member.initials }}</span>
-                    {% endif %}
-                    <section>
-                        <p class="name">{{ member.name }}{% if member.is_self %} <small class="meta">(you)</small>{% endif %}</p>
-                        <p class="email">{{ member.email }}</p>
-                    </section>
-                    {% if header.role.can_change_roles() && !member.is_self %}
-                        <form method="post" action="/app/team/{{ member.user_key }}/role" class="role-change">
-                            <label class="visually-hidden" for="role-{{ member.user_key }}">Role for {{ member.name }}</label>
-                            <select id="role-{{ member.user_key }}" name="role">
-                                <option value="agent"{% if member.role.as_str() == "agent" %} selected{% endif %}>Agent</option>
-                                <option value="coordinator"{% if member.role.as_str() == "coordinator" %} selected{% endif %}>Compliance Officer</option>
-                                <option value="broker"{% if member.role.as_str() == "broker" %} selected{% endif %}>Broker</option>
-                            </select>
-                            <button type="submit" class="btn small">Update</button>
-                        </form>
-                        <form method="post"
-                              action="/app/team/{{ member.user_key }}/remove"
-                              class="role-change"
-                              data-confirm="Remove {name} from the brokerage? Their account stays but they lose access to all transactions until they're invited again."
-                              data-confirm-name="{{ member.name }}">
-                            <button type="submit" class="btn small danger">Remove</button>
-                        </form>
-                    {% else %}
-                        <span class="chip role-{{ member.role.as_str() }}">{{ member.role.label() }}</span>
-                    {% endif %}
-                </li>
-            {% endfor %}
-        </ul>
+        {# Tabular layout so every column lines up across rows and the
+           column labels live once in the header rather than being
+           repeated on each row. The Role column always shows the role in
+           the same place — an editable dropdown for a broker, a static
+           chip otherwise — and the Actions column stays a fixed width so
+           the buttons align vertically regardless of name length. #}
+        <div class="table-scroll">
+            <table class="member-table">
+                <thead>
+                    <tr>
+                        <th scope="col">Member</th>
+                        <th scope="col">Role</th>
+                        {% if header.role.can_change_roles() %}
+                            <th scope="col" class="actions"><span class="visually-hidden">Actions</span></th>
+                        {% endif %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for member in members %}
+                        <tr>
+                            <td>
+                                <div class="member-identity">
+                                    {% if member.has_avatar %}
+                                        <img class="avatar" src="/app/users/{{ member.user_key }}/avatar" alt="">
+                                    {% else %}
+                                        <span class="avatar" aria-hidden="true">{{ member.initials }}</span>
+                                    {% endif %}
+                                    <span class="member-name-block">
+                                        <span class="name">{{ member.name }}{% if member.is_self %} <small class="meta">(you)</small>{% endif %}</span>
+                                        <span class="email">{{ member.email }}</span>
+                                    </span>
+                                </div>
+                            </td>
+                            <td class="role-col">
+                                {% if header.role.can_change_roles() && !member.is_self %}
+                                    <form method="post" action="/app/team/{{ member.user_key }}/role" class="role-change">
+                                        <select name="role" aria-label="Role for {{ member.name }}">
+                                            <option value="agent"{% if member.role.as_str() == "agent" %} selected{% endif %}>Agent</option>
+                                            <option value="coordinator"{% if member.role.as_str() == "coordinator" %} selected{% endif %}>Compliance Officer</option>
+                                            <option value="broker"{% if member.role.as_str() == "broker" %} selected{% endif %}>Broker</option>
+                                        </select>
+                                        <button type="submit" class="btn small">Update</button>
+                                    </form>
+                                {% else %}
+                                    <span class="chip role-{{ member.role.as_str() }}">{{ member.role.label() }}</span>
+                                {% endif %}
+                            </td>
+                            {% if header.role.can_change_roles() %}
+                                <td class="actions">
+                                    {% if !member.is_self %}
+                                        <form method="post"
+                                              action="/app/team/{{ member.user_key }}/remove"
+                                              class="inline-form"
+                                              data-confirm="Remove {name} from the brokerage? Their account stays but they lose access to all transactions until they're invited again."
+                                              data-confirm-name="{{ member.name }}">
+                                            <button type="submit" class="btn small danger">Remove</button>
+                                        </form>
+                                    {% endif %}
+                                </td>
+                            {% endif %}
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
     </section>
 
     {% if !pending.is_empty() %}
