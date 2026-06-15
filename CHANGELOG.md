@@ -8,6 +8,21 @@ the bottom-right of every page.
 
 ## June 2026
 
+### v0.3.3 — Fixes: live dashboard, team list, and member removal
+
+- **Live dashboard updates work again.** The real-time stat cards
+  depended on a script that was loading from a broken URL (a 404). The
+  app now loads it from the correct location, so dashboard numbers
+  update instantly as your team works.
+- **Removing a teammate no longer orphans their deals.** When a broker
+  removes someone from the team, that person's transactions are now
+  **reassigned to the broker** instead of dropping into "Unassigned."
+  The departing agent's name is kept on each transaction (shown as
+  "Former agent") so you can still see who originally handled it.
+- **Team list is cleaner.** Brokers are pinned to the top, everyone
+  else is listed alphabetically, and the role dropdowns no longer get
+  squeezed — the columns line up properly now.
+
 ### v0.3.2 — Full control over the forms library (admin)
 
 Super-admins can now fully manage the forms library from

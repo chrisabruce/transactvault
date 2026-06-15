@@ -1887,16 +1887,27 @@ select:disabled {
     letter-spacing: 0.05em;
     border-bottom: 1px solid var(--color-line);
 }
-/* Keep the role column from collapsing the identity column when a long
-   name is present; the actions column hugs its button. */
-.member-table .role-col { width: 1%; white-space: nowrap; }
+/* The identity column absorbs the slack so the Role + Actions columns
+   hug their content on the right instead of the whole table reading as
+   right-justified. */
+.member-table td:first-child,
+.member-table th:first-child { width: 100%; }
+.member-table .role-col { white-space: nowrap; }
 .member-table th.actions,
 .member-table td.actions {
-    width: 1%;
     text-align: end;
     white-space: nowrap;
 }
 .member-table .inline-form { display: inline; margin: 0; }
+/* The global `form select { width: 100% }` would otherwise collapse the
+   role dropdown to the width of its (content-sized) cell. Give it a real
+   width so it isn't crunched, and keep the select + Update button on one
+   line. */
+.member-table .role-change { flex-wrap: nowrap; }
+.member-table .role-change select {
+    width: auto;
+    min-width: 11rem;
+}
 
 .member-identity {
     display: flex;

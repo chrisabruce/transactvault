@@ -254,6 +254,10 @@
             <dl>
                 <dt>Owner</dt>
                 <dd>{{ owner_name }}</dd>
+                {% match transaction.former_owner_name %}{% when Some with (former) %}
+                    <dt>Former agent</dt>
+                    <dd>{{ former }} <small class="meta">(removed from team)</small></dd>
+                {% when None %}{% endmatch %}
                 <dt>Transaction Type</dt>
                 <dd>{{ transaction.type_label() }}</dd>
                 <dt>Sales Type</dt>

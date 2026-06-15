@@ -2557,6 +2557,14 @@ pub async fn reassign(
             .bind(("u", assignee_id.clone()))
             .bind(("t", tx_id.clone()))
             .await?;
+        // The deal now has a real, current owner again, so clear any
+        // "former agent" note left over from a member removal — it
+        // would otherwise read as stale history next to the new owner.
+        state
+            .db
+            .query("UPDATE $t SET former_owner_name = NONE")
+            .bind(("t", tx_id.clone()))
+            .await?;
 
         crate::audit::record(
             &state.db,

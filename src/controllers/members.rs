@@ -282,7 +282,7 @@ async fn load_members(state: &AppState, user: &CurrentUser) -> Result<Vec<Member
     }
     let rows: Vec<Row> = response.take(0)?;
 
-    let members = rows
+    let mut members: Vec<Member> = rows
         .into_iter()
         .filter_map(|r| {
             Role::parse(&r.role).map(|role| {
@@ -293,6 +293,15 @@ async fn load_members(state: &AppState, user: &CurrentUser) -> Result<Vec<Member
             })
         })
         .collect();
+
+    // Brokers pinned to the top, everyone else alphabetical by name
+    // (case-insensitive). `is_broker()` sorts false < true, so negate it
+    // to float brokers first; ties break on the lowercased name.
+    members.sort_by(|a, b| {
+        (!a.role.is_broker())
+            .cmp(&!b.role.is_broker())
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
     Ok(members)
 }
 
@@ -405,17 +414,20 @@ pub async fn remove_member(
         ));
     }
 
-    // Confirm membership + capture target email/role for the audit row.
+    // Confirm membership + capture target name/email/role: name is
+    // snapshotted onto the reassigned transactions, email/role go in
+    // the audit row.
     use surrealdb::types::SurrealValue;
     #[derive(serde::Deserialize, SurrealValue)]
     struct Existing {
+        name: String,
         role: String,
         email: String,
     }
     let mut existing_q = state
         .db
         .query(
-            "SELECT in.email AS email, role FROM works_at \
+            "SELECT in.name AS name, in.email AS email, role FROM works_at \
              WHERE in = $u AND out = $b LIMIT 1",
         )
         .bind(("u", target_user_id.clone()))
@@ -451,24 +463,43 @@ pub async fn remove_member(
         }
     }
 
-    // Detach. `owns` edges go too — the brokerage keeps the
-    // transactions visible via `has_transaction`, so the broker can
-    // reassign them from the unassigned-transactions view.
+    // Detach the membership edge.
     state
         .db
         .query("DELETE works_at WHERE in = $u AND out = $b")
         .bind(("u", target_user_id.clone()))
         .bind(("b", user.brokerage_id.clone()))
         .await?;
-    state
+
+    // Hand the departing agent's transactions to the removing broker
+    // rather than orphaning them. For each transaction the agent owned
+    // in this brokerage we: snapshot their name onto `former_owner_name`
+    // (so the deal's history shows who handled it), drop the old `owns`
+    // edge, and RELATE a fresh one from the broker. This is why removed
+    // agents' deals no longer show up as "Unassigned".
+    let mut owned_q = state
         .db
         .query(
-            "DELETE owns WHERE in = $u \
+            "SELECT VALUE out FROM owns WHERE in = $u \
              AND out IN (SELECT VALUE out FROM has_transaction WHERE in = $b)",
         )
         .bind(("u", target_user_id.clone()))
         .bind(("b", user.brokerage_id.clone()))
         .await?;
+    let owned: Vec<RecordId> = owned_q.take(0).unwrap_or_default();
+    for tx in &owned {
+        state
+            .db
+            .query(
+                "UPDATE $t SET former_owner_name = $name;
+                 DELETE owns WHERE out = $t;
+                 RELATE $broker->owns->$t;",
+            )
+            .bind(("t", tx.clone()))
+            .bind(("name", existing.name.clone()))
+            .bind(("broker", user.user_id.clone()))
+            .await?;
+    }
 
     crate::audit::record(
         &state.db,

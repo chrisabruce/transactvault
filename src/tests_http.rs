@@ -1178,8 +1178,33 @@ async fn broker_can_remove_agent() {
     let row: Option<C> = q.take(0).unwrap_or_default();
     assert_eq!(row.map(|r| r.count).unwrap_or(0), 0);
 
-    // owns edge on the brokerage's transaction also cleared.
+    // The agent's own `owns` edge is gone...
     assert!(!owns_edge_exists(&app.state, &agent, &tx).await);
+    // ...but the transaction is NOT orphaned — ownership moved to the
+    // removing broker so it never falls to "Unassigned".
+    assert!(
+        owns_edge_exists(&app.state, &broker, &tx).await,
+        "removed agent's transaction should be reassigned to the broker"
+    );
+    // And the departing agent's name is snapshotted onto the deal so
+    // its history shows who originally handled it.
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct FormerRow {
+        former_owner_name: Option<String>,
+    }
+    let mut fq = app
+        .state
+        .db
+        .query("SELECT former_owner_name FROM ONLY $t")
+        .bind(("t", tx.clone()))
+        .await
+        .expect("select former_owner_name");
+    let former: Option<FormerRow> = fq.take(0).expect("former row");
+    assert_eq!(
+        former.and_then(|r| r.former_owner_name).as_deref(),
+        Some("agent@a"),
+        "former agent name should be recorded on the transaction"
+    );
 }
 
 #[tokio::test]
@@ -1742,17 +1767,29 @@ async fn admin_can_delete_forms_rename_and_delete_groups() {
     let (s, _) = authed_post(&app, &admin, "/admin/forms/tset/forms/f1/delete", "").await;
     assert!(s.is_redirection(), "delete-form should redirect on success");
     assert_eq!(
-        count(&app, "SELECT count() FROM form WHERE id = form:f1 GROUP ALL").await,
+        count(
+            &app,
+            "SELECT count() FROM form WHERE id = form:f1 GROUP ALL"
+        )
+        .await,
         0,
         "form f1 row should be gone"
     );
     assert_eq!(
-        count(&app, "SELECT count() FROM has_form WHERE out = form:f1 GROUP ALL").await,
+        count(
+            &app,
+            "SELECT count() FROM has_form WHERE out = form:f1 GROUP ALL"
+        )
+        .await,
         0,
         "f1's has_form edge should be gone"
     );
     assert_eq!(
-        count(&app, "SELECT count() FROM form WHERE id = form:f2 GROUP ALL").await,
+        count(
+            &app,
+            "SELECT count() FROM form WHERE id = form:f2 GROUP ALL"
+        )
+        .await,
         1,
         "sibling form f2 must be untouched"
     );
@@ -1765,7 +1802,10 @@ async fn admin_can_delete_forms_rename_and_delete_groups() {
         "name=Renamed+Group",
     )
     .await;
-    assert!(s.is_redirection(), "rename-group should redirect on success");
+    assert!(
+        s.is_redirection(),
+        "rename-group should redirect on success"
+    );
     #[derive(serde::Deserialize, SurrealValue)]
     struct NameRow {
         name: String,
@@ -1781,19 +1821,34 @@ async fn admin_can_delete_forms_rename_and_delete_groups() {
 
     // --- Delete a group (cascades to its forms) ------------------------------
     let (s, _) = authed_post(&app, &admin, "/admin/forms/tset/groups/g2/delete", "").await;
-    assert!(s.is_redirection(), "delete-group should redirect on success");
+    assert!(
+        s.is_redirection(),
+        "delete-group should redirect on success"
+    );
     assert_eq!(
-        count(&app, "SELECT count() FROM form_group WHERE id = form_group:g2 GROUP ALL").await,
+        count(
+            &app,
+            "SELECT count() FROM form_group WHERE id = form_group:g2 GROUP ALL"
+        )
+        .await,
         0,
         "group g2 should be gone"
     );
     assert_eq!(
-        count(&app, "SELECT count() FROM form WHERE id = form:f3 GROUP ALL").await,
+        count(
+            &app,
+            "SELECT count() FROM form WHERE id = form:f3 GROUP ALL"
+        )
+        .await,
         0,
         "form f3 inside the deleted group should be gone too"
     );
     assert_eq!(
-        count(&app, "SELECT count() FROM has_group WHERE out = form_group:g2 GROUP ALL").await,
+        count(
+            &app,
+            "SELECT count() FROM has_group WHERE out = form_group:g2 GROUP ALL"
+        )
+        .await,
         0,
         "g2's has_group edge should be gone"
     );
@@ -1804,7 +1859,11 @@ async fn admin_can_delete_forms_rename_and_delete_groups() {
     let (forbidden, _) = authed_post(&app, &other, "/admin/forms/tset/forms/f2/delete", "").await;
     assert_eq!(forbidden, StatusCode::FORBIDDEN);
     assert_eq!(
-        count(&app, "SELECT count() FROM form WHERE id = form:f2 GROUP ALL").await,
+        count(
+            &app,
+            "SELECT count() FROM form WHERE id = form:f2 GROUP ALL"
+        )
+        .await,
         1,
         "form f2 must survive a forbidden delete attempt"
     );

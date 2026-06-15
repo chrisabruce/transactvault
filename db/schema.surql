@@ -255,6 +255,13 @@ DEFINE FIELD OVERWRITE postal_code             ON transaction TYPE option<string
 DEFINE FIELD OVERWRITE price_cents             ON transaction TYPE int DEFAULT 0
     ASSERT $value >= 0;
 DEFINE FIELD OVERWRITE client_name             ON transaction TYPE option<string>;
+-- Name of the agent who held this transaction before a broker removed
+-- them from the team. On removal the `owns` edge is reassigned to the
+-- broker (so the deal never falls to "Unassigned"), and the departing
+-- agent's name is snapshotted here so the transaction's history shows
+-- who originally handled it. `NONE` for transactions that were never
+-- orphaned by a removal.
+DEFINE FIELD OVERWRITE former_owner_name        ON transaction TYPE option<string>;
 DEFINE FIELD OVERWRITE mls_number              ON transaction TYPE option<string>;
 DEFINE FIELD OVERWRITE office_file_number      ON transaction TYPE option<string>;
 DEFINE FIELD OVERWRITE status                  ON transaction TYPE string DEFAULT "active"

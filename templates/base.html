@@ -27,6 +27,11 @@
         Cargo's version on each release and the footer follows. -#}
     <footer class="app-version-footer" aria-label="Build version">v{{ crate::APP_VERSION }}</footer>
     <script src="/static/js/confirm-action.js" defer></script>
-    <script type="module" src="https://cdn.jsdelivr.net/npm/@starfederation/datastar@1.0.0-RC.6/dist/datastar.js"></script>
+    {#- Datastar is served from the GitHub release bundle, not npm. The
+        npm package doesn't publish a /dist/datastar.js (that path 404s);
+        the canonical browser build lives under bundles/ on the tagged
+        GitHub release. This RC.6 bundle emits the `datastar-patch-elements`
+        SSE event our /app/stats/stream handler sends. -#}
+    <script type="module" src="https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.0-RC.6/bundles/datastar.js"></script>
 </body>
 </html>

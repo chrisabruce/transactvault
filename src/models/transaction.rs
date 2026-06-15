@@ -292,6 +292,11 @@ pub struct Transaction {
     /// floating-point loss; render via [`Self::price_display`].
     pub price_cents: i64,
     pub client_name: Option<String>,
+    /// Name of the agent who owned this transaction before a broker
+    /// removed them from the team. Set by the member-removal flow,
+    /// which reassigns ownership to the broker; `None` otherwise. See
+    /// the schema field of the same name.
+    pub former_owner_name: Option<String>,
     pub mls_number: Option<String>,
     pub office_file_number: Option<String>,
     /// Slug from [`TransactionStatus`]; read via `status_enum()`.
