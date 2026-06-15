@@ -22,24 +22,38 @@
 (function () {
     "use strict";
 
-    // `{key}` → `form.dataset.confirmKey` (camelCased per dataset rules).
+    // `{key}` → `el.dataset.confirmKey` (camelCased per dataset rules).
     // Missing keys collapse to empty string rather than `undefined` so
     // the message reads cleanly even if the template forgot to attach
-    // a data attribute.
-    function interpolate(form) {
-        var raw = form.dataset.confirm || "";
+    // a data attribute. Works on either a <form> or a submit <button> —
+    // both expose `dataset`.
+    function interpolate(el) {
+        var raw = el.dataset.confirm || "";
         return raw.replace(/\{(\w+)\}/g, function (_, key) {
             var camel = "confirm" + key.charAt(0).toUpperCase() + key.slice(1);
-            return form.dataset[camel] || "";
+            return el.dataset[camel] || "";
         });
     }
 
     document.addEventListener(
         "submit",
         function (e) {
-            var form = e.target && e.target.closest && e.target.closest("form[data-confirm]");
+            var form = e.target && e.target.closest && e.target.closest("form");
             if (!form) return;
-            if (!window.confirm(interpolate(form))) {
+            // A single form can host several actions via per-button
+            // `formaction` (e.g. Deactivate + Delete in one table cell,
+            // since two <form>s in one <td> don't parse reliably). Prefer
+            // a `data-confirm` on the button that actually submitted;
+            // fall back to one on the form. If neither carries it, this
+            // submit isn't gated — let it through untouched.
+            var src =
+                e.submitter && e.submitter.dataset && e.submitter.dataset.confirm
+                    ? e.submitter
+                    : form.dataset && form.dataset.confirm
+                      ? form
+                      : null;
+            if (!src) return;
+            if (!window.confirm(interpolate(src))) {
                 e.preventDefault();
                 e.stopPropagation();
             }

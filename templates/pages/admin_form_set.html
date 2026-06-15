@@ -66,18 +66,23 @@
                                 <td>{% if f.is_active %}Active{% else %}Inactive{% endif %}</td>
                                 <td class="actions">
                                     <a href="/admin/forms/{{ set_key }}/forms/{{ f.key }}/edit" class="btn small ghost">Edit</a>
-                                    <form method="post" action="/admin/forms/{{ set_key }}/forms/{{ f.key }}/toggle" class="inline-form">
-                                        <button type="submit" class="btn small {% if f.is_active %}warn{% else %}secondary{% endif %}">
+                                    {# One form per cell (two <form>s in a single <td> don't
+                                       parse reliably across browsers). Deactivate and Delete
+                                       each post to their own endpoint via `formaction`; only
+                                       Delete carries `data-confirm`, so Deactivate submits
+                                       without a prompt. #}
+                                    <form method="post" class="inline-form">
+                                        <button type="submit"
+                                                formaction="/admin/forms/{{ set_key }}/forms/{{ f.key }}/toggle"
+                                                class="btn small {% if f.is_active %}warn{% else %}secondary{% endif %}">
                                             {% if f.is_active %}Deactivate{% else %}Activate{% endif %}
                                         </button>
-                                    </form>
-                                    <form method="post"
-                                          action="/admin/forms/{{ set_key }}/forms/{{ f.key }}/delete"
-                                          class="inline-form"
-                                          data-confirm="Delete form {code} ({name})? This removes it from the library permanently. Existing transactions keep their copies. This cannot be undone."
-                                          data-confirm-code="{{ f.code }}"
-                                          data-confirm-name="{{ f.name }}">
-                                        <button type="submit" class="btn small danger">Delete</button>
+                                        <button type="submit"
+                                                formaction="/admin/forms/{{ set_key }}/forms/{{ f.key }}/delete"
+                                                class="btn small danger"
+                                                data-confirm="Delete form {code} ({name})? This removes it from the library permanently. Existing transactions keep their copies. This cannot be undone."
+                                                data-confirm-code="{{ f.code }}"
+                                                data-confirm-name="{{ f.name }}">Delete</button>
                                     </form>
                                 </td>
                             </tr>

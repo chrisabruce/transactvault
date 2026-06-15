@@ -1763,6 +1763,21 @@ async fn admin_can_delete_forms_rename_and_delete_groups() {
         row.map(|c| c.count).unwrap_or(0)
     }
 
+    // --- Rendered structure: Delete must be a `formaction` submit button
+    // carrying its own `data-confirm`, NOT a second <form> in the cell
+    // (two <form>s in one <td> don't parse reliably and caused the Delete
+    // click to submit the wrong form). Lock that structure in.
+    let (page_status, page) = authed_get(&app, &admin, "/admin/forms/tset").await;
+    assert_eq!(page_status, StatusCode::OK);
+    assert!(
+        page.contains(r#"formaction="/admin/forms/tset/forms/f1/delete""#),
+        "per-form Delete should post via formaction, not a nested form"
+    );
+    assert!(
+        page.contains("Delete form {code} ({name})?"),
+        "Delete button should carry its own data-confirm prompt"
+    );
+
     // --- Delete a single form ------------------------------------------------
     let (s, _) = authed_post(&app, &admin, "/admin/forms/tset/forms/f1/delete", "").await;
     assert!(s.is_redirection(), "delete-form should redirect on success");

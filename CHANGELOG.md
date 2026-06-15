@@ -8,6 +8,14 @@ the bottom-right of every page.
 
 ## June 2026
 
+### v0.3.4 — Fix: deleting a single form
+
+Deleting an individual form from the admin forms library now works.
+The Delete button was mis-wired (two buttons sharing a table cell
+confused the browser, so the click hit the wrong action); it now
+deletes exactly the form you clicked, after its own confirmation
+prompt. Deactivate in the same row is unaffected.
+
 ### v0.3.3 — Fixes: live dashboard, team list, and member removal
 
 - **Live dashboard updates work again.** The real-time stat cards
