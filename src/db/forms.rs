@@ -68,6 +68,119 @@ pub async fn attach_default_state(
     Ok(())
 }
 
+/// One entry in a brokerage's form catalog — everything the
+/// Add-an-item picker and the manual-add path need. `group_*` arrive
+/// through the inbound `has_form` edge for library forms and the
+/// inline fields for brokerage custom forms; either can be absent on
+/// an edge-less row, so callers fall back to Additional Disclosures.
+#[derive(Debug, Clone, Deserialize, SurrealValue)]
+pub struct CatalogForm {
+    pub id: RecordId,
+    pub code: String,
+    pub name: String,
+    pub allows_multiple: bool,
+    pub group_name: Option<String>,
+    pub group_order: Option<i64>,
+}
+
+impl CatalogForm {
+    /// The (name, order) of the group this form files under, when the
+    /// row carries one.
+    pub fn group(&self) -> Option<(String, i64)> {
+        match (&self.group_name, self.group_order) {
+            (Some(n), Some(o)) => Some((n.clone(), o)),
+            _ => None,
+        }
+    }
+}
+
+/// The full catalog a brokerage can add checklist items from —
+/// deliberately WITHOUT the `applies_*` filtering the default-checklist
+/// resolver uses: the picker offers every form regardless of the
+/// transaction's type/side/condition.
+///
+/// Returns `(library, custom)` separately so callers can fall back to
+/// the compiled CAR library when the brokerage has no set wired
+/// (pre-dating `attach_default_state`, or an unseeded dev DB) without
+/// losing the custom half. Hidden forms (`hides_form`) are excluded
+/// from both.
+pub async fn brokerage_catalog(
+    db: &Surreal<Any>,
+    brokerage_id: &RecordId,
+) -> anyhow::Result<(Vec<CatalogForm>, Vec<CatalogForm>)> {
+    let mut sets_q = db
+        .query(
+            "RETURN array::concat(
+                (SELECT VALUE out FROM uses_state WHERE in = $b),
+                (SELECT VALUE out FROM uses_locality WHERE in = $b)
+            )",
+        )
+        .bind(("b", brokerage_id.clone()))
+        .await
+        .context("loading brokerage form sets")?;
+    let sets: Vec<RecordId> = sets_q.take(0).unwrap_or_default();
+
+    let mut hides_q = db
+        .query("SELECT VALUE out FROM hides_form WHERE in = $b")
+        .bind(("b", brokerage_id.clone()))
+        .await
+        .context("loading hidden forms")?;
+    let hidden: Vec<RecordId> = hides_q.take(0).unwrap_or_default();
+
+    let mut library: Vec<CatalogForm> = Vec::new();
+    for set in &sets {
+        let mut q = db
+            .query(
+                "SELECT id, code, name, allows_multiple,
+                        (<-has_form<-form_group)[0].name AS group_name,
+                        (<-has_form<-form_group)[0].sort_order AS group_order
+                 FROM $set->has_group->form_group->has_form->form
+                 WHERE is_active = true",
+            )
+            .bind(("set", set.clone()))
+            .await
+            .context("loading set catalog")?;
+        let rows: Vec<CatalogForm> = q.take(0)?;
+        library.extend(rows.into_iter().filter(|f| !hidden.contains(&f.id)));
+    }
+
+    let mut custom_q = db
+        .query(
+            "SELECT id, code, name, allows_multiple, group_name, group_order
+             FROM $b->owns_form->form
+             WHERE is_active = true",
+        )
+        .bind(("b", brokerage_id.clone()))
+        .await
+        .context("loading custom catalog")?;
+    let custom: Vec<CatalogForm> = custom_q.take(0).unwrap_or_default();
+    let custom = custom
+        .into_iter()
+        .filter(|f| !hidden.contains(&f.id))
+        .collect();
+
+    Ok((library, custom))
+}
+
+/// Find one form in the brokerage's catalog by code, case-insensitive.
+/// Custom forms win a code collision — the broker created them
+/// deliberately, so their metadata (name, group) is the intended one.
+pub async fn find_brokerage_form(
+    db: &Surreal<Any>,
+    brokerage_id: &RecordId,
+    code: &str,
+) -> anyhow::Result<Option<CatalogForm>> {
+    let (library, custom) = brokerage_catalog(db, brokerage_id).await?;
+    Ok(custom
+        .into_iter()
+        .find(|f| f.code.eq_ignore_ascii_case(code))
+        .or_else(|| {
+            library
+                .into_iter()
+                .find(|f| f.code.eq_ignore_ascii_case(code))
+        }))
+}
+
 /// Resolve the forms a single form_set contributes for a given
 /// transaction type / side / condition. Results are sorted by
 /// (group_order, form_order) to match the printed-checklist sequence.

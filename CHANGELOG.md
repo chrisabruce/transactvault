@@ -6,6 +6,61 @@ the bottom-right of every page.
 
 ---
 
+## July 2026
+
+### v0.4.0 — Live search, real-time fixes, team exports, and the full CAR catalog
+
+- **Search-as-you-type actually works now.** On the Transactions page,
+  typing in the search box used to reload the whole page — which froze
+  mid-word and threw your cursor out of the box. Results now update
+  live beneath the toolbar while you type; the cursor never moves.
+  The Search page gained the same live behavior (it previously
+  required pressing Enter).
+- **Real-time dashboard updates are fixed for real this time.** The
+  live stat cards were receiving updates in a format the browser
+  library couldn't fully read, so patches came through mangled. The
+  format is corrected and a regression test now guards it. Numbers
+  update instantly as your team works — approvals, uploads, comments,
+  new transactions, status changes.
+- **All 10 missing CAR forms are in the Add-an-item list**, including
+  the four forms CAR released in June 2026: PRBS-B, PRBS-S, SWPI-C,
+  and SWPI-Q. The picker now shows the complete CAR catalog — forms
+  already on the checklist are no longer hidden from the list (that
+  read as "missing"); adding one twice is politely refused instead,
+  and repeatable forms like Addenda and Counter Offers can still be
+  added as many times as needed.
+- **Your own form codes now show on checklists.** Forms you add to
+  your brokerage library (e.g. RNTD, AD, R&R, CCR, SDR) display their
+  code chip on the checklist just like CAR forms, and uploads against
+  them are filed under that code instead of MISC.
+- **Team page exports.** Each member row has an **Export ZIP** button
+  that downloads every document across that agent's transactions,
+  organized by property and form code with a manifest. A new
+  **Brokerage archive** section (above the danger zone) downloads the
+  entire brokerage in one ZIP, organized alphabetically by agent.
+  Broker-only, capped at 400 MB per archive — export individual
+  transactions if you're over.
+- **Admin → Forms: local libraries can be renamed and deleted.** Open
+  a local library for a "Rename library" control (e.g. fixing
+  capitalization on an association name) or delete it — from the
+  library page or the list — with a confirmation. Existing
+  transactions keep their checklists and documents; the state
+  (California) library is protected from both.
+- **The Add-an-item picker is now managed from the app — no deploy
+  needed for CAR catalog changes.** The picker reads your form
+  library from the database: the full CAR catalog (~250 forms,
+  including CLR — Cancellation of Lease or Rent) is loaded into
+  **Admin → Forms → California** on first startup, where forms can be
+  added, edited, deactivated, or deleted and the picker follows
+  immediately. Deleted forms stay deleted across updates. Forms a
+  brokerage adds at **Account → Forms** now appear in their picker
+  too, and forms they hide disappear from it. Catalog forms start as
+  picker-only — they never join default checklists unless an admin
+  broadens a form's applicability on its Edit page. One heads-up for
+  existing installs: the first startup after this update re-lists the
+  complete catalog, so if you had deleted individual forms before,
+  delete them once more — from then on it sticks.
+
 ## June 2026
 
 ### v0.3.4 — Fix: deleting a single form

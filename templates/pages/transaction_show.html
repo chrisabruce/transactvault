@@ -88,10 +88,10 @@
 
                         <ul class="checklist" role="list">
                             {% for row in group.items %}
-                                <li class="checklist-item is-{{ row.item.approval_status }}{% if row.item.required %} is-required{% endif %}{% if row.needs_attention(can_review) %} is-attention{% endif %}"{% if !row.item.is_approved() %} data-upload-url="/app/transactions/{{ transaction_key }}/documents" data-item-id="{{ row.item.url_key() }}" data-form-code="{% match row.form %}{% when Some with (f) %}{{ f.code }}{% when None %}MISC{% endmatch %}"{% endif %}>
+                                <li class="checklist-item is-{{ row.item.approval_status }}{% if row.item.required %} is-required{% endif %}{% if row.needs_attention(can_review) %} is-attention{% endif %}"{% if !row.item.is_approved() %} data-upload-url="/app/transactions/{{ transaction_key }}/documents" data-item-id="{{ row.item.url_key() }}" data-form-code="{% match row.code() %}{% when Some with (c) %}{{ c }}{% when None %}MISC{% endmatch %}"{% endif %}>
                                     <header class="checklist-item-head">
                                         <div class="checklist-item-tags">
-                                            {% match row.form %}{% when Some with (f) %}<strong class="form-code">{{ f.code }}</strong>{% when None %}{% endmatch %}
+                                            {% match row.code() %}{% when Some with (c) %}<strong class="form-code">{{ c }}</strong>{% when None %}{% endmatch %}
                                             {% if row.item.required %}<span class="badge required" title="Required for compliance">required</span>{% else %}<span class="badge optional">optional</span>{% endif %}
                                         </div>
                                         <div class="checklist-actions">
@@ -125,7 +125,7 @@
                                                           action="/app/transactions/{{ transaction_key }}/documents"
                                                           class="inline-upload">
                                                         <input type="hidden" name="item_id" value="{{ row.item.url_key() }}">
-                                                        <input type="hidden" name="form_code" value="{% match row.form %}{% when Some with (f) %}{{ f.code }}{% when None %}MISC{% endmatch %}">
+                                                        <input type="hidden" name="form_code" value="{% match row.code() %}{% when Some with (c) %}{{ c }}{% when None %}MISC{% endmatch %}">
                                                         <input type="file" name="file" required>
                                                         <button type="submit" class="btn small">Attach</button>
                                                     </form>

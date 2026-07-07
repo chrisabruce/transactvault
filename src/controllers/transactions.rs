@@ -113,9 +113,15 @@ pub struct ListFilters {
     #[serde(default)]
     pub page: Option<usize>,
     /// `"rows"` returns just the row HTML (for infinite-scroll appends);
-    /// anything else (or absent) renders the full page chrome.
+    /// `"results"` the whole results region (live search); anything
+    /// else (or absent) renders the full page chrome.
     #[serde(default)]
     pub fragment: Option<String>,
+    /// Datastar's GET-request signal payload (`?datastar=<json>`). The
+    /// search box is bound to the `q` signal, so live-search requests
+    /// carry the typed query here instead of the `q` param.
+    #[serde(default)]
+    pub datastar: Option<String>,
     /// Column to sort by: `age` (default, newest first), `property`,
     /// `price`, `type`, or `status`. Unknown values fall back to `age`.
     #[serde(default)]
@@ -227,7 +233,12 @@ pub async fn list(
         }
     }
 
-    let query = filters.q.clone().unwrap_or_default();
+    // Live-search requests carry the typed query as a Datastar signal
+    // (the `data-on-input` URL is rendered once, so only the signal side
+    // changes per keystroke); normal navigations — Enter, sort headers,
+    // bookmarks — use the plain `q` param.
+    let query =
+        signal_query(&filters.datastar).unwrap_or_else(|| filters.q.clone().unwrap_or_default());
     if !query.trim().is_empty() {
         let needle = query.to_ascii_lowercase();
         transactions.retain(|t| {
@@ -300,8 +311,8 @@ pub async fn list(
         String::new()
     };
 
-    // Fragment mode: just the rows (plus the next sentinel). Used by
-    // the Datastar infinite-scroll trigger to append the next page.
+    // Fragment mode "rows": just the rows (plus the next sentinel).
+    // Used by the infinite-scroll trigger to append the next page.
     if filters.fragment.as_deref() == Some("rows") {
         return render(&TransactionRowsFragment {
             transactions: page_rows,
@@ -316,6 +327,37 @@ pub async fn list(
     // right next sort direction (toggle if active, default if not)
     // and carries all existing filters forward.
     let sort_headers = build_sort_headers(&status_filter, &query, attention_on, sort_key, sort_dir);
+
+    // Fragment mode "results": the whole results region (header strip
+    // + rows, or the empty state). live-search.js swaps this into
+    // `#tx-results` as the user types — and again when the stats
+    // stream signals a brokerage mutation — leaving the search input
+    // untouched so focus never jumps.
+    if filters.fragment.as_deref() == Some("results") {
+        return render(&crate::templates::TxResultsFragment {
+            transactions: page_rows,
+            has_next_page,
+            next_url,
+            is_broker: user.role.is_broker(),
+            sort_headers,
+        });
+    }
+
+    // URL the search box live-fetches on input (Datastar `@get`) —
+    // carries every filter except the query itself, which travels as
+    // the bound `q` signal.
+    let live_results_url = {
+        let base = build_list_url(
+            &status_filter,
+            "",
+            attention_on,
+            None,
+            false,
+            Some((sort_key, sort_dir)),
+        );
+        let sep = if base.contains('?') { '&' } else { '?' };
+        format!("{base}{sep}fragment=results")
+    };
 
     // Mounted at both `/app` and `/app/transactions`; same view, same
     // nav highlight — Transactions is the canonical entry point.
@@ -341,6 +383,7 @@ pub async fn list(
         active_filter,
         sort_headers,
         is_broker: user.role.is_broker(),
+        live_results_url,
     })
 }
 
@@ -452,6 +495,18 @@ fn derive_active_filter(status: &str, attention_on: bool) -> &'static str {
     }
 }
 
+/// Extract the `q` signal from Datastar's GET-request signal payload
+/// (`?datastar=<json>`). `None` when the param is absent or malformed,
+/// so callers fall back to the regular `q` query param.
+fn signal_query(datastar: &Option<String>) -> Option<String> {
+    #[derive(Deserialize)]
+    struct QSignal {
+        q: Option<String>,
+    }
+    let raw = datastar.as_deref()?;
+    serde_json::from_str::<QSignal>(raw).ok()?.q
+}
+
 /// Whether a query-string flag should be treated as on. Accepts any of
 /// the common truthy spellings users (or links from the dashboard) might
 /// hand us.
@@ -545,13 +600,28 @@ async fn render_stat_html(
     Ok(html)
 }
 
-/// Format a stat-grid HTML fragment as a Datastar `datastar-patch-elements`
-/// SSE event. Datastar parses the `elements <html>` body and morphs the
-/// matching `id` in place — for us that's `<section id="stat-grid">`.
+/// Format an HTML fragment as a Datastar `datastar-patch-elements` SSE
+/// event. Datastar joins the `elements`-prefixed data lines back into a
+/// document and morphs the element with the matching `id` in place —
+/// for us that's `<section id="stat-grid">`.
+///
+/// EVERY line of the payload must carry the `elements ` prefix:
+/// Datastar's SSE parser splits each `data:` line at its first space
+/// and buckets the remainder under that first word. The previous
+/// implementation prefixed only the first line, so a multi-line
+/// fragment collapsed to its opening tag and the "patch" morphed the
+/// stat grid into an empty section — the "live updates not working"
+/// bug. The regression test on `/app/stats/stream` now asserts the
+/// per-line prefix.
 fn stat_patch_event(html: &str) -> SseEvent {
+    let data = html
+        .lines()
+        .map(|line| format!("elements {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
     SseEvent::default()
         .event("datastar-patch-elements")
-        .data(format!("elements {html}"))
+        .data(data)
 }
 
 /// `GET /app/stats/stream` — Server-Sent Events stream that pushes a
@@ -920,7 +990,7 @@ pub async fn show(
     let items = load_checklist(&state, &tx.id).await?;
     let groups = build_grouped_checklist(&state, items, user.role).await?;
     let owner_name = load_transaction_owner_name(&state, &tx.id).await?;
-    let available_forms = available_forms(&groups);
+    let available_forms = available_forms(&state, &user.brokerage_id).await?;
     let transaction_comments = load_comments(&state, &tx.id).await?;
 
     let header = crate::controllers::common::build_app_header(&state, &user, "transactions").await;
@@ -1450,6 +1520,14 @@ pub struct SearchInput {
     pub sort: Option<String>,
     #[serde(default)]
     pub dir: Option<String>,
+    /// `"results"` returns just the results region for the live-search
+    /// swap; anything else renders the full page chrome.
+    #[serde(default)]
+    pub fragment: Option<String>,
+    /// Datastar's GET-request signal payload — carries the live-typed
+    /// `q`, same as [`ListFilters::datastar`].
+    #[serde(default)]
+    pub datastar: Option<String>,
 }
 
 pub async fn search(
@@ -1457,7 +1535,10 @@ pub async fn search(
     user: CurrentUser,
     Query(input): Query<SearchInput>,
 ) -> Result<Html<String>, AppError> {
-    let query = input.q.unwrap_or_default();
+    // Same signal-or-param split as the transactions list: live-search
+    // keystrokes arrive as the Datastar `q` signal, navigations as the
+    // plain param.
+    let query = signal_query(&input.datastar).unwrap_or_else(|| input.q.unwrap_or_default());
     let needle = query.trim().to_ascii_lowercase();
     let status_filter = input.status.clone().unwrap_or_default();
     let sort_key = input
@@ -1505,6 +1586,29 @@ pub async fn search(
 
     let sort_headers = build_search_sort_headers(&query, &status_filter, sort_key, sort_dir);
 
+    // Fragment mode for the Datastar live-search patch of
+    // `<div id="search-results">`.
+    if input.fragment.as_deref() == Some("results") {
+        return render(&crate::templates::SearchResultsFragment {
+            query,
+            sort_headers,
+            transactions,
+            documents,
+        });
+    }
+
+    // URL the search box live-fetches on input — carries the status
+    // filter + sort; the query itself travels as the bound `q` signal.
+    let live_results_url = {
+        let mut params: Vec<String> = vec!["fragment=results".to_string()];
+        if !status_filter.is_empty() && status_filter != "all" {
+            params.push(format!("status={}", urlencoding::encode(&status_filter)));
+        }
+        params.push(format!("sort={}", sort_key.as_str()));
+        params.push(format!("dir={}", sort_dir.as_str()));
+        format!("/app/search?{}", params.join("&"))
+    };
+
     let header = crate::controllers::common::build_app_header(&state, &user, "search").await;
     render(&SearchPage {
         app_name: &state.config.app_name,
@@ -1516,6 +1620,7 @@ pub async fn search(
         sort_headers,
         transactions,
         documents,
+        live_results_url,
     })
 }
 
@@ -2010,24 +2115,65 @@ pub async fn load_comments(
 /// "Add optional form" picker. Forms marked `allows_multiple` always stay
 /// available even if already attached.
 ///
-/// Sorted case-insensitively by code so the picker reads alphabetically.
-/// We can't return a `Vec<&'static CarForm>` from a sorted reference into
-/// the static `LIBRARY` because the library itself isn't pre-sorted (it
-/// groups forms thematically), so we sort the filtered references at
-/// request time. With ~300 entries this is a few microseconds and not
-/// worth caching.
-fn available_forms(groups: &[ChecklistGroup]) -> Vec<&'static crate::forms::CarForm> {
-    let used: std::collections::HashSet<&str> = groups
-        .iter()
-        .flat_map(|g| g.items.iter())
-        .filter_map(|r| r.form.map(|f| f.code))
-        .collect();
-    let mut out: Vec<&'static crate::forms::CarForm> = forms::LIBRARY
-        .iter()
-        .filter(|f| f.allows_multiple || !used.contains(f.code))
-        .collect();
-    out.sort_by_key(|f| f.code.to_ascii_lowercase());
-    out
+/// The Add-an-item catalog, code-sorted: the brokerage's DB library
+/// (state + locality sets, active forms only, minus anything they hid)
+/// overlaid with their custom forms — so Admin → Forms and /app/forms
+/// edits reach the picker without a deploy. Precedence on a code
+/// collision: custom beats library (the broker created it
+/// deliberately). Brokerages with no set wired — and unseeded dev DBs
+/// — fall back to the compiled CAR catalog so the picker is never
+/// empty.
+///
+/// Forms already on the checklist are offered too (hiding them read as
+/// "missing from the list" to brokers scanning the picker);
+/// `checklists::create` rejects a duplicate single-instance add with a
+/// message naming the existing item instead.
+async fn available_forms(
+    state: &AppState,
+    brokerage_id: &RecordId,
+) -> Result<Vec<crate::templates::PickerForm>, AppError> {
+    use crate::templates::PickerForm;
+
+    let (library, custom) = crate::db::forms::brokerage_catalog(&state.db, brokerage_id)
+        .await
+        .map_err(|e| AppError::Internal(e.context("loading form catalog")))?;
+
+    // BTreeMap keyed by uppercased code = dedupe and code-sorted output
+    // in one structure; later inserts win, encoding the precedence
+    // above.
+    let mut by_code: std::collections::BTreeMap<String, PickerForm> =
+        std::collections::BTreeMap::new();
+    if library.is_empty() {
+        for f in forms::LIBRARY {
+            by_code.insert(
+                f.code.to_ascii_uppercase(),
+                PickerForm {
+                    code: f.code.to_string(),
+                    name: f.name.to_string(),
+                },
+            );
+        }
+    } else {
+        for f in library {
+            by_code.insert(
+                f.code.to_ascii_uppercase(),
+                PickerForm {
+                    code: f.code.clone(),
+                    name: f.name,
+                },
+            );
+        }
+    }
+    for f in custom {
+        by_code.insert(
+            f.code.to_ascii_uppercase(),
+            PickerForm {
+                code: f.code.clone(),
+                name: f.name,
+            },
+        );
+    }
+    Ok(by_code.into_values().collect())
 }
 
 async fn load_transaction_owner_name(

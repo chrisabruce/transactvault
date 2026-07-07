@@ -103,6 +103,11 @@
                             </td>
                             {% if header.role.can_change_roles() %}
                                 <td class="actions">
+                                    {% if header.role.is_broker() %}
+                                        <a class="btn small secondary"
+                                           href="/app/team/{{ member.user_key }}/export"
+                                           title="Download a ZIP of every document on {{ member.name }}'s transactions">Export ZIP</a>
+                                    {% endif %}
                                     {% if !member.is_self %}
                                         <form method="post"
                                               action="/app/team/{{ member.user_key }}/remove"
@@ -165,6 +170,16 @@
     {% endif %}
 
     {% if header.role.is_broker() %}
+        <section class="panel" aria-labelledby="brokerage-export-heading">
+            <h2 id="brokerage-export-heading">Brokerage archive</h2>
+            <p>
+                Download every transaction's documents for the whole brokerage in one ZIP,
+                organized alphabetically by agent (unassigned transactions last). Large
+                archives can take a moment to assemble.
+            </p>
+            <a class="btn" href="/app/team/export">Download brokerage ZIP</a>
+        </section>
+
         <section class="danger-zone" aria-label="Destructive actions">
             <h3>Danger zone</h3>
             <p>

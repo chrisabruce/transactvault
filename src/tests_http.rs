@@ -1599,7 +1599,13 @@ async fn stats_fragment_serves_morph_target_for_dashboard_polling() {
 ///   - the initial event the handler emits is a Datastar
 ///     `datastar-patch-elements` event carrying the `stat-grid`
 ///     fragment, so the client morphs fresh numbers in immediately on
-///     connect rather than waiting for the first mutation.
+///     connect rather than waiting for the first mutation;
+///   - EVERY `data:` line carries the `elements ` prefix. Datastar's
+///     SSE parser buckets each line by its first word, so a fragment
+///     whose continuation lines lack the prefix collapses to its
+///     opening tag — the patch then morphed the stat grid into an
+///     empty section. That was the "real-time updates not working"
+///     bug; this assertion keeps it fixed.
 #[tokio::test]
 async fn stats_stream_pushes_initial_patch_event_on_connect() {
     use axum::body::Body;
@@ -1671,9 +1677,18 @@ async fn stats_stream_pushes_initial_patch_event_on_connect() {
         "first SSE event should be Datastar patch-elements; saw: {buf:?}"
     );
     assert!(
-        buf.contains("stat-grid"),
-        "patch body must carry the stat-grid id for morph match; saw: {buf:?}"
+        buf.contains(r#"id="stat-grid""#),
+        "patch body must carry the stat-grid id for the morph match; saw: {buf:?}"
     );
+    for line in buf.lines() {
+        if let Some(data) = line.strip_prefix("data: ") {
+            assert!(
+                data.starts_with("elements "),
+                "every SSE data line must start with the `elements ` prefix \
+                 or Datastar drops it and the patch collapses; saw: {line:?}"
+            );
+        }
+    }
 }
 
 /// `/admin/changelog` renders the bundled `CHANGELOG.md` as HTML for
@@ -1936,4 +1951,695 @@ async fn standalone_item_comment_endpoint_writes_a_flaggable_comment() {
     assert_eq!(rows.len(), 1, "expected exactly one comment row");
     assert_eq!(rows[0].target, item, "comment must target the item");
     assert_eq!(rows[0].author, agent, "author must be the poster");
+}
+
+// ---------------------------------------------------------------------------
+// June 2026 corrections set — live search, exports, forms admin
+// ---------------------------------------------------------------------------
+
+/// GET as a signed-in user, returning raw bytes — for binary responses
+/// (ZIP exports) that would fail `send`'s UTF-8 conversion.
+async fn authed_get_raw(
+    app: &TestApp,
+    user_id: &RecordId,
+    uri: &str,
+) -> (StatusCode, String, Vec<u8>) {
+    use axum::extract::ConnectInfo;
+    use std::net::SocketAddr;
+
+    let cookie = session_cookie(app, user_id);
+    let mut req = Request::builder()
+        .uri(uri)
+        .header("cookie", cookie)
+        .body(Body::empty())
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo::<SocketAddr>(
+        "127.0.0.1:0".parse().expect("loopback addr"),
+    ));
+    let response = app
+        .router
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("router oneshot");
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let body = to_bytes(response.into_body(), 64 * 1024 * 1024)
+        .await
+        .expect("collect body");
+    (status, content_type, body.to_vec())
+}
+
+/// The live-search fragment endpoint returns just the results region
+/// (no page chrome) and reads the typed query from the Datastar signal
+/// payload rather than the `q` param — that's what the toolbar's
+/// `data-on-input` sends per keystroke.
+#[tokio::test]
+async fn live_search_fragment_filters_by_datastar_signal() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    join(&app.state, &broker, &b, "broker").await;
+    seed_tx(&app.state, &b, Some(&broker)).await;
+
+    // Signal q matches the seeded address → row present, no chrome.
+    let (status, body) = authed_get(
+        &app,
+        &broker,
+        "/app/transactions?fragment=results&datastar=%7B%22q%22%3A%22Test%20Way%22%7D",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains(r#"id="tx-results""#),
+        "fragment carries the swap id"
+    );
+    assert!(body.contains("1 Test Way"), "matching row is rendered");
+    assert!(
+        !body.contains("<html"),
+        "fragment must not include page chrome"
+    );
+
+    // Signal q that matches nothing → the empty state, still no chrome.
+    let (status, body) = authed_get(
+        &app,
+        &broker,
+        "/app/transactions?fragment=results&datastar=%7B%22q%22%3A%22zzz-no-match%22%7D",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains("Nothing matches"),
+        "empty state for a non-matching query"
+    );
+    assert!(!body.contains("1 Test Way"));
+}
+
+/// Same contract for the search page's fragment: `#search-results`
+/// region only, query via Datastar signal.
+#[tokio::test]
+async fn search_page_fragment_filters_by_datastar_signal() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    join(&app.state, &broker, &b, "broker").await;
+    seed_tx(&app.state, &b, Some(&broker)).await;
+
+    let (status, body) = authed_get(
+        &app,
+        &broker,
+        "/app/search?fragment=results&datastar=%7B%22q%22%3A%22Test%20Way%22%7D",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains(r#"id="search-results""#),
+        "fragment carries the swap id"
+    );
+    assert!(body.contains("1 Test Way"), "matching transaction listed");
+    assert!(
+        !body.contains("<html"),
+        "fragment must not include page chrome"
+    );
+
+    // The full page (no fragment param) still renders chrome + the
+    // live-search wiring on the input.
+    let (status, body) = authed_get(&app, &broker, "/app/search?q=Test").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("<html"));
+    assert!(
+        body.contains("data-on-input__debounce"),
+        "search input is wired for live search"
+    );
+}
+
+/// The Add-an-item picker offers the whole CAR catalog — including
+/// forms already on the checklist (the old exclusion read as "form
+/// missing from the list") and the four June-2026 additions. A
+/// duplicate single-instance add is rejected with a friendly 400;
+/// multi-instance forms (ADM) can be added repeatedly.
+#[tokio::test]
+async fn checklist_add_offers_full_catalog_and_rejects_duplicates() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    join(&app.state, &broker, &b, "broker").await;
+    let tx = seed_tx(&app.state, &b, Some(&broker)).await;
+    let key = crate::db::record_key(&tx);
+
+    // First SBSA add lands on the checklist.
+    let (status, _) = authed_post(
+        &app,
+        &broker,
+        &format!("/app/transactions/{key}/checklist"),
+        "form_code=SBSA",
+    )
+    .await;
+    assert!(
+        status.is_redirection(),
+        "first add should redirect, got {status}"
+    );
+
+    // Picker still lists SBSA (and the new 2026 codes) afterwards.
+    let (status, body) = authed_get(&app, &broker, &format!("/app/transactions/{key}")).await;
+    assert_eq!(status, StatusCode::OK);
+    for code in [
+        "SBSA", "PRBS-B", "PRBS-S", "SWPI-C", "SWPI-Q", "COL", "WOO", "CLR",
+    ] {
+        assert!(
+            body.contains(&format!(r#"<option value="{code}">"#)),
+            "picker should offer {code}"
+        );
+    }
+
+    // Second SBSA add is a 400 naming the duplicate.
+    let (status, body) = authed_post(
+        &app,
+        &broker,
+        &format!("/app/transactions/{key}/checklist"),
+        "form_code=SBSA",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body.contains("SBSA"),
+        "error should name the duplicate code"
+    );
+
+    // ADM allows multiple — two adds, two redirects.
+    for _ in 0..2 {
+        let (status, _) = authed_post(
+            &app,
+            &broker,
+            &format!("/app/transactions/{key}/checklist"),
+            "form_code=ADM",
+        )
+        .await;
+        assert!(status.is_redirection(), "ADM adds should both succeed");
+    }
+}
+
+/// Broker-added custom codes (not in the compiled CAR library) still
+/// render their code chip on the checklist — the row falls back to the
+/// item's stored form_code when the library lookup misses.
+#[tokio::test]
+async fn checklist_renders_code_chip_for_custom_codes() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    join(&app.state, &broker, &b, "broker").await;
+    let tx = seed_tx(&app.state, &b, Some(&broker)).await;
+    let key = crate::db::record_key(&tx);
+
+    let (status, _) = authed_post(
+        &app,
+        &broker,
+        &format!("/app/transactions/{key}/checklist"),
+        "form_code=RNTD",
+    )
+    .await;
+    assert!(status.is_redirection());
+
+    let (status, body) = authed_get(&app, &broker, &format!("/app/transactions/{key}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains(r#"<strong class="form-code">RNTD</strong>"#),
+        "custom code should render its chip"
+    );
+}
+
+/// Team ZIP exports: broker-only, scoped to the caller's brokerage, and
+/// the response is a real ZIP (PK magic) even with zero documents.
+#[tokio::test]
+async fn team_zip_exports_are_broker_only_and_brokerage_scoped() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    let agent = seed_user(&app.state, "agent@a").await;
+    join(&app.state, &broker, &b, "broker").await;
+    join(&app.state, &agent, &b, "agent").await;
+    seed_tx(&app.state, &b, Some(&agent)).await;
+
+    let agent_key = crate::db::record_key(&agent);
+
+    // Agents can't export anything.
+    let (status, _, _) = authed_get_raw(&app, &agent, "/app/team/export").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _, _) =
+        authed_get_raw(&app, &agent, &format!("/app/team/{agent_key}/export")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // Broker: per-agent export is a ZIP.
+    let (status, ct, bytes) =
+        authed_get_raw(&app, &broker, &format!("/app/team/{agent_key}/export")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(ct, "application/zip");
+    assert!(bytes.starts_with(b"PK"), "response should be a ZIP archive");
+
+    // Broker: whole-brokerage export is a ZIP.
+    let (status, ct, bytes) = authed_get_raw(&app, &broker, "/app/team/export").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(ct, "application/zip");
+    assert!(bytes.starts_with(b"PK"));
+
+    // A broker from ANOTHER brokerage can't export our agent.
+    let b2 = seed_brokerage(&app.state, "Rival").await;
+    let rival = seed_user(&app.state, "r@b").await;
+    join(&app.state, &rival, &b2, "broker").await;
+    let (status, _, _) =
+        authed_get_raw(&app, &rival, &format!("/app/team/{agent_key}/export")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// Admin form-set lifecycle: create a locality, rename it, delete it
+/// (cascading groups + forms + edges). The seeded California state set
+/// refuses both rename and delete.
+#[tokio::test]
+async fn admin_can_rename_and_delete_local_sets_but_not_state() {
+    let app = make_app().await;
+    crate::db::seed_forms(&app.state.db)
+        .await
+        .expect("seed forms");
+
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let admin = seed_user(&app.state, "admin@test").await;
+    join(&app.state, &admin, &b, "broker").await;
+
+    // Create a locality set.
+    let (status, _) = authed_post(&app, &admin, "/admin/forms/sets", "name=Test+MLS").await;
+    assert!(status.is_redirection(), "create set should redirect");
+    let mut q = app
+        .state
+        .db
+        .query("SELECT VALUE id FROM form_set WHERE name = 'Test MLS' LIMIT 1")
+        .await
+        .expect("find set");
+    let ids: Vec<RecordId> = q.take(0).unwrap_or_default();
+    let set_id = ids.into_iter().next().expect("set created");
+    let set_key = crate::db::record_key(&set_id);
+
+    // Rename it (the GAVAR capitalization use-case).
+    let (status, _) = authed_post(
+        &app,
+        &admin,
+        &format!("/admin/forms/{set_key}/rename"),
+        "name=Test+MLS+Renamed",
+    )
+    .await;
+    assert!(status.is_redirection(), "rename should redirect");
+    let mut q = app
+        .state
+        .db
+        .query("SELECT VALUE name FROM ONLY $s")
+        .bind(("s", set_id.clone()))
+        .await
+        .expect("reload set");
+    let name: Option<String> = q.take(0).expect("take name");
+    assert_eq!(name.as_deref(), Some("Test MLS Renamed"));
+
+    // Give it a group + form so the delete has something to cascade.
+    let (status, _) = authed_post(
+        &app,
+        &admin,
+        &format!("/admin/forms/{set_key}/groups"),
+        "name=G1&sort_order=1",
+    )
+    .await;
+    assert!(status.is_redirection());
+    let mut q = app
+        .state
+        .db
+        .query("SELECT VALUE out FROM has_group WHERE in = $s LIMIT 1")
+        .bind(("s", set_id.clone()))
+        .await
+        .expect("find group");
+    let gids: Vec<RecordId> = q.take(0).unwrap_or_default();
+    let group_key = crate::db::record_key(gids.first().expect("group created"));
+    let (status, _) = authed_post(
+        &app,
+        &admin,
+        &format!("/admin/forms/{set_key}/forms"),
+        &format!("group_key={group_key}&code=ZZZ&name=Z+Form"),
+    )
+    .await;
+    assert!(status.is_redirection());
+
+    // Delete the whole library.
+    let (status, _) =
+        authed_post(&app, &admin, &format!("/admin/forms/{set_key}/delete"), "").await;
+    assert!(status.is_redirection(), "delete should redirect");
+    let mut q = app
+        .state
+        .db
+        .query("SELECT count() FROM form WHERE code = 'ZZZ' GROUP ALL")
+        .await
+        .expect("count forms");
+    #[derive(serde::Deserialize, surrealdb::types::SurrealValue)]
+    struct C {
+        count: i64,
+    }
+    let c: Option<C> = q.take(0).ok().flatten();
+    assert_eq!(
+        c.map(|c| c.count).unwrap_or(0),
+        0,
+        "cascade should remove the set's forms"
+    );
+    let (status, _) = authed_get(&app, &admin, &format!("/admin/forms/{set_key}")).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "deleted set detail should 404"
+    );
+
+    // The California state set refuses rename + delete.
+    let mut q = app
+        .state
+        .db
+        .query("SELECT VALUE id FROM form_set WHERE scope = 'state' LIMIT 1")
+        .await
+        .expect("find CA");
+    let ca: Vec<RecordId> = q.take(0).unwrap_or_default();
+    let ca_key = crate::db::record_key(ca.first().expect("California seeded"));
+    let (status, _) = authed_post(&app, &admin, &format!("/admin/forms/{ca_key}/delete"), "").await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "state set delete must be refused"
+    );
+    let (status, _) = authed_post(
+        &app,
+        &admin,
+        &format!("/admin/forms/{ca_key}/rename"),
+        "name=Nope",
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "state set rename must be refused"
+    );
+}
+
+/// The boot-time catalog backfill: picker-only forms (like CLR) land in
+/// the California set with EMPTY applies arrays — offered in the picker,
+/// never on a default checklist — and the `seeded_form` ledger keeps
+/// admin deletions deleted across re-seeds.
+#[tokio::test]
+async fn catalog_backfill_adds_picker_only_forms_and_respects_deletions() {
+    let app = make_app().await;
+    crate::db::seed_forms(&app.state.db).await.expect("seed");
+
+    // CLR arrived via the backfill, filed under Release Disclosures,
+    // with empty applicability.
+    #[derive(serde::Deserialize, surrealdb::types::SurrealValue)]
+    struct FormRow {
+        id: RecordId,
+        applies_types: Vec<String>,
+        group_name: Option<String>,
+    }
+    let mut q = app
+        .state
+        .db
+        .query(
+            "SELECT id, applies_types, \
+             (<-has_form<-form_group)[0].name AS group_name \
+             FROM form WHERE code = 'CLR'",
+        )
+        .await
+        .expect("query CLR");
+    let rows: Vec<FormRow> = q.take(0).unwrap_or_default();
+    assert_eq!(rows.len(), 1, "CLR should be backfilled exactly once");
+    assert!(
+        rows[0].applies_types.is_empty(),
+        "backfilled forms must have empty applies so they never hit default checklists"
+    );
+    assert_eq!(rows[0].group_name.as_deref(), Some("Release Disclosures"));
+    let clr_id = rows[0].id.clone();
+
+    // Default checklists are untouched: residential listing resolution
+    // does not include CLR.
+    let b = seed_brokerage(&app.state, "Acme").await;
+    crate::db::forms::attach_default_state(&app.state.db, &b)
+        .await
+        .expect("attach state");
+    let resolved =
+        crate::db::forms::resolve_checklist(&app.state.db, &b, "residential", "listing", "none")
+            .await
+            .expect("resolve");
+    assert!(
+        !resolved.iter().any(|f| f.code == "CLR"),
+        "picker-only forms must not appear on default checklists"
+    );
+
+    // Admin-style delete, then re-seed: the ledger stops resurrection.
+    app.state
+        .db
+        .query("DELETE has_form WHERE out = $f; DELETE $f;")
+        .bind(("f", clr_id))
+        .await
+        .expect("delete CLR");
+    crate::db::seed_forms(&app.state.db).await.expect("re-seed");
+    let mut q = app
+        .state
+        .db
+        .query("SELECT count() FROM form WHERE code = 'CLR' GROUP ALL")
+        .await
+        .expect("recount");
+    #[derive(serde::Deserialize, surrealdb::types::SurrealValue)]
+    struct C {
+        count: i64,
+    }
+    let c: Option<C> = q.take(0).ok().flatten();
+    assert_eq!(
+        c.map(|c| c.count).unwrap_or(0),
+        0,
+        "a deleted form must stay deleted across re-seeds (seeded_form ledger)"
+    );
+}
+
+/// The Add-an-item picker is DB-driven for a seeded brokerage: library
+/// forms come from its sets (minus hidden ones), the brokerage's custom
+/// forms overlay in, and adding a custom-form code stores the DB
+/// metadata (canonical code, title, group).
+#[tokio::test]
+async fn picker_uses_brokerage_catalog_with_custom_overlay_and_hides() {
+    let app = make_app().await;
+    crate::db::seed_forms(&app.state.db).await.expect("seed");
+
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    join(&app.state, &broker, &b, "broker").await;
+    crate::db::forms::attach_default_state(&app.state.db, &b)
+        .await
+        .expect("attach state");
+    let tx = seed_tx(&app.state, &b, Some(&broker)).await;
+    let key = crate::db::record_key(&tx);
+
+    // A brokerage custom form (the client's RNTD case).
+    #[derive(serde::Serialize, SurrealValue)]
+    struct NewCustom {
+        code: String,
+        name: String,
+        description: String,
+        includes: String,
+        form_order: i64,
+        required: bool,
+        allows_multiple: bool,
+        group_name: Option<String>,
+        group_order: Option<i64>,
+        applies_types: Vec<String>,
+        applies_sides: Vec<String>,
+        applies_conditions: Vec<String>,
+        is_active: bool,
+    }
+    let custom: Option<crate::db::forms::CatalogForm> = app
+        .state
+        .db
+        .create("form")
+        .content(NewCustom {
+            code: "RNTD".into(),
+            name: "Rented Status MLS Report".into(),
+            description: String::new(),
+            includes: String::new(),
+            form_order: 9000,
+            required: false,
+            allows_multiple: false,
+            group_name: Some("MLS Data Sheets".into()),
+            group_order: Some(0),
+            applies_types: vec![],
+            applies_sides: vec![],
+            applies_conditions: vec![],
+            is_active: true,
+        })
+        .await
+        .expect("create custom form");
+    let custom_id = custom.expect("custom form row").id;
+    app.state
+        .db
+        .query("RELATE $b->owns_form->$f")
+        .bind(("b", b.clone()))
+        .bind(("f", custom_id))
+        .await
+        .expect("owns_form");
+
+    // Hide CLR from this brokerage.
+    let mut q = app
+        .state
+        .db
+        .query("SELECT VALUE id FROM form WHERE code = 'CLR' LIMIT 1")
+        .await
+        .expect("find CLR");
+    let clr: Vec<RecordId> = q.take(0).unwrap_or_default();
+    app.state
+        .db
+        .query("RELATE $b->hides_form->$f")
+        .bind(("b", b.clone()))
+        .bind(("f", clr.into_iter().next().expect("CLR seeded")))
+        .await
+        .expect("hides_form");
+
+    let (status, body) = authed_get(&app, &broker, &format!("/app/transactions/{key}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains(r#"<option value="RNTD">"#),
+        "custom forms belong in the picker"
+    );
+    assert!(
+        body.contains(r#"<option value="SBSA">"#),
+        "library forms come from the DB set"
+    );
+    assert!(
+        !body.contains(r#"<option value="CLR">"#),
+        "hidden forms must not be offered"
+    );
+
+    // Adding by (lowercased) custom code stores the DB metadata.
+    let (status, _) = authed_post(
+        &app,
+        &broker,
+        &format!("/app/transactions/{key}/checklist"),
+        "form_code=rntd",
+    )
+    .await;
+    assert!(status.is_redirection(), "custom-code add should succeed");
+    #[derive(serde::Deserialize, surrealdb::types::SurrealValue)]
+    struct ItemRow {
+        title: String,
+        form_code: Option<String>,
+        group_name: String,
+    }
+    let mut q = app
+        .state
+        .db
+        .query("SELECT title, form_code, group_name FROM checklist_item WHERE form_code = 'RNTD'")
+        .await
+        .expect("load item");
+    let items: Vec<ItemRow> = q.take(0).unwrap_or_default();
+    assert_eq!(items.len(), 1, "one RNTD item created");
+    assert_eq!(items[0].title, "Rented Status MLS Report");
+    assert_eq!(items[0].form_code.as_deref(), Some("RNTD"));
+    assert_eq!(items[0].group_name, "MLS Data Sheets");
+
+    // And the duplicate guard works off the DB metadata too.
+    let (status, body) = authed_post(
+        &app,
+        &broker,
+        &format!("/app/transactions/{key}/checklist"),
+        "form_code=RNTD",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body.contains("RNTD"));
+}
+
+/// The DEV_RESET_ON_BOOT path: `reset_schema` drops every domain table
+/// — including the `seeded_form` ledger — and the normal boot sequence
+/// (`apply_schema` → `seed_forms`) rebuilds a COMPLETE catalog from
+/// scratch. A pre-reset admin deletion is intentionally forgotten
+/// along with everything else: the wipe is total, so the fresh seed
+/// starts from the canonical compiled library again. Also serves as
+/// the guard that the reset table list stays in sync with the schema
+/// (a table missing from RESET_QUERY would leak rows into the
+/// "fresh" state and break these counts).
+#[tokio::test]
+async fn dev_reset_then_reseed_rebuilds_full_catalog() {
+    let app = make_app().await; // apply_schema already ran
+    crate::db::seed_forms(&app.state.db)
+        .await
+        .expect("first seed");
+
+    // Simulate an admin deletion before the reset — the ledger keeps
+    // this deleted across normal restarts (covered elsewhere), but a
+    // full reset wipes the ledger too.
+    let mut q = app
+        .state
+        .db
+        .query("SELECT VALUE id FROM form WHERE code = 'CLR' LIMIT 1")
+        .await
+        .expect("find CLR");
+    let clr: Vec<RecordId> = q.take(0).unwrap_or_default();
+    let clr = clr.into_iter().next().expect("CLR seeded");
+    app.state
+        .db
+        .query("DELETE has_form WHERE out = $f; DELETE $f;")
+        .bind(("f", clr))
+        .await
+        .expect("delete CLR");
+
+    // The DEV_RESET_ON_BOOT sequence, exactly as main.rs runs it.
+    crate::db::reset_schema(&app.state.db).await.expect("reset");
+    crate::db::apply_schema(&app.state.db)
+        .await
+        .expect("re-apply schema");
+    crate::db::seed_forms(&app.state.db).await.expect("re-seed");
+
+    #[derive(serde::Deserialize, surrealdb::types::SurrealValue)]
+    struct C {
+        count: i64,
+    }
+    let expected = crate::forms::LIBRARY.len() as i64;
+
+    let mut q = app
+        .state
+        .db
+        .query("SELECT count() FROM form GROUP ALL")
+        .await
+        .expect("count forms");
+    let forms: Option<C> = q.take(0).ok().flatten();
+    assert_eq!(
+        forms.map(|c| c.count).unwrap_or(0),
+        expected,
+        "post-reset catalog should hold every compiled-library form exactly once"
+    );
+
+    let mut q = app
+        .state
+        .db
+        .query("SELECT count() FROM seeded_form GROUP ALL")
+        .await
+        .expect("count ledger");
+    let ledger: Option<C> = q.take(0).ok().flatten();
+    assert_eq!(
+        ledger.map(|c| c.count).unwrap_or(0),
+        expected,
+        "ledger should be fully rebuilt after a reset"
+    );
+
+    let mut q = app
+        .state
+        .db
+        .query("SELECT count() FROM form WHERE code = 'CLR' GROUP ALL")
+        .await
+        .expect("recount CLR");
+    let clr_count: Option<C> = q.take(0).ok().flatten();
+    assert_eq!(
+        clr_count.map(|c| c.count).unwrap_or(0),
+        1,
+        "a full reset forgets pre-reset deletions — CLR is back"
+    );
 }

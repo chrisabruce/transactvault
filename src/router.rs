@@ -83,6 +83,11 @@ pub fn build(state: AppState) -> Router {
         .route("/app/documents/{id}/preview", get(documents::preview))
         .route("/app/documents/{id}/delete", post(documents::delete))
         .route("/app/team", get(members::list))
+        .route("/app/team/export", get(documents::export_brokerage_zip))
+        .route(
+            "/app/team/{user_id}/export",
+            get(documents::export_member_zip),
+        )
         .route("/app/team/invite", post(members::invite))
         .route(
             "/app/team/invite/{token}/resend",
@@ -131,6 +136,8 @@ pub fn build(state: AppState) -> Router {
         .route("/admin/forms", get(forms::admin_list))
         .route("/admin/forms/sets", post(forms::admin_create_set))
         .route("/admin/forms/{key}", get(forms::admin_set_detail))
+        .route("/admin/forms/{key}/rename", post(forms::admin_rename_set))
+        .route("/admin/forms/{key}/delete", post(forms::admin_delete_set))
         .route("/admin/forms/{key}/groups", post(forms::admin_add_group))
         .route(
             "/admin/forms/{key}/groups/{group_key}/rename",

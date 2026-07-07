@@ -49,7 +49,12 @@
         {% if !local_sets.is_empty() %}
             <table class="admin-table">
                 <thead>
-                    <tr><th scope="col">Locality</th><th scope="col" class="num">Groups</th><th scope="col" class="num">Forms</th></tr>
+                    <tr>
+                        <th scope="col">Locality</th>
+                        <th scope="col" class="num">Groups</th>
+                        <th scope="col" class="num">Forms</th>
+                        <th scope="col" class="actions"><span class="visually-hidden">Actions</span></th>
+                    </tr>
                 </thead>
                 <tbody>
                     {% for s in local_sets %}
@@ -57,11 +62,22 @@
                             <td><a href="/admin/forms/{{ s.key }}">{{ s.name }}</a></td>
                             <td class="num">{{ s.group_count }}</td>
                             <td class="num">{{ s.form_count }}</td>
+                            <td class="actions">
+                                <form method="post"
+                                      action="/admin/forms/{{ s.key }}/delete"
+                                      class="inline-form"
+                                      data-confirm="Delete the “{name}” library and all {count} form(s) in it? Brokerages using it keep their existing transactions but stop seeing these forms on new ones. This cannot be undone."
+                                      data-confirm-name="{{ s.name }}"
+                                      data-confirm-count="{{ s.form_count }}">
+                                    <button type="submit" class="btn small danger">Delete</button>
+                                </form>
+                            </td>
                         </tr>
                     {% endfor %}
                 </tbody>
             </table>
         {% endif %}
+        <p class="field-hint">Rename a library from its detail page (open it, then “Rename library”).</p>
         <h3>Add a locality</h3>
         <form method="post" action="/admin/forms/sets" class="filter-bar">
             <label class="visually-hidden" for="set-name">Locality name</label>

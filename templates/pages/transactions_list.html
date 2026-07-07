@@ -41,34 +41,7 @@
 
     {% include "partials/tx_toolbar.html" %}
 
-    {% if transactions.is_empty() %}
-        <section class="panel">
-            <section class="empty-state">
-                <h3>Nothing matches those filters</h3>
-                <p>Clear your filters or start a new transaction to see something here.</p>
-                <a class="btn" href="/app/transactions/new">Create transaction</a>
-            </section>
-        </section>
-    {% else %}
-        <section class="transaction-list">
-            <header class="tx-list-head" role="row">
-                {% for h in sort_headers %}
-                    <a href="{{ h.url }}"
-                       class="tx-list-col{% if h.active %} is-active{% endif %}"
-                       data-col="{{ h.key }}"
-                       role="columnheader"
-                       {% if h.active %}aria-sort="{% if h.arrow == "▲" %}ascending{% else %}descending{% endif %}"{% endif %}>
-                        <span>{{ h.label }}</span>
-                        <span class="tx-list-arrow">{% if h.arrow != "" %}{{ h.arrow }}{% else %}↕{% endif %}</span>
-                    </a>
-                {% endfor %}
-                <span class="tx-list-col is-spacer" aria-hidden="true"></span>
-            </header>
-            <ul id="tx-list" data-infinite-list role="list">
-                {% include "partials/transaction_rows.html" %}
-            </ul>
-        </section>
-    {% endif %}
+    {% include "partials/tx_results.html" %}
 </main>
 <script src="/static/js/infinite-scroll.js" defer></script>
 {% endblock %}

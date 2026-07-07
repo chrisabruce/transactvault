@@ -1,6 +1,17 @@
 {# Shared transactions search/filter toolbar. Included from the
    dashboard (defaulted filter state) and the transactions list
-   (live filter state). Posts to /app/transactions either way. #}
+   (live filter state). Posts to /app/transactions either way.
+
+   Search is live: the input binds the `q` signal and each pause in
+   typing Datastar-@gets the results fragment, which arrives as
+   text/html and idiomorph-patches `<div id="tx-results">` in place.
+   The input itself sits outside that div and is never re-rendered, so
+   focus and cursor stay put. (The previous implementation submitted
+   the whole form on a timer — every keystroke-pause was a full
+   navigation, which froze typing and threw the cursor out of the
+   box.) Enter still full-submits via the hidden button; select and
+   checkbox changes full-submit too, since they move the stat-card
+   highlight + URL, which live outside the patched region. #}
 <form id="tx-toolbar"
       method="get"
       action="/app/transactions"
@@ -14,7 +25,9 @@
            name="q"
            value="{{ query }}"
            placeholder="Search Address, Client, MLS…"
-           autocomplete="off">
+           autocomplete="off"
+           data-bind-q
+           data-on-input__debounce.350ms="@get('{{ live_results_url }}')">
     <select name="status" aria-label="Status" class="tx-toolbar-select">
         <option value="all"{% if filter_status == "all" || filter_status == "" %} selected{% endif %}>All statuses</option>
         <option value="active"{% if filter_status == "active" %} selected{% endif %}>Active</option>
@@ -27,29 +40,21 @@
         <input type="checkbox" name="attention" value="1"{% if attention_on %} checked{% endif %}>
         <span>Needs attention</span>
     </label>
-    {# Hidden submit so Enter inside the search input always works
-       even when the change-handler script hasn't booted yet. #}
+    {# Hidden submit so Enter inside the search input always works —
+       a full navigation that also makes the URL carry the query. #}
     <button type="submit" class="visually-hidden">Apply</button>
 </form>
 
 <script>
-// Live-filter UX: changing the status select or toggling "Needs
-// attention" submits the form immediately. Search submits 350 ms
-// after the user stops typing (or instantly via Enter through the
-// hidden button).
+// Status select + "Needs attention" toggle submit the form immediately.
+// These stay full navigations (not Datastar patches) on purpose: they
+// change the stat-card highlight and the page URL, both outside the
+// live-search patch region.
 (function () {
     var form = document.getElementById("tx-toolbar");
     if (!form) return;
     form.querySelectorAll("select, input[type=checkbox]").forEach(function (el) {
         el.addEventListener("change", function () { form.submit(); });
     });
-    var q = form.querySelector("input[name=q]");
-    if (q) {
-        var t;
-        q.addEventListener("input", function () {
-            clearTimeout(t);
-            t = setTimeout(function () { form.submit(); }, 350);
-        });
-    }
 })();
 </script>

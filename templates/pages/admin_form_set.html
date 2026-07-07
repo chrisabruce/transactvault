@@ -22,6 +22,25 @@
         </nav>
     </header>
 
+    {% if set_scope != "state" %}
+        <section class="panel" aria-label="Library settings">
+            <div class="group-head">
+                <form method="post" action="/admin/forms/{{ set_key }}/rename" class="group-rename">
+                    <label class="visually-hidden" for="set-rename">Library name</label>
+                    <input id="set-rename" type="text" name="name" value="{{ set_name }}" required>
+                    <button type="submit" class="btn small ghost">Rename library</button>
+                </form>
+                <form method="post"
+                      action="/admin/forms/{{ set_key }}/delete"
+                      class="inline-form"
+                      data-confirm="Delete the “{name}” library and every group and form inside it? Brokerages using it keep their existing transactions but stop seeing these forms on new ones. This cannot be undone."
+                      data-confirm-name="{{ set_name }}">
+                    <button type="submit" class="btn small danger">Delete library</button>
+                </form>
+            </div>
+        </section>
+    {% endif %}
+
     <div class="reorder-groups" data-reorder="/admin/forms/{{ set_key }}/reorder_groups">
     {% for group in groups %}
         <section class="panel" data-reorder-key="{{ group.key }}">

@@ -169,6 +169,7 @@ pub async fn reset_schema(db: &Surreal<Any>) -> anyhow::Result<()> {
         REMOVE TABLE IF EXISTS form;
         REMOVE TABLE IF EXISTS form_group;
         REMOVE TABLE IF EXISTS form_set;
+        REMOVE TABLE IF EXISTS seeded_form;
         REMOVE TABLE IF EXISTS user;
         REMOVE TABLE IF EXISTS brokerage;
     ";

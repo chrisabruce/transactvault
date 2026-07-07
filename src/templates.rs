@@ -342,6 +342,10 @@ pub struct TransactionsListPage<'a> {
     pub sort_headers: Vec<crate::controllers::transactions::SortHeader>,
     /// Brokers get a red Delete button on each row (corrections set).
     pub is_broker: bool,
+    /// URL the toolbar's search box live-fetches on input (Datastar
+    /// `@get`). Carries status/attention/sort; the typed query travels
+    /// as the bound `q` signal.
+    pub live_results_url: String,
 }
 
 /// HTML fragment containing only the row markup for a given page. The
@@ -357,6 +361,31 @@ pub struct TransactionRowsFragment {
     /// Brokers get a red Delete button on each row (corrections set).
     /// Threaded into the fragment so infinitely-scrolled rows keep it.
     pub is_broker: bool,
+}
+
+/// The list's whole results region — header strip + rows, or the
+/// empty state. Returned by `?fragment=results` for the live-search
+/// swap of `<div id="tx-results">`; the same partial is included by
+/// the full page so the two render paths can't drift.
+#[derive(Template)]
+#[template(path = "partials/tx_results.html")]
+pub struct TxResultsFragment {
+    pub transactions: Vec<Transaction>,
+    pub has_next_page: bool,
+    pub next_url: String,
+    pub is_broker: bool,
+    pub sort_headers: Vec<crate::controllers::transactions::SortHeader>,
+}
+
+/// The search page's results region (transactions + documents), for
+/// the `?fragment=results` live-search swap of `<div id="search-results">`.
+#[derive(Template)]
+#[template(path = "partials/search_results.html")]
+pub struct SearchResultsFragment {
+    pub query: String,
+    pub sort_headers: Vec<crate::controllers::transactions::SortHeader>,
+    pub transactions: Vec<Transaction>,
+    pub documents: Vec<SearchDocument>,
 }
 
 #[derive(Template)]
@@ -420,14 +449,23 @@ pub struct TransactionShowPage<'a> {
     pub transaction_key: String,
     pub compliance: CompliancePanel,
     pub owner_name: String,
-    /// Forms NOT yet on this transaction's checklist — feeds the
-    /// "Add optional form" picker.
-    pub available_forms: Vec<&'static CarForm>,
+    /// The brokerage's full form catalog (DB library + custom forms,
+    /// compiled-catalog fallback) — feeds the "Add an item" picker.
+    pub available_forms: Vec<PickerForm>,
     pub statuses: Vec<TransactionStatus>,
     /// Comments attached to the transaction itself (not to a specific item).
     pub transaction_comments: Vec<CommentView>,
     /// Whether the viewing user can approve/deny rows (broker / TC).
     pub can_review: bool,
+}
+
+/// One option in the Add-an-item datalist. Owned strings because the
+/// catalog is DB-resolved per brokerage (library + custom forms), not
+/// borrowed from the compiled library.
+#[derive(Debug, Clone)]
+pub struct PickerForm {
+    pub code: String,
+    pub name: String,
 }
 
 /// One row within a checklist group on the transaction show page. Bundles
@@ -538,6 +576,20 @@ impl ChecklistGroup {
 }
 
 impl ChecklistRow {
+    /// The form code to display / attach uploads under. Prefers the
+    /// canonical CAR-library code when the item's code resolves there,
+    /// but falls back to the code stored on the item itself — broker
+    /// custom forms (added via /app/forms or Admin → Forms) carry codes
+    /// like `RNTD` or `R&R` that don't exist in the compiled library,
+    /// and they should still render their chip and label their uploads.
+    pub fn code(&self) -> Option<&str> {
+        self.form
+            .map(|f| f.code)
+            .or(self.item.form_code.as_deref())
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+    }
+
     /// Per-item attention flag mirroring [`needs_attention_flags`] at
     /// row granularity: agents see denied/rejected forms; reviewers see
     /// items with an uploaded document still awaiting review.
@@ -728,6 +780,9 @@ pub struct SearchPage<'a> {
     pub sort_headers: Vec<crate::controllers::transactions::SortHeader>,
     pub transactions: Vec<Transaction>,
     pub documents: Vec<SearchDocument>,
+    /// URL the search box live-fetches on input (Datastar `@get`);
+    /// the typed query travels as the bound `q` signal.
+    pub live_results_url: String,
 }
 
 #[derive(Debug, Clone)]

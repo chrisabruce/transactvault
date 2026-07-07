@@ -687,6 +687,134 @@ struct NewSet {
     is_active: bool,
 }
 
+/// Load a set's (name, scope), 404ing on a stale key, and refuse the
+/// mutation when it's a state library. The boot seeder identifies
+/// California by exact scope+name (`seed_forms`), so renaming or
+/// deleting a state set would trigger a duplicate re-seed on the next
+/// deploy — and every brokerage's default checklist hangs off it.
+async fn assert_mutable_local_set(
+    db: &crate::state::Db,
+    set_id: &RecordId,
+) -> Result<String, AppError> {
+    #[derive(Debug, Deserialize, SurrealValue)]
+    struct SetMeta {
+        name: String,
+        scope: String,
+    }
+    let mut q = db
+        .query("SELECT name, scope FROM ONLY $s")
+        .bind(("s", set_id.clone()))
+        .await?;
+    let meta: Option<SetMeta> = q.take(0)?;
+    let meta = meta.ok_or(AppError::NotFound)?;
+    if meta.scope == "state" {
+        return Err(AppError::invalid(
+            "State libraries can't be renamed or deleted — brokerages resolve \
+             their default checklists from them.",
+        ));
+    }
+    Ok(meta.name)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RenameSetInput {
+    pub name: String,
+}
+
+/// POST `/admin/forms/{key}/rename` — change a local library's display
+/// name (e.g. fixing capitalization on an association name). Checklist
+/// items snapshot their group names at creation, so existing
+/// transactions are unaffected; the new name shows in the broker
+/// locality picker and the admin list immediately.
+pub async fn admin_rename_set(
+    State(state): State<AppState>,
+    SuperAdmin(_user): SuperAdmin,
+    Path(key): Path<String>,
+    Form(input): Form<RenameSetInput>,
+) -> Result<Redirect, AppError> {
+    let name = input.name.trim().to_string();
+    if name.is_empty() {
+        return Err(AppError::invalid("Library name is required."));
+    }
+    let set_id = RecordId::new("form_set", key.as_str());
+    assert_mutable_local_set(&state.db, &set_id).await?;
+    state
+        .db
+        .query("UPDATE $s SET name = $n")
+        .bind(("s", set_id))
+        .bind(("n", name))
+        .await?;
+    Ok(Redirect::to(&format!(
+        "/admin/forms/{key}?flash=set_renamed"
+    )))
+}
+
+/// POST `/admin/forms/{key}/delete` — remove a local library and
+/// everything in it: groups, forms, and every edge that references
+/// them (`has_group`/`has_form` down the hierarchy, `hides_form`/
+/// `owns_form` in from brokerages, plus the set's own `has_locality`
+/// and `uses_locality` wiring).
+///
+/// Same data-safety boundary as [`admin_delete_group`]: live
+/// transactions keep their snapshotted checklist items and documents —
+/// deleting a library only stops its forms from being offered on new
+/// transactions.
+pub async fn admin_delete_set(
+    State(state): State<AppState>,
+    SuperAdmin(admin): SuperAdmin,
+    Path(key): Path<String>,
+) -> Result<Redirect, AppError> {
+    let set_id = RecordId::new("form_set", key.as_str());
+    let set_name = assert_mutable_local_set(&state.db, &set_id).await?;
+
+    let mut gq = state
+        .db
+        .query("SELECT VALUE id FROM $s->has_group->form_group")
+        .bind(("s", set_id.clone()))
+        .await?;
+    let group_ids: Vec<RecordId> = gq.take(0).unwrap_or_default();
+    let mut fq = state
+        .db
+        .query("SELECT VALUE id FROM $s->has_group->form_group->has_form->form")
+        .bind(("s", set_id.clone()))
+        .await?;
+    let form_ids: Vec<RecordId> = fq.take(0).unwrap_or_default();
+
+    state
+        .db
+        .query(
+            "BEGIN TRANSACTION;
+             DELETE hides_form    WHERE out IN $forms;
+             DELETE owns_form     WHERE out IN $forms;
+             DELETE has_form      WHERE in  IN $groups;
+             DELETE form          WHERE id  IN $forms;
+             DELETE has_group     WHERE in  = $s;
+             DELETE form_group    WHERE id  IN $groups;
+             DELETE has_locality  WHERE out = $s;
+             DELETE uses_locality WHERE out = $s;
+             DELETE uses_state    WHERE out = $s;
+             DELETE $s;
+             COMMIT TRANSACTION;",
+        )
+        .bind(("s", set_id.clone()))
+        .bind(("groups", group_ids))
+        .bind(("forms", form_ids))
+        .await?;
+
+    crate::audit::record(
+        &state.db,
+        "admin_view",
+        Some(admin.user_id.clone()),
+        Some(admin.email.clone()),
+        None,
+        None,
+        Some(format!("deleted local form set \"{set_name}\" ({key})")),
+    )
+    .await;
+
+    Ok(Redirect::to("/admin/forms?flash=set_deleted"))
+}
+
 pub async fn admin_set_detail(
     State(state): State<AppState>,
     SuperAdmin(user): SuperAdmin,

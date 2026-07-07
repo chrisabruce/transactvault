@@ -142,7 +142,12 @@ DEFINE FIELD OVERWRITE allows_multiple     ON form TYPE bool DEFAULT false;
 -- their group through the `form_group -> has_form -> form` edge.
 DEFINE FIELD OVERWRITE group_name          ON form TYPE option<string>;
 DEFINE FIELD OVERWRITE group_order         ON form TYPE option<int>;
--- Dependency rules. Empty array = applies regardless of that dimension.
+-- Dependency rules. The resolver matches with `CONTAINS`, so an empty
+-- array means the form NEVER appears on a default checklist (it's
+-- still offered in the Add-an-item picker); "applies to everything"
+-- is expressed by listing every slug (see `applies_or_all` in the
+-- forms controller). The catalog backfill seeds picker-only forms
+-- with empty arrays.
 DEFINE FIELD OVERWRITE applies_types       ON form TYPE array<string> DEFAULT [];
 DEFINE FIELD OVERWRITE applies_sides       ON form TYPE array<string> DEFAULT [];
 DEFINE FIELD OVERWRITE applies_conditions  ON form TYPE array<string> DEFAULT [];
@@ -157,6 +162,16 @@ DEFINE TABLE OVERWRITE uses_state    SCHEMAFULL TYPE RELATION FROM brokerage  TO
 DEFINE TABLE OVERWRITE uses_locality SCHEMAFULL TYPE RELATION FROM brokerage  TO form_set;
 DEFINE TABLE OVERWRITE hides_form    SCHEMAFULL TYPE RELATION FROM brokerage  TO form;
 DEFINE TABLE OVERWRITE owns_form     SCHEMAFULL TYPE RELATION FROM brokerage  TO form;
+
+-- Ledger of catalog codes the boot-time backfill has auto-seeded into
+-- the master set — one row per code, EVER. A code in this table is
+-- never auto-seeded again, so a form an admin deliberately deletes
+-- from Admin → Forms stays deleted across deploys, while genuinely new
+-- codes added to the compiled library still arrive exactly once.
+DEFINE TABLE OVERWRITE seeded_form SCHEMAFULL;
+DEFINE FIELD OVERWRITE code       ON seeded_form TYPE string ASSERT string::len($value) >= 1;
+DEFINE FIELD OVERWRITE created_at ON seeded_form TYPE datetime DEFAULT time::now();
+DEFINE INDEX OVERWRITE idx_seeded_form_code ON seeded_form FIELDS code UNIQUE;
 
 DEFINE FIELD OVERWRITE created_at ON brokerage TYPE datetime DEFAULT time::now();
 DEFINE FIELD OVERWRITE updated_at ON brokerage TYPE datetime DEFAULT time::now() VALUE time::now();

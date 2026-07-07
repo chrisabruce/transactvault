@@ -5,6 +5,13 @@
 //! transaction record key. This mirrors how a brokerage would organise
 //! files in a physical filing cabinet.
 
+// SurrealDB's `RecordId` has interior mutability through lazy-init
+// regex caches inside Value/Array, which trips the lint when we keep
+// id-keyed maps (docs-per-transaction, owner-per-transaction). Hash +
+// Eq are still deterministic — same rationale as
+// `controllers/transactions.rs`.
+#![allow(clippy::mutable_key_type)]
+
 use std::io::Write;
 
 use axum::body::Body;
@@ -12,7 +19,7 @@ use axum::extract::{Multipart, Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{Redirect, Response};
 use futures::TryStreamExt;
-use surrealdb::types::RecordId;
+use surrealdb::types::{RecordId, SurrealValue};
 use tokio_util::io::StreamReader;
 
 use crate::auth::CurrentUser;
@@ -631,6 +638,430 @@ async fn build_zip(
             .map_err(|e| AppError::Internal(anyhow::anyhow!("zip finish: {e}")))?;
     }
     Ok(cursor.into_inner())
+}
+
+// ---------------------------------------------------------------------------
+// Team-level ZIP exports (broker only)
+// ---------------------------------------------------------------------------
+
+/// Hard ceiling on the total (uncompressed) content size of a multi-
+/// transaction export. These archives are assembled in memory — same as
+/// the single-transaction export — so an unbounded brokerage-wide pull
+/// could otherwise OOM the process. Past the cap we refuse with a
+/// message pointing at the narrower per-transaction export.
+const EXPORT_MAX_BYTES: i64 = 400 * 1024 * 1024;
+
+/// One file destined for the archive: (entry path inside the ZIP, doc).
+type ArchiveEntry = (String, Document);
+
+/// Download a ZIP of every document across every transaction owned by
+/// one team member — the per-agent compliance archive on the Team page.
+/// Layout: `<Property>/<FORM CODE>/<file>`, with a MANIFEST.txt at the
+/// root listing each transaction. Broker only.
+pub async fn export_member_zip(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(user_key): Path<String>,
+) -> Result<Response, AppError> {
+    if !user.role.is_broker() {
+        return Err(AppError::Forbidden);
+    }
+
+    // The target must be a member of the caller's brokerage — a broker
+    // can't export another office's agent by guessing a user key.
+    let target = RecordId::new("user", user_key.as_str());
+    let mut mq = state
+        .db
+        .query("SELECT VALUE in FROM works_at WHERE in = $u AND out = $b LIMIT 1")
+        .bind(("u", target.clone()))
+        .bind(("b", user.brokerage_id.clone()))
+        .await?;
+    let member: Vec<RecordId> = mq.take(0).unwrap_or_default();
+    if member.is_empty() {
+        return Err(AppError::NotFound);
+    }
+
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct UserMeta {
+        name: String,
+        email: String,
+    }
+    let mut uq = state
+        .db
+        .query("SELECT name, email FROM ONLY $u")
+        .bind(("u", target.clone()))
+        .await?;
+    let meta: Option<UserMeta> = uq.take(0)?;
+    let meta = meta.ok_or(AppError::NotFound)?;
+
+    // Their transactions, re-scoped to this brokerage (defense in depth;
+    // ownership already implies membership under current invariants).
+    let mut tq = state
+        .db
+        .query(
+            "SELECT * FROM $u->owns->transaction \
+             WHERE id IN (SELECT VALUE out FROM has_transaction WHERE in = $b) \
+             ORDER BY property_address ASC",
+        )
+        .bind(("u", target.clone()))
+        .bind(("b", user.brokerage_id.clone()))
+        .await?;
+    let txs: Vec<Transaction> = tq.take(0).unwrap_or_default();
+
+    let docs_by_tx = load_docs_for_transactions(&state, &txs).await?;
+
+    // `<Property>/<FORM>/<file>` — property folders deduped so two
+    // same-address transactions don't merge into one folder.
+    let mut used_folders: Vec<String> = Vec::new();
+    let mut entries: Vec<ArchiveEntry> = Vec::new();
+    let mut manifest = format!(
+        "TransactVault agent export\nAgent: {} <{}>\nGenerated: {}\nTransactions: {}\n\n",
+        meta.name,
+        meta.email,
+        chrono::Utc::now().to_rfc3339(),
+        txs.len(),
+    );
+    for tx in &txs {
+        let folder = unique_folder(&export_property_folder(tx), &mut used_folders);
+        let docs = docs_by_tx.get(&tx.id).cloned().unwrap_or_default();
+        manifest.push_str(&format!(
+            "{folder}/ — {} ({} · {} document(s))\n",
+            tx.property_address,
+            tx.status,
+            docs.len(),
+        ));
+        for doc in docs {
+            let path = format!(
+                "{folder}/{}/{}",
+                sanitize_path_segment(&doc.form_code),
+                zip_safe_filename(&doc)
+            );
+            entries.push((path, doc));
+        }
+    }
+
+    let zip_bytes = build_archive(&state.storage, entries, &manifest).await?;
+    zip_response(
+        zip_bytes,
+        &format!("transactvault-{}-transactions", meta.name),
+    )
+}
+
+/// Download a ZIP of every document in the whole brokerage, organized
+/// alphabetically by agent: `<Agent>/<Property>/<FORM CODE>/<file>`.
+/// Transactions with no owner land under `Unassigned/`. Broker only.
+pub async fn export_brokerage_zip(
+    State(state): State<AppState>,
+    user: CurrentUser,
+) -> Result<Response, AppError> {
+    if !user.role.is_broker() {
+        return Err(AppError::Forbidden);
+    }
+
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct BrokerageMeta {
+        name: String,
+    }
+    let mut bq = state
+        .db
+        .query("SELECT name FROM ONLY $b")
+        .bind(("b", user.brokerage_id.clone()))
+        .await?;
+    let brokerage: Option<BrokerageMeta> = bq.take(0)?;
+    let brokerage_name = brokerage
+        .map(|b| b.name)
+        .unwrap_or_else(|| "brokerage".into());
+
+    let mut tq = state
+        .db
+        .query("SELECT * FROM $b->has_transaction->transaction ORDER BY property_address ASC")
+        .bind(("b", user.brokerage_id.clone()))
+        .await?;
+    let txs: Vec<Transaction> = tq.take(0).unwrap_or_default();
+    let tx_ids: Vec<RecordId> = txs.iter().map(|t| t.id.clone()).collect();
+
+    // Owner per transaction (one query), then owner display names.
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct OwnsEdge {
+        tx: RecordId,
+        owner: RecordId,
+    }
+    let owner_by_tx: std::collections::HashMap<RecordId, RecordId> = if tx_ids.is_empty() {
+        Default::default()
+    } else {
+        let mut oq = state
+            .db
+            .query("SELECT out AS tx, in AS owner FROM owns WHERE out IN $ids")
+            .bind(("ids", tx_ids.clone()))
+            .await?;
+        let edges: Vec<OwnsEdge> = oq.take(0).unwrap_or_default();
+        edges.into_iter().map(|e| (e.tx, e.owner)).collect()
+    };
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct UserRow {
+        id: RecordId,
+        name: String,
+    }
+    let owner_ids: Vec<RecordId> = {
+        let mut seen: Vec<RecordId> = Vec::new();
+        for o in owner_by_tx.values() {
+            if !seen.contains(o) {
+                seen.push(o.clone());
+            }
+        }
+        seen
+    };
+    let names: std::collections::HashMap<RecordId, String> = if owner_ids.is_empty() {
+        Default::default()
+    } else {
+        let mut nq = state
+            .db
+            .query("SELECT id, name FROM user WHERE id IN $ids")
+            .bind(("ids", owner_ids))
+            .await?;
+        let rows: Vec<UserRow> = nq.take(0).unwrap_or_default();
+        rows.into_iter().map(|r| (r.id, r.name)).collect()
+    };
+
+    let docs_by_tx = load_docs_for_transactions(&state, &txs).await?;
+
+    // Alphabetical by agent (case-insensitive), "Unassigned" last, then
+    // by address — the order the client reads the archive in.
+    let mut ordered: Vec<(String, &Transaction)> = txs
+        .iter()
+        .map(|tx| {
+            let agent = owner_by_tx
+                .get(&tx.id)
+                .and_then(|o| names.get(o))
+                .cloned()
+                .unwrap_or_else(|| "Unassigned".to_string());
+            (agent, tx)
+        })
+        .collect();
+    ordered.sort_by(|a, b| {
+        let a_unassigned = a.0 == "Unassigned";
+        let b_unassigned = b.0 == "Unassigned";
+        a_unassigned
+            .cmp(&b_unassigned)
+            .then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase()))
+            .then_with(|| a.1.property_address.cmp(&b.1.property_address))
+    });
+
+    let mut used_folders: Vec<String> = Vec::new();
+    let mut entries: Vec<ArchiveEntry> = Vec::new();
+    let mut manifest = format!(
+        "TransactVault brokerage export\nBrokerage: {}\nGenerated: {}\nTransactions: {}\n\n",
+        brokerage_name,
+        chrono::Utc::now().to_rfc3339(),
+        ordered.len(),
+    );
+    let mut last_agent = String::new();
+    for (agent, tx) in &ordered {
+        if *agent != last_agent {
+            manifest.push_str(&format!("\n== {agent} ==\n"));
+            last_agent = agent.clone();
+        }
+        let agent_folder = sanitize_path_segment(agent);
+        let folder = unique_folder(
+            &format!("{agent_folder}/{}", export_property_folder(tx)),
+            &mut used_folders,
+        );
+        let docs = docs_by_tx.get(&tx.id).cloned().unwrap_or_default();
+        manifest.push_str(&format!(
+            "{folder}/ — {} ({} · {} document(s))\n",
+            tx.property_address,
+            tx.status,
+            docs.len(),
+        ));
+        for doc in docs {
+            let path = format!(
+                "{folder}/{}/{}",
+                sanitize_path_segment(&doc.form_code),
+                zip_safe_filename(&doc)
+            );
+            entries.push((path, doc));
+        }
+    }
+
+    let zip_bytes = build_archive(&state.storage, entries, &manifest).await?;
+    zip_response(
+        zip_bytes,
+        &format!("transactvault-{brokerage_name}-all-transactions"),
+    )
+}
+
+/// All documents for a set of transactions in two round trips (edges,
+/// then rows), bucketed by transaction id.
+async fn load_docs_for_transactions(
+    state: &AppState,
+    txs: &[Transaction],
+) -> Result<std::collections::HashMap<RecordId, Vec<Document>>, AppError> {
+    use std::collections::HashMap;
+    let tx_ids: Vec<RecordId> = txs.iter().map(|t| t.id.clone()).collect();
+    if tx_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct DocEdge {
+        tx: RecordId,
+        doc: RecordId,
+    }
+    let mut eq = state
+        .db
+        .query("SELECT in AS tx, out AS doc FROM has_document WHERE in IN $ids")
+        .bind(("ids", tx_ids))
+        .await?;
+    let edges: Vec<DocEdge> = eq.take(0).unwrap_or_default();
+    let doc_ids: Vec<RecordId> = edges.iter().map(|e| e.doc.clone()).collect();
+    if doc_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let mut dq = state
+        .db
+        .query("SELECT * FROM document WHERE id IN $ids")
+        .bind(("ids", doc_ids))
+        .await?;
+    let docs: Vec<Document> = dq.take(0).unwrap_or_default();
+    let by_id: HashMap<RecordId, Document> = docs.into_iter().map(|d| (d.id.clone(), d)).collect();
+
+    let mut out: HashMap<RecordId, Vec<Document>> = HashMap::new();
+    for e in edges {
+        if let Some(doc) = by_id.get(&e.doc) {
+            out.entry(e.tx).or_default().push(doc.clone());
+        }
+    }
+    // Stable order inside each folder: form code, then name, then
+    // newest version first — mirrors the single-transaction export.
+    for docs in out.values_mut() {
+        docs.sort_by(|a, b| {
+            a.form_code
+                .cmp(&b.form_code)
+                .then_with(|| a.filename.cmp(&b.filename))
+                .then_with(|| b.version.cmp(&a.version))
+        });
+    }
+    Ok(out)
+}
+
+/// Human-readable per-transaction folder: the street address when
+/// present, else the APN/record-key folder used by the storage layout.
+fn export_property_folder(tx: &Transaction) -> String {
+    let addr = sanitize_path_segment(tx.property_address.trim());
+    if addr.is_empty() {
+        property_folder(tx)
+    } else {
+        addr
+    }
+}
+
+/// Dedupe a folder path against the ones already handed out — a second
+/// "123_Main_St" becomes "123_Main_St~2".
+fn unique_folder(base: &str, used: &mut Vec<String>) -> String {
+    let mut candidate = base.to_string();
+    let mut n = 1;
+    while used.iter().any(|u| u == &candidate) {
+        n += 1;
+        candidate = format!("{base}~{n}");
+    }
+    used.push(candidate.clone());
+    candidate
+}
+
+/// Assemble a multi-transaction archive: size-cap check, bounded-
+/// concurrency fetches from object storage (8 at a time — a brokerage
+/// export can span hundreds of objects and an unbounded join_all would
+/// open them all at once), placeholder bytes for anything missing, and
+/// a MANIFEST.txt at the root.
+async fn build_archive(
+    storage: &Storage,
+    entries: Vec<ArchiveEntry>,
+    manifest: &str,
+) -> Result<Vec<u8>, AppError> {
+    use futures::StreamExt;
+    use zip::write::SimpleFileOptions;
+
+    let total_bytes: i64 = entries.iter().map(|(_, d)| d.size_bytes.max(0)).sum();
+    if total_bytes > EXPORT_MAX_BYTES {
+        return Err(AppError::invalid(format!(
+            "This export would be about {} MB — more than the {} MB limit for a \
+             single archive. Export individual transactions instead (each \
+             transaction page has its own Export ZIP button).",
+            total_bytes / (1024 * 1024),
+            EXPORT_MAX_BYTES / (1024 * 1024),
+        )));
+    }
+
+    const MISSING: &[u8] = b"[file missing from storage]";
+    let payloads: Vec<(String, bytes::Bytes)> =
+        futures::stream::iter(entries.into_iter().map(|(path, doc)| {
+            let storage = storage.clone();
+            async move {
+                let bytes = match storage.get_bytes(&doc.storage_key).await {
+                    Ok(Some(b)) => b,
+                    Ok(None) => bytes::Bytes::from_static(MISSING),
+                    Err(e) => {
+                        tracing::warn!(error = %e, key = %doc.storage_key, "export: get_bytes failed");
+                        bytes::Bytes::from_static(MISSING)
+                    }
+                };
+                (path, bytes)
+            }
+        }))
+        .buffered(8)
+        .collect()
+        .await;
+
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    {
+        let mut writer = zip::ZipWriter::new(&mut cursor);
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+        writer
+            .start_file("MANIFEST.txt", options)
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("zip manifest: {e}")))?;
+        writer
+            .write_all(manifest.as_bytes())
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("zip manifest write: {e}")))?;
+
+        for (path, bytes) in payloads {
+            writer
+                .start_file(path, options)
+                .map_err(|e| AppError::Internal(anyhow::anyhow!("zip entry: {e}")))?;
+            writer
+                .write_all(&bytes)
+                .map_err(|e| AppError::Internal(anyhow::anyhow!("zip write: {e}")))?;
+        }
+        writer
+            .finish()
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("zip finish: {e}")))?;
+    }
+    Ok(cursor.into_inner())
+}
+
+/// Wrap finished ZIP bytes in a download response. `stem` is slugged
+/// the same way the single-transaction export names its file.
+fn zip_response(zip_bytes: Vec<u8>, stem: &str) -> Result<Response, AppError> {
+    let slug: String = stem
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string();
+    let name = if slug.is_empty() {
+        "transactvault-export.zip".to_string()
+    } else {
+        format!("{slug}.zip")
+    };
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/zip")
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{name}\""),
+        )
+        .body(Body::from(zip_bytes))
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("build response: {e}")))
 }
 
 fn zip_safe_filename(doc: &Document) -> String {

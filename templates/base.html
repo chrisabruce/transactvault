@@ -31,7 +31,10 @@
         npm package doesn't publish a /dist/datastar.js (that path 404s);
         the canonical browser build lives under bundles/ on the tagged
         GitHub release. This RC.6 bundle emits the `datastar-patch-elements`
-        SSE event our /app/stats/stream handler sends. -#}
+        SSE event our /app/stats/stream handler sends, treats text/html
+        @get responses as element patches (the live-search fragments),
+        and provides data-bind / data-on-input__debounce for the search
+        boxes. -#}
     <script type="module" src="https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.0-RC.6/bundles/datastar.js"></script>
 </body>
 </html>

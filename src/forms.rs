@@ -136,6 +136,55 @@ pub struct DefaultItem {
     pub required: bool,
 }
 
+/// Best-guess of which checklist group a form belongs in, given only
+/// its code. Used by the manual Add-an-item path (where the sales side
+/// is unknown, so listing-side codes go to `ListingContract` and
+/// purchase-side codes to `PurchaseContract`) and by the catalog
+/// backfill seeder (placing picker-only forms into the master set's
+/// standard groups). Anything that doesn't match a known bucket falls
+/// into Additional Disclosures — the catch-all for optional supporting
+/// forms.
+pub fn infer_group_from_code(code: &str) -> FormGroup {
+    match code {
+        // Listing-side contracts
+        "RLA" | "MHLA" | "VLL" | "CLA" | "BLA" | "LL" => FormGroup::ListingContract,
+
+        // Purchase-side contracts
+        "RPA" | "RIPA" | "MHPA" | "VLPA" | "CPA" | "BPA" | "LR" => FormGroup::PurchaseContract,
+
+        // Mandatory disclosures
+        "AVID-1" | "AVID-2" | "FHDS" | "LPD" | "RGM" | "SBSA" | "SPQ" | "TDS" | "WCMD" | "WFDA"
+        | "WHSD" | "VP" | "CSPQ" | "MHDA" | "MHTDS" | "VLQ" => FormGroup::MandatoryDisclosures,
+
+        // Special-condition addenda — part of the contract section.
+        // Listing-side: under the listing contract. Purchase-side: under
+        // the purchase contract.
+        "PLA" | "SSLA" | "REOL" => FormGroup::ListingContract,
+        "PA" | "SSA" | "REO" => FormGroup::PurchaseContract,
+
+        // MLS sheets
+        "ACT" | "PEND" | "SOLD" => FormGroup::MlsDataSheets,
+
+        // Escrow
+        "APRL" | "CC&R" | "CLSD" | "COMM" | "EMD" | "EA" | "EI" | "HOA" | "NET" | "NHD"
+        | "NHDS" | "PREL" => FormGroup::EscrowDocuments,
+
+        // Reports & clearances
+        "BIW" | "CHIM" | "HOME" | "HPP" | "POOL" | "ROOF" | "SEPT" | "SOLAR" | "TERM" | "WELL" => {
+            FormGroup::ReportsCertificatesClearances
+        }
+
+        // Release
+        "CC" | "CLR" | "COL" | "WOO" => FormGroup::ReleaseDisclosures,
+
+        // Everything else lands in Additional Disclosures (the catch-all
+        // for optional supporting forms — ADM, BCA, BDS, BP-FFE, BRBC,
+        // CO, CR, EQ, EQ-R, ETA, FVAC, HID, MCA, MT, NTP, POF, QUAL,
+        // RCSD, RR, RRRR, SWPI, TA, plus any custom code).
+        _ => FormGroup::AdditionalDisclosures,
+    }
+}
+
 /// Canonical PDF-order index for a form code within its group. The order
 /// here mirrors the printed CAR transaction checklists exactly so the UI
 /// always renders items in the expected sequence — independent of when
@@ -224,12 +273,16 @@ pub fn canonical_position(code: &str) -> u32 {
         "MT" => 413,
         "NTP" => 414,
         "POF" => 415,
-        "QUAL" => 416,
-        "RCSD" => 417,
-        "RR" => 418,
-        "RRRR" => 419,
-        "SWPI" => 420,
-        "TA" => 421,
+        "PRBS-B" => 416,
+        "PRBS-S" => 417,
+        "QUAL" => 418,
+        "RCSD" => 419,
+        "RR" => 420,
+        "RRRR" => 421,
+        "SWPI" => 422,
+        "SWPI-C" => 423,
+        "SWPI-Q" => 424,
+        "TA" => 425,
 
         // Escrow Documents — alphabetical
         "APRL" => 600,
@@ -671,6 +724,34 @@ pub const LIBRARY: &[CarForm] = &[
         code: "SWPI",
         name: "Septic, Well, Property Monument & Propane Allocation of Cost",
         description: "Inspection cost allocation addendum",
+        allows_multiple: false,
+    },
+    // June 2026 releases: CAR split SWPI into a cost-allocation addendum
+    // (SWPI-C) and a standalone questionnaire (SWPI-Q), and split the
+    // PRBS disclosure into buyer (PRBS-B) and seller (PRBS-S) consent
+    // variants.
+    CarForm {
+        code: "SWPI-C",
+        name: "Septic, Well, Propane Tank, and Property Boundaries Inspection and Allocation of Costs Addendum",
+        description: "Inspection cost allocation addendum",
+        allows_multiple: false,
+    },
+    CarForm {
+        code: "SWPI-Q",
+        name: "Septic, Well, and Propane Tank Questionnaire",
+        description: "Seller-completed systems questionnaire",
+        allows_multiple: false,
+    },
+    CarForm {
+        code: "PRBS-B",
+        name: "Disclosure and Buyer Consent to Possible Representation of More Than One Buyer, and Dual Agency in a Transaction",
+        description: "Buyer consent to possible multiple representation",
+        allows_multiple: false,
+    },
+    CarForm {
+        code: "PRBS-S",
+        name: "Disclosure and Seller Consent to Possible Representation of More Than One Seller, and Dual Agency in a Transaction",
+        description: "Seller consent to possible multiple representation",
         allows_multiple: false,
     },
     CarForm {

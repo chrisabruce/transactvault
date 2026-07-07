@@ -63,23 +63,79 @@ pub async fn create(
 
     let new_item = match input.form_code.as_deref().filter(|s| !s.is_empty()) {
         Some(code) => {
-            // Look up canonical metadata for the form. Unknown codes get a
-            // graceful fallback — title = code, group = Additional. The
-            // inferred FormGroup maps through `seed_group()` to the same
-            // (name, order) the DB seed used, so a manually-added form
-            // buckets with its seeded peers.
-            let form = forms::lookup(code);
-            let title = form
-                .map(|f| f.name.to_string())
+            // Resolve metadata from the brokerage's DB catalog first —
+            // that's what the Add-an-item picker offered, and it's the
+            // only source that knows admin-added and broker-custom
+            // forms. Codes it doesn't know fall back to the compiled
+            // CAR library, and finally to a graceful free-text item
+            // (title = code, group = Additional) so a hand-typed code
+            // is never rejected.
+            let db_form =
+                crate::db::forms::find_brokerage_form(&state.db, &user.brokerage_id, code)
+                    .await
+                    .map_err(|e| AppError::Internal(e.context("resolving form for add")))?;
+            let compiled = forms::lookup(code);
+
+            let canonical_code = db_form
+                .as_ref()
+                .map(|f| f.code.clone())
+                .or_else(|| compiled.map(|f| f.code.to_string()))
                 .unwrap_or_else(|| code.to_string());
-            let group = form
-                .map(|f| infer_group_from_code(f.code))
-                .unwrap_or(FormGroup::AdditionalDisclosures);
-            let (group_name, group_order) = group.seed_group();
+            let title = db_form
+                .as_ref()
+                .map(|f| f.name.clone())
+                .or_else(|| compiled.map(|f| f.name.to_string()))
+                .unwrap_or_else(|| code.to_string());
+            let allows_multiple = db_form
+                .as_ref()
+                .map(|f| f.allows_multiple)
+                .or_else(|| compiled.map(|f| f.allows_multiple))
+                .unwrap_or(false);
+            // Group: the DB form's own group when it has one; otherwise
+            // infer from the code. `seed_group()` maps to the same
+            // (name, order) the seeder used, so a manually-added form
+            // buckets with its seeded peers.
+            let (group_name, group_order) = match db_form.as_ref().and_then(|f| f.group()) {
+                Some((name, order)) => (name, order),
+                None => {
+                    let g = compiled
+                        .map(|f| forms::infer_group_from_code(f.code))
+                        .unwrap_or(FormGroup::AdditionalDisclosures);
+                    let (n, o) = g.seed_group();
+                    (n.to_string(), o)
+                }
+            };
+
+            // The picker offers the whole catalog, including forms already
+            // on this checklist — so single-instance duplicates must be
+            // rejected here. Forms marked `allows_multiple` (addenda,
+            // counter offers) are always allowed again.
+            if !allows_multiple {
+                let mut codes_q = state
+                    .db
+                    .query(
+                        "SELECT VALUE form_code FROM $t->has_item->checklist_item \
+                         WHERE form_code != NONE",
+                    )
+                    .bind(("t", tx_id.clone()))
+                    .await?;
+                let existing: Vec<String> = codes_q.take(0).unwrap_or_default();
+                if existing
+                    .iter()
+                    .any(|c| c.eq_ignore_ascii_case(&canonical_code))
+                {
+                    return Err(AppError::invalid(format!(
+                        "{} is already on this checklist — find it under its \
+                         category above.",
+                        canonical_code.to_ascii_uppercase()
+                    )));
+                }
+            }
+
             NewChecklistItem {
                 title,
-                form_code: Some(code.to_string()),
-                group_name: group_name.to_string(),
+                form_code: Some(canonical_code),
+                group_name,
                 group_order,
                 position,
                 required,
@@ -227,50 +283,6 @@ async fn set_approval(
     Ok(Redirect::to(&format!("/app/transactions/{key}")))
 }
 
-/// Best-guess of which checklist group a freshly-added form should live in.
-/// Since this is called from the manual-add path we don't know the
-/// transaction's sales side; listing-side codes go to `ListingContract`
-/// and purchase-side codes to `PurchaseContract`. A broker who needs the
-/// item in the plural group can manually move it after the fact.
-/// Anything that doesn't match a known bucket falls into Additional
-/// Disclosures — the catch-all for optional supporting forms.
-fn infer_group_from_code(code: &str) -> FormGroup {
-    match code {
-        // Listing-side contracts
-        "RLA" | "MHLA" | "VLL" | "CLA" | "BLA" | "LL" => FormGroup::ListingContract,
-
-        // Purchase-side contracts
-        "RPA" | "RIPA" | "MHPA" | "VLPA" | "CPA" | "BPA" | "LR" => FormGroup::PurchaseContract,
-
-        // Mandatory disclosures
-        "AVID-1" | "AVID-2" | "FHDS" | "LPD" | "RGM" | "SBSA" | "SPQ" | "TDS" | "WCMD" | "WFDA"
-        | "WHSD" | "VP" | "CSPQ" | "MHDA" | "MHTDS" | "VLQ" => FormGroup::MandatoryDisclosures,
-
-        // Special-condition addenda — now part of the contract section.
-        // Listing-side: under the listing contract. Purchase-side: under
-        // the purchase contract.
-        "PLA" | "SSLA" | "REOL" => FormGroup::ListingContract,
-        "PA" | "SSA" | "REO" => FormGroup::PurchaseContract,
-
-        // MLS sheets
-        "ACT" | "PEND" | "SOLD" => FormGroup::MlsDataSheets,
-
-        // Escrow
-        "APRL" | "CC&R" | "CLSD" | "COMM" | "EMD" | "EA" | "EI" | "HOA" | "NET" | "NHD"
-        | "NHDS" | "PREL" => FormGroup::EscrowDocuments,
-
-        // Reports & clearances
-        "BIW" | "CHIM" | "HOME" | "HPP" | "POOL" | "ROOF" | "SEPT" | "SOLAR" | "TERM" | "WELL" => {
-            FormGroup::ReportsCertificatesClearances
-        }
-
-        // Release
-        "CC" | "COL" | "WOO" => FormGroup::ReleaseDisclosures,
-
-        // Everything else lands in Additional Disclosures (the catch-all
-        // for optional supporting forms — ADM, BCA, BDS, BP-FFE, BRBC,
-        // CO, CR, EQ, EQ-R, ETA, FVAC, HID, MCA, MT, NTP, POF, QUAL,
-        // RCSD, RR, RRRR, SWPI, TA, plus any custom code).
-        _ => FormGroup::AdditionalDisclosures,
-    }
-}
+// `infer_group_from_code` moved to `crate::forms` — the catalog
+// backfill seeder places picker-only forms with the same rules the
+// manual-add path uses, so both call one implementation.
