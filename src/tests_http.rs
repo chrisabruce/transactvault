@@ -2068,13 +2068,54 @@ async fn search_page_fragment_filters_by_datastar_signal() {
     );
 
     // The full page (no fragment param) still renders chrome + the
-    // live-search wiring on the input.
+    // live-search wiring on the input — RC.6 colon-key grammar
+    // (`data-on:input`, `data-bind:q`); the dash forms match no plugin
+    // and are silently ignored by the bundle.
     let (status, body) = authed_get(&app, &broker, "/app/search?q=Test").await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("<html"));
     assert!(
-        body.contains("data-on-input__debounce"),
-        "search input is wired for live search"
+        body.contains("data-on:input__debounce.350ms"),
+        "search input must carry the RC.6 colon-key live-search trigger"
+    );
+    assert!(
+        body.contains("data-bind:q"),
+        "search input must bind the q signal with RC.6 colon-key grammar"
+    );
+}
+
+/// The transactions list wires its Datastar live behaviors with RC.6
+/// attribute grammar. This pins the exact attribute spellings because
+/// the failure mode is SILENT: an unknown attribute (`data-on-load`,
+/// `data-bind-q`, `data-on-input`) matches no plugin and simply does
+/// nothing — which is precisely how the live dashboard shipped dead to
+/// production twice.
+#[tokio::test]
+async fn transactions_page_wires_live_stream_and_live_search() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    join(&app.state, &broker, &b, "broker").await;
+    seed_tx(&app.state, &b, Some(&broker)).await;
+
+    let (status, body) = authed_get(&app, &broker, "/app/transactions").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains(r#"data-init="@get('/app/stats/stream"#),
+        "stats stream must open via data-init (RC.6 renamed data-on-load, \
+         which is silently ignored)"
+    );
+    assert!(
+        body.contains("data-bind:q"),
+        "toolbar search input must bind the q signal"
+    );
+    assert!(
+        body.contains("data-on:input__debounce.350ms"),
+        "toolbar search input must carry the live-search trigger"
+    );
+    assert!(
+        !body.contains("data-on-load"),
+        "data-on-load matches no RC.6 plugin — it must not reappear"
     );
 }
 

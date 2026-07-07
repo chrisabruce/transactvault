@@ -2,9 +2,10 @@
    dashboard (defaulted filter state) and the transactions list
    (live filter state). Posts to /app/transactions either way.
 
-   Search is live: the input binds the `q` signal and each pause in
-   typing Datastar-@gets the results fragment, which arrives as
-   text/html and idiomorph-patches `<div id="tx-results">` in place.
+   Search is live: the input binds the `q` signal (`data-bind:q` —
+   colon key, per RC.6 grammar) and each pause in typing
+   Datastar-@gets the results fragment, which arrives as text/html
+   and idiomorph-patches `<div id="tx-results">` in place.
    The input itself sits outside that div and is never re-rendered, so
    focus and cursor stay put. (The previous implementation submitted
    the whole form on a timer — every keystroke-pause was a full
@@ -26,8 +27,8 @@
            value="{{ query }}"
            placeholder="Search Address, Client, MLS…"
            autocomplete="off"
-           data-bind-q
-           data-on-input__debounce.350ms="@get('{{ live_results_url }}')">
+           data-bind:q
+           data-on:input__debounce.350ms="@get('{{ live_results_url }}')">
     <select name="status" aria-label="Status" class="tx-toolbar-select">
         <option value="all"{% if filter_status == "all" || filter_status == "" %} selected{% endif %}>All statuses</option>
         <option value="active"{% if filter_status == "active" %} selected{% endif %}>Active</option>

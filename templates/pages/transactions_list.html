@@ -23,10 +23,13 @@
        new transaction). Idiomorph matches by id and morphs the
        numbers in place — no page reload, no polling.
 
-       `data-on-load` runs once when the host div enters the DOM, so
-       wrapping the stat-grid include here keeps the host stable
-       across morphs while the inner `<section id="stat-grid">` is
-       what gets replaced.
+       `data-init` (RC.6's rename of the old `data-on-load` — the old
+       name matches no plugin and is silently ignored, which is
+       exactly how the live dashboard sat dead in production) runs
+       once when the host div enters the DOM, so wrapping the
+       stat-grid include here keeps the host stable across morphs
+       while the inner `<section id="stat-grid">` is what gets
+       replaced.
 
        The status + attention params come from the current page URL
        so the pushed fragment highlights the same card the user
@@ -35,7 +38,7 @@
        on every event — if a role change or removal lands mid-stream,
        the server closes the connection and the client reconnects
        with fresh authorization. #}
-    <div data-on-load="@get('/app/stats/stream?status={{ filter_status }}{% if attention_on %}&attention=1{% endif %}')">
+    <div data-init="@get('/app/stats/stream?status={{ filter_status }}{% if attention_on %}&attention=1{% endif %}')">
         {% include "partials/stat_grid.html" %}
     </div>
 

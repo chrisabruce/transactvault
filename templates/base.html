@@ -30,11 +30,19 @@
     {#- Datastar is served from the GitHub release bundle, not npm. The
         npm package doesn't publish a /dist/datastar.js (that path 404s);
         the canonical browser build lives under bundles/ on the tagged
-        GitHub release. This RC.6 bundle emits the `datastar-patch-elements`
-        SSE event our /app/stats/stream handler sends, treats text/html
-        @get responses as element patches (the live-search fragments),
-        and provides data-bind / data-on-input__debounce for the search
-        boxes. -#}
+        GitHub release. This RC.6 bundle consumes the
+        `datastar-patch-elements` SSE events our /app/stats/stream
+        handler sends and treats text/html @get responses as element
+        patches (the live-search fragments).
+
+        RC.6 attribute grammar — worth knowing because mistakes are
+        SILENT (unknown attributes are ignored, nothing logs):
+          data-{plugin}:{key}__{mod}.{arg}="expression"
+        Keys are separated from the plugin name by a COLON, not a dash
+        (`data-on:input`, `data-bind:q` — NOT `data-on-input`), and the
+        old `data-on-load` is now `data-init`. Expressions compile via
+        the Function constructor, so any future CSP must include
+        'unsafe-eval'. -#}
     <script type="module" src="https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.0-RC.6/bundles/datastar.js"></script>
 </body>
 </html>

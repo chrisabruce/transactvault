@@ -22,8 +22,8 @@
         <label class="visually-hidden" for="search-q">Search</label>
         <input id="search-q" class="tx-toolbar-input" type="search" name="q" value="{{ query }}"
                placeholder="Search Address, Client, MLS…" autocomplete="off" autofocus
-               data-bind-q
-               data-on-input__debounce.350ms="@get('{{ live_results_url }}')">
+               data-bind:q
+               data-on:input__debounce.350ms="@get('{{ live_results_url }}')">
         <select name="status" aria-label="Status" class="tx-toolbar-select">
             <option value="all"{% if status_filter == "all" || status_filter == "" %} selected{% endif %}>All statuses</option>
             <option value="active"{% if status_filter == "active" %} selected{% endif %}>Active</option>

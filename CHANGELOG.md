@@ -16,12 +16,15 @@ the bottom-right of every page.
   live beneath the toolbar while you type; the cursor never moves.
   The Search page gained the same live behavior (it previously
   required pressing Enter).
-- **Real-time dashboard updates are fixed for real this time.** The
-  live stat cards were receiving updates in a format the browser
-  library couldn't fully read, so patches came through mangled. The
-  format is corrected and a regression test now guards it. Numbers
-  update instantly as your team works — approvals, uploads, comments,
-  new transactions, status changes.
+- **Real-time dashboard updates are fixed for real this time.** Two
+  separate bugs stacked up: the page never actually opened its live
+  connection (the browser library renamed the attribute that starts
+  it, and the old name was silently ignored), and even when connected,
+  updates arrived in a format the library couldn't fully read. Both
+  are fixed, verified in a real browser against the exact library
+  build we ship, and pinned by regression tests. Numbers update
+  instantly as your team works — approvals, uploads, comments, new
+  transactions, status changes.
 - **All 10 missing CAR forms are in the Add-an-item list**, including
   the four forms CAR released in June 2026: PRBS-B, PRBS-S, SWPI-C,
   and SWPI-Q. The picker now shows the complete CAR catalog — forms
