@@ -2399,8 +2399,9 @@ async fn admin_can_rename_and_delete_local_sets_but_not_state() {
     );
 }
 
-/// The boot-time catalog backfill: picker-only forms (like CLR) land in
-/// the California set with EMPTY applies arrays — offered in the picker,
+/// The boot-time catalog backfill: picker-only forms (like TOL —
+/// Transfer of Listing Agreement, on no default checklist) land in the
+/// California set with EMPTY applies arrays — offered in the picker,
 /// never on a default checklist — and the `seeded_form` ledger keeps
 /// admin deletions deleted across re-seeds.
 #[tokio::test]
@@ -2408,7 +2409,7 @@ async fn catalog_backfill_adds_picker_only_forms_and_respects_deletions() {
     let app = make_app().await;
     crate::db::seed_forms(&app.state.db).await.expect("seed");
 
-    // CLR arrived via the backfill, filed under Release Disclosures,
+    // TOL arrived via the backfill, filed in the catch-all group,
     // with empty applicability.
     #[derive(serde::Deserialize, surrealdb::types::SurrealValue)]
     struct FormRow {
@@ -2422,18 +2423,21 @@ async fn catalog_backfill_adds_picker_only_forms_and_respects_deletions() {
         .query(
             "SELECT id, applies_types, \
              (<-has_form<-form_group)[0].name AS group_name \
-             FROM form WHERE code = 'CLR'",
+             FROM form WHERE code = 'TOL'",
         )
         .await
-        .expect("query CLR");
+        .expect("query TOL");
     let rows: Vec<FormRow> = q.take(0).unwrap_or_default();
-    assert_eq!(rows.len(), 1, "CLR should be backfilled exactly once");
+    assert_eq!(rows.len(), 1, "TOL should be backfilled exactly once");
     assert!(
         rows[0].applies_types.is_empty(),
         "backfilled forms must have empty applies so they never hit default checklists"
     );
-    assert_eq!(rows[0].group_name.as_deref(), Some("Release Disclosures"));
-    let clr_id = rows[0].id.clone();
+    assert_eq!(
+        rows[0].group_name.as_deref(),
+        Some("Additional Disclosures")
+    );
+    let tol_id = rows[0].id.clone();
 
     // Default checklists are untouched: residential listing resolution
     // does not include CLR.
@@ -2446,7 +2450,7 @@ async fn catalog_backfill_adds_picker_only_forms_and_respects_deletions() {
             .await
             .expect("resolve");
     assert!(
-        !resolved.iter().any(|f| f.code == "CLR"),
+        !resolved.iter().any(|f| f.code == "TOL"),
         "picker-only forms must not appear on default checklists"
     );
 
@@ -2454,14 +2458,14 @@ async fn catalog_backfill_adds_picker_only_forms_and_respects_deletions() {
     app.state
         .db
         .query("DELETE has_form WHERE out = $f; DELETE $f;")
-        .bind(("f", clr_id))
+        .bind(("f", tol_id))
         .await
-        .expect("delete CLR");
+        .expect("delete TOL");
     crate::db::seed_forms(&app.state.db).await.expect("re-seed");
     let mut q = app
         .state
         .db
-        .query("SELECT count() FROM form WHERE code = 'CLR' GROUP ALL")
+        .query("SELECT count() FROM form WHERE code = 'TOL' GROUP ALL")
         .await
         .expect("recount");
     #[derive(serde::Deserialize, surrealdb::types::SurrealValue)]
@@ -2658,17 +2662,24 @@ async fn dev_reset_then_reseed_rebuilds_full_catalog() {
     }
     let expected = crate::forms::LIBRARY.len() as i64;
 
+    // Every compiled-library code is present. Row count can exceed the
+    // code count: forms that print in different sections on different
+    // checklists (CC&R/HOA under Escrow for sales, Governing Documents
+    // for leases; the special-condition addenda across contract
+    // sections) hold one row per (code, group) placement.
     let mut q = app
         .state
         .db
-        .query("SELECT count() FROM form GROUP ALL")
+        .query("SELECT VALUE code FROM form")
         .await
-        .expect("count forms");
-    let forms: Option<C> = q.take(0).ok().flatten();
+        .expect("load codes");
+    let codes: Vec<String> = q.take(0).unwrap_or_default();
+    let distinct: std::collections::BTreeSet<String> =
+        codes.iter().map(|c| c.to_ascii_uppercase()).collect();
     assert_eq!(
-        forms.map(|c| c.count).unwrap_or(0),
+        distinct.len() as i64,
         expected,
-        "post-reset catalog should hold every compiled-library form exactly once"
+        "post-reset catalog should hold every compiled-library code"
     );
 
     let mut q = app
@@ -2929,11 +2940,12 @@ async fn referral_transaction_type_seeds_fee_checklist() {
     struct ItemRow {
         form_code: Option<String>,
         required: bool,
+        group_name: String,
     }
     let mut q = app
         .state
         .db
-        .query("SELECT form_code, required FROM $t->has_item->checklist_item")
+        .query("SELECT form_code, required, group_name FROM $t->has_item->checklist_item")
         .bind(("t", tx_id.clone()))
         .await
         .expect("load checklist");
@@ -2943,27 +2955,18 @@ async fn referral_transaction_type_seeds_fee_checklist() {
         .filter_map(|i| i.form_code.as_deref())
         .collect();
 
-    assert!(
-        codes.contains(&"RFA"),
-        "referral checklist needs the Referral Fee Agreement; got {codes:?}"
+    // Per the client's data sheet, the whole referral checklist is the
+    // Referral Fee Agreement under its own "Referral Contract" header.
+    assert_eq!(
+        codes,
+        vec!["RFA"],
+        "referral checklist is exactly the Referral Fee Agreement"
     );
-    assert!(
-        codes.contains(&"COMM"),
-        "referral checklist needs commission instructions; got {codes:?}"
-    );
-    assert!(
-        codes.contains(&"CLSD"),
-        "referral checklist needs the closing statement; got {codes:?}"
-    );
-    assert!(
-        items
-            .iter()
-            .any(|i| i.form_code.as_deref() == Some("RFA") && i.required),
-        "RFA must be required"
-    );
-    assert!(
-        !codes.contains(&"RPA") && !codes.contains(&"TDS") && !codes.contains(&"ACT"),
-        "a referral must not get a property checklist; got {codes:?}"
+    let rfa = &items[0];
+    assert!(rfa.required, "RFA must be required");
+    assert_eq!(
+        rfa.group_name, "Referral Contract",
+        "RFA files under the Referral Contract header"
     );
 
     // The show page renders the type and the picker still works.
@@ -2978,5 +2981,196 @@ async fn referral_transaction_type_seeds_fee_checklist() {
     assert!(
         body.contains(r#"value="referral""#),
         "transaction-type dropdown should offer Referral"
+    );
+}
+
+/// Lease transactions (Rental/Lease + Commercial Lease share one data
+/// sheet) get the lease checklist — not the old residential/commercial
+/// sale checklists: lease contract sections, application/deposit
+/// paperwork, governing docs, and the tenant-only WFDA.
+#[tokio::test]
+async fn lease_transactions_get_the_lease_checklist() {
+    let app = make_app().await;
+    crate::db::seed_forms(&app.state.db)
+        .await
+        .expect("seed forms");
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    join(&app.state, &broker, &b, "broker").await;
+    crate::db::forms::attach_default_state(&app.state.db, &b)
+        .await
+        .expect("attach state");
+
+    #[derive(serde::Deserialize, surrealdb::types::SurrealValue)]
+    struct ItemRow {
+        form_code: Option<String>,
+        required: bool,
+        group_name: String,
+    }
+    async fn checklist_for(app: &TestApp, address: &str) -> Vec<ItemRow> {
+        let mut q = app
+            .state
+            .db
+            .query(
+                "SELECT form_code, required, group_name FROM \
+                 (SELECT VALUE id FROM transaction WHERE property_address = $a LIMIT 1)[0]\
+                 ->has_item->checklist_item",
+            )
+            .bind(("a", address.to_string()))
+            .await
+            .expect("load checklist");
+        q.take(0).unwrap_or_default()
+    }
+    fn find<'a>(items: &'a [ItemRow], code: &str) -> Option<&'a ItemRow> {
+        items.iter().find(|i| i.form_code.as_deref() == Some(code))
+    }
+
+    // Tenant side (Rental / Lease).
+    let (status, _) = authed_post(
+        &app,
+        &broker,
+        "/app/transactions",
+        "property_address=1+Tenant+Way&transaction_type=rental_lease&sales_type=lease_tenant&status=active",
+    )
+    .await;
+    assert!(status.is_redirection(), "create failed: {status}");
+    let items = checklist_for(&app, "1 Tenant Way").await;
+    let codes: Vec<&str> = items
+        .iter()
+        .filter_map(|i| i.form_code.as_deref())
+        .collect();
+
+    let rlmm = find(&items, "RLMM").expect("RLMM on tenant checklist");
+    assert!(rlmm.required);
+    assert_eq!(rlmm.group_name, "Rental Contract");
+    assert!(
+        find(&items, "LL").is_none(),
+        "tenant side has no landlord listing agreement; got {codes:?}"
+    );
+    let wfda = find(&items, "WFDA").expect("WFDA is tenant-side mandatory");
+    assert_eq!(wfda.group_name, "Mandatory Disclosures");
+    assert_eq!(
+        find(&items, "RNTD").expect("RNTD MLS sheet").group_name,
+        "MLS Data Sheets"
+    );
+    for code in ["CCR", "LRA", "SDR"] {
+        let it = find(&items, code).unwrap_or_else(|| panic!("{code} missing: {codes:?}"));
+        assert!(it.required, "{code} should be required");
+        assert_eq!(it.group_name, "Application, Receipts & Reports");
+    }
+    assert_eq!(
+        find(&items, "CC&R").expect("CC&R").group_name,
+        "Governing Documents",
+        "leases file CC&R under Governing Documents (sales keep Escrow)"
+    );
+    assert_eq!(
+        find(&items, "R&R").expect("R&R").group_name,
+        "Governing Documents"
+    );
+    assert_eq!(
+        find(&items, "CLR").expect("CLR").group_name,
+        "Release Disclosures"
+    );
+    assert!(
+        !codes.contains(&"RPA") && !codes.contains(&"TDS") && !codes.contains(&"RLA"),
+        "no sale-checklist leakage; got {codes:?}"
+    );
+
+    // Landlord side (Commercial Lease — same sheet).
+    let (status, _) = authed_post(
+        &app,
+        &broker,
+        "/app/transactions",
+        "property_address=2+Landlord+Way&transaction_type=commercial_lease&sales_type=lease_landlord&status=active",
+    )
+    .await;
+    assert!(status.is_redirection(), "create failed: {status}");
+    let items = checklist_for(&app, "2 Landlord Way").await;
+    let ll = find(&items, "LL").expect("LL on landlord checklist");
+    assert!(ll.required);
+    assert_eq!(ll.group_name, "Lease Listing Contract");
+    assert!(
+        find(&items, "WFDA").is_none(),
+        "WFDA is tenant-only per the data sheet"
+    );
+}
+
+/// The versioned engine-criteria sync: when the compiled engine changes
+/// shape, existing DBs get their engine-owned criteria recomputed —
+/// stale applicability is overwritten and missing (code, group) rows
+/// are created — exactly once per version bump.
+#[tokio::test]
+async fn engine_criteria_sync_repairs_stale_databases() {
+    let app = make_app().await;
+    crate::db::seed_forms(&app.state.db).await.expect("seed");
+
+    // Simulate a pre-lease-checklist database: TDS wrongly applies to
+    // rental_lease (leases used the residential checklist), and the
+    // lease-specific RLMM row doesn't exist yet. Clear the version
+    // marker as if the binary just upgraded.
+    app.state
+        .db
+        .query(
+            "UPDATE form SET applies_types += 'rental_lease' WHERE code = 'TDS';
+             DELETE has_form WHERE out.code = 'RLMM';
+             DELETE form WHERE code = 'RLMM';
+             DELETE seed_meta WHERE key = 'engine_criteria_version';",
+        )
+        .await
+        .expect("corrupt db");
+
+    crate::db::seed_forms(&app.state.db)
+        .await
+        .expect("re-seed runs sync");
+
+    #[derive(serde::Deserialize, surrealdb::types::SurrealValue)]
+    struct FormRow {
+        required: bool,
+        applies_types: Vec<String>,
+        group_name: Option<String>,
+    }
+    let mut q = app
+        .state
+        .db
+        .query(
+            "SELECT required, applies_types, \
+             (<-has_form<-form_group)[0].name AS group_name \
+             FROM form WHERE code = 'TDS'",
+        )
+        .await
+        .expect("load TDS");
+    let tds: Vec<FormRow> = q.take(0).unwrap_or_default();
+    assert_eq!(tds.len(), 1);
+    assert!(
+        !tds[0].applies_types.iter().any(|t| t == "rental_lease"),
+        "sync must strip stale lease applicability from sale forms; got {:?}",
+        tds[0].applies_types
+    );
+
+    let mut q = app
+        .state
+        .db
+        .query(
+            "SELECT required, applies_types, \
+             (<-has_form<-form_group)[0].name AS group_name \
+             FROM form WHERE code = 'RLMM'",
+        )
+        .await
+        .expect("load RLMM");
+    let rlmm: Vec<FormRow> = q.take(0).unwrap_or_default();
+    assert_eq!(rlmm.len(), 1, "sync must recreate missing engine rows");
+    assert!(
+        rlmm[0].required,
+        "recreated rows carry engine required flags"
+    );
+    assert_eq!(rlmm[0].group_name.as_deref(), Some("Rental Contract"));
+    assert!(
+        rlmm[0].applies_types.iter().any(|t| t == "rental_lease")
+            && rlmm[0]
+                .applies_types
+                .iter()
+                .any(|t| t == "commercial_lease"),
+        "recreated rows carry engine applicability; got {:?}",
+        rlmm[0].applies_types
     );
 }

@@ -173,6 +173,15 @@ DEFINE FIELD OVERWRITE code       ON seeded_form TYPE string ASSERT string::len(
 DEFINE FIELD OVERWRITE created_at ON seeded_form TYPE datetime DEFAULT time::now();
 DEFINE INDEX OVERWRITE idx_seeded_form_code ON seeded_form FIELDS code UNIQUE;
 
+-- Seeding bookkeeping (e.g. `engine_criteria_version` — bumped when the
+-- compiled checklist engine changes shape and existing DBs must re-sync
+-- the engine-owned form criteria).
+DEFINE TABLE OVERWRITE seed_meta SCHEMAFULL;
+DEFINE FIELD OVERWRITE key        ON seed_meta TYPE string ASSERT string::len($value) >= 1;
+DEFINE FIELD OVERWRITE value      ON seed_meta TYPE int;
+DEFINE FIELD OVERWRITE created_at ON seed_meta TYPE datetime DEFAULT time::now();
+DEFINE INDEX OVERWRITE idx_seed_meta_key ON seed_meta FIELDS key UNIQUE;
+
 DEFINE FIELD OVERWRITE created_at ON brokerage TYPE datetime DEFAULT time::now();
 DEFINE FIELD OVERWRITE updated_at ON brokerage TYPE datetime DEFAULT time::now() VALUE time::now();
 

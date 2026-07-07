@@ -12,12 +12,28 @@ the bottom-right of every page.
 
 - **New "Referral" transaction type.** Referral-fee deals no longer
   have to masquerade as Residential with a 60-item property checklist.
-  Pick Transaction Type → Referral and the checklist is the fee
-  paperwork: Referral Fee Agreement (required), Commission
-  Instructions and Closing Statement (required), plus an optional
-  Addendum slot — the same regardless of which side the client was
-  referred from. Admins can tailor which forms apply to referrals via
-  the new Referral checkbox in every form's applicability picker.
+  Per the printed data sheet, the checklist is a single **Referral
+  Contract** section holding the required RFA — Referral Fee
+  Agreement, the same regardless of which side the client was
+  referred from. Admins can put more forms on referrals via the new
+  Referral checkbox in every form's applicability picker.
+- **Lease transactions get the real lease checklist.** Rental / Lease
+  and Commercial Lease deals previously received the residential or
+  commercial *sale* checklists. They now follow the printed Commercial
+  Lease + Rental/Lease data sheet: MLS sheets (including the new
+  RNTD — Rented Status report), the **Lease Listing Contract** (LL,
+  landlord side) and **Rental Contract** (RLMM) sections, mandatory AD
+  and LCA (WFDA on the tenant side only), the full
+  "Disclosures — If Applicable" list, a required **Application,
+  Receipts & Reports** section (CCR, LRA, SDR), **Governing
+  Documents** (CC&Rs, HOA docs, R&R — Rules & Regulations), and CLR
+  under Release Disclosures. AD, RNTD, CCR, SDR, and R&R are now
+  library forms — brokerages that added them as custom forms should
+  delete their copies (Account → Forms) to avoid doubled checklist
+  lines. Existing databases update themselves on first startup: lease
+  applicability is recomputed, so lease deals stop pulling sale forms
+  without touching any admin edits, custom forms, or live
+  transactions.
 
 - **Search-as-you-type actually works now.** On the Transactions page,
   typing in the search box used to reload the whole page — which froze

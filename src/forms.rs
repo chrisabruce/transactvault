@@ -54,6 +54,7 @@ impl CarForm {
             "BPA" => "Includes AD, PRBS, FHDA, BHIA, WFA & CCPA",
             "LL" => "Includes RPOD, RPOA, FHDA & CCPA",
             "RLMM" => "Includes BBD, TFHD, RCJC, TRPR & FHDA",
+            "LRA" => "Includes BIRN",
             _ => "",
         }
     }
@@ -77,9 +78,24 @@ pub enum FormGroup {
     ListingContracts,
     PurchaseContract,
     PurchaseContracts,
+    /// Lease checklists split their contracts differently from sales:
+    /// the landlord-side listing agreement (LL) and the lease itself
+    /// (RLMM) each get their own printed section.
+    LeaseListingContract,
+    RentalContract,
+    /// The referral data sheet is a single section holding the RFA.
+    ReferralContract,
     MandatoryDisclosures,
     AdditionalDisclosures,
     EscrowDocuments,
+    /// Lease checklists: the application / credit / deposit paperwork
+    /// ("Application, Receipts & Reports" on the printed sheet).
+    ApplicationReceiptsReports,
+    /// Lease checklists: CC&Rs, HOA docs, and Rules & Regulations.
+    /// Note CC&R/HOA live under Escrow Documents on SALE checklists —
+    /// the DB seed keys forms by (code, group) so both placements
+    /// coexist as separate rows with disjoint applicability.
+    GoverningDocuments,
     ReportsCertificatesClearances,
     ReleaseDisclosures,
 }
@@ -89,15 +105,20 @@ impl FormGroup {
     /// contract variants occupy the same slot; only the one(s) used by a
     /// given checklist will have items, so the empties drop out of the
     /// rendered output.
-    pub const ORDERED: [FormGroup; 10] = [
+    pub const ORDERED: [FormGroup; 15] = [
         FormGroup::MlsDataSheets,
         FormGroup::ListingContract,
         FormGroup::ListingContracts,
         FormGroup::PurchaseContract,
         FormGroup::PurchaseContracts,
+        FormGroup::LeaseListingContract,
+        FormGroup::RentalContract,
+        FormGroup::ReferralContract,
         FormGroup::MandatoryDisclosures,
         FormGroup::AdditionalDisclosures,
         FormGroup::EscrowDocuments,
+        FormGroup::ApplicationReceiptsReports,
+        FormGroup::GoverningDocuments,
         FormGroup::ReportsCertificatesClearances,
         FormGroup::ReleaseDisclosures,
     ];
@@ -113,9 +134,17 @@ impl FormGroup {
             FormGroup::MlsDataSheets => ("MLS Data Sheets", 0),
             FormGroup::ListingContract | FormGroup::ListingContracts => ("Listing Contracts", 1),
             FormGroup::PurchaseContract | FormGroup::PurchaseContracts => ("Purchase Contracts", 2),
+            // Lease + referral contract sections. Orders collide with the
+            // sale contract groups on purpose — a checklist only ever
+            // renders one family, so the slot is shared.
+            FormGroup::LeaseListingContract => ("Lease Listing Contract", 1),
+            FormGroup::RentalContract => ("Rental Contract", 2),
+            FormGroup::ReferralContract => ("Referral Contract", 1),
             FormGroup::MandatoryDisclosures => ("Mandatory Disclosures", 3),
             FormGroup::AdditionalDisclosures => ("Additional Disclosures", 4),
             FormGroup::EscrowDocuments => ("Escrow Documents", 5),
+            FormGroup::ApplicationReceiptsReports => ("Application, Receipts & Reports", 5),
+            FormGroup::GoverningDocuments => ("Governing Documents", 6),
             FormGroup::ReportsCertificatesClearances => ("Reports, Certificates & Clearances", 6),
             FormGroup::ReleaseDisclosures => ("Release Disclosures", 7),
         }
@@ -147,14 +176,21 @@ pub struct DefaultItem {
 pub fn infer_group_from_code(code: &str) -> FormGroup {
     match code {
         // Listing-side contracts
-        "RLA" | "MHLA" | "VLL" | "CLA" | "BLA" | "LL" => FormGroup::ListingContract,
+        "RLA" | "MHLA" | "VLL" | "CLA" | "BLA" => FormGroup::ListingContract,
 
         // Purchase-side contracts
         "RPA" | "RIPA" | "MHPA" | "VLPA" | "CPA" | "BPA" | "LR" => FormGroup::PurchaseContract,
 
+        // Lease + referral contract sections
+        "LL" => FormGroup::LeaseListingContract,
+        "RLMM" => FormGroup::RentalContract,
+        "RFA" => FormGroup::ReferralContract,
+
         // Mandatory disclosures
-        "AVID-1" | "AVID-2" | "FHDS" | "LPD" | "RGM" | "SBSA" | "SPQ" | "TDS" | "WCMD" | "WFDA"
-        | "WHSD" | "VP" | "CSPQ" | "MHDA" | "MHTDS" | "VLQ" => FormGroup::MandatoryDisclosures,
+        "AD" | "AVID-1" | "AVID-2" | "FHDS" | "LCA" | "LPD" | "RGM" | "SBSA" | "SPQ" | "TDS"
+        | "WCMD" | "WFDA" | "WHSD" | "VP" | "CSPQ" | "MHDA" | "MHTDS" | "VLQ" => {
+            FormGroup::MandatoryDisclosures
+        }
 
         // Special-condition addenda — part of the contract section.
         // Listing-side: under the listing contract. Purchase-side: under
@@ -163,7 +199,11 @@ pub fn infer_group_from_code(code: &str) -> FormGroup {
         "PA" | "SSA" | "REO" => FormGroup::PurchaseContract,
 
         // MLS sheets
-        "ACT" | "PEND" | "SOLD" => FormGroup::MlsDataSheets,
+        "ACT" | "PEND" | "SOLD" | "RNTD" => FormGroup::MlsDataSheets,
+
+        // Lease application / deposit paperwork + governing docs
+        "CCR" | "LRA" | "SDR" => FormGroup::ApplicationReceiptsReports,
+        "R&R" => FormGroup::GoverningDocuments,
 
         // Escrow
         "APRL" | "CC&R" | "CLSD" | "COMM" | "EMD" | "EA" | "EI" | "HOA" | "NET" | "NHD"
@@ -211,6 +251,7 @@ pub fn canonical_position(code: &str) -> u32 {
         "ACT" => 0,
         "PEND" => 1,
         "SOLD" => 2,
+        "RNTD" => 3,
 
         // Contracts (listing-side main forms — 100–109)
         "RLA" => 100,
@@ -227,6 +268,10 @@ pub fn canonical_position(code: &str) -> u32 {
         "CPA" => 114,
         "BPA" => 115,
         "LR" => 116,
+        // Lease + referral contract sections (each form is alone in its
+        // group, so the exact value only needs to be stable).
+        "RLMM" => 120,
+        "RFA" => 121,
         // Special-condition addenda — always render right under the
         // main contract form within the same group. Listing-side: 150+;
         // Purchase-side: 155+.
@@ -238,52 +283,66 @@ pub fn canonical_position(code: &str) -> u32 {
         "REO" => 157,
 
         // Mandatory Disclosures — alphabetical
+        "AD" => 199,
         "AVID-1" => 200,
         "AVID-2" => 201,
         "CSPQ" => 202,
         "FHDS" => 203,
-        "LPD" => 204,
-        "MHDA" => 205,
-        "MHTDS" => 206,
-        "RGM" => 207,
-        "SBSA" => 208,
-        "SPQ" => 209,
-        "TDS" => 210,
-        "VLQ" => 211,
-        "VP" => 212,
-        "WCMD" => 213,
-        "WFDA" => 214,
-        "WHSD" => 215,
+        "LCA" => 204,
+        "LPD" => 205,
+        "MHDA" => 206,
+        "MHTDS" => 207,
+        "RGM" => 208,
+        "SBSA" => 209,
+        "SPQ" => 210,
+        "TDS" => 211,
+        "VLQ" => 212,
+        "VP" => 213,
+        "WCMD" => 214,
+        "WFDA" => 215,
+        "WHSD" => 216,
 
         // Additional Disclosures — strictly alphabetical across every
-        // code that any per-type list places in this group.
+        // code that any per-type list places in this group (the lease
+        // sheet's "Disclosures — If Applicable" section shares it).
         "ADM" => 400,
         "BCA" => 401,
         "BDS" => 402,
-        "BP-FFE" => 403,
-        "BRBC" => 404,
-        "CO" => 405,
-        "CR" => 406,
-        "EQ" => 407,
-        "EQ-R" => 408,
-        "ETA" => 409,
-        "FVAC" => 410,
-        "HID" => 411,
-        "MCA" => 412,
-        "MT" => 413,
-        "NTP" => 414,
-        "POF" => 415,
-        "PRBS-B" => 416,
-        "PRBS-S" => 417,
-        "QUAL" => 418,
-        "RCSD" => 419,
-        "RFA" => 420,
-        "RR" => 421,
-        "RRRR" => 422,
-        "SWPI" => 423,
-        "SWPI-C" => 424,
-        "SWPI-Q" => 425,
-        "TA" => 426,
+        "BIRN" => 403,
+        "BP-FFE" => 404,
+        "BRBC" => 405,
+        "CO" => 406,
+        "CR" => 407,
+        "DRA" => 408,
+        "EL" => 409,
+        "EQ" => 410,
+        "EQ-R" => 411,
+        "ETA" => 412,
+        "FEHN" => 413,
+        "FVAC" => 414,
+        "HID" => 415,
+        "HOA-IR" => 416,
+        "MCA" => 417,
+        "MII" => 418,
+        "MOI" => 419,
+        "MT" => 420,
+        "NOE" => 421,
+        "NRI" => 422,
+        "NTP" => 423,
+        "PMA" => 424,
+        "PMOI" => 425,
+        "POF" => 426,
+        "PRBS-B" => 427,
+        "PRBS-S" => 428,
+        "PRQ" => 429,
+        "QUAL" => 430,
+        "RCSD" => 431,
+        "RR" => 432,
+        "RRRR" => 433,
+        "SWPI" => 434,
+        "SWPI-C" => 435,
+        "SWPI-Q" => 436,
+        "TA" => 437,
 
         // Escrow Documents — alphabetical
         "APRL" => 600,
@@ -311,10 +370,22 @@ pub fn canonical_position(code: &str) -> u32 {
         "TERM" => 708,
         "WELL" => 709,
 
+        // Governing Documents (lease checklists). CC&R and HOA reuse
+        // their Escrow ranks (601/607) — the relative order inside this
+        // group stays alphabetical, and ranks only compare within a
+        // group on one checklist.
+        "R&R" => 652,
+
+        // Application, Receipts & Reports (lease checklists)
+        "CCR" => 750,
+        "LRA" => 751,
+        "SDR" => 752,
+
         // Release Disclosures
         "CC" => 800,
-        "COL" => 801,
-        "WOO" => 802,
+        "CLR" => 801,
+        "COL" => 802,
+        "WOO" => 803,
 
         // Catch-all bucket
         "MISC" => 900,
@@ -354,6 +425,12 @@ pub const LIBRARY: &[CarForm] = &[
         code: "SOLD",
         name: "Sold, Canceled or Withdrawn Status MLS Report",
         description: "Sold MLS listing report",
+        allows_multiple: true,
+    },
+    CarForm {
+        code: "RNTD",
+        name: "Rented Status MLS Report",
+        description: "Rented MLS listing report",
         allows_multiple: true,
     },
     // Listing / Purchasing contracts
@@ -433,6 +510,33 @@ pub const LIBRARY: &[CarForm] = &[
         code: "LL",
         name: "Residential Listing Agreement (Lease)",
         description: "Listing agreement for a rental property",
+        allows_multiple: false,
+    },
+    // Lease checklist items (2026 lease data sheet). AD/CCR/SDR/R&R
+    // were previously only broker-added custom forms; the printed
+    // Commercial Lease + Rental/Lease sheet makes them library canon.
+    CarForm {
+        code: "AD",
+        name: "Agency Disclosure",
+        description: "Agency relationship disclosure",
+        allows_multiple: false,
+    },
+    CarForm {
+        code: "CCR",
+        name: "Credit Check / Credit Report",
+        description: "Applicant credit report",
+        allows_multiple: true,
+    },
+    CarForm {
+        code: "SDR",
+        name: "Security Deposit Receipt",
+        description: "Receipt for the tenant's security deposit",
+        allows_multiple: false,
+    },
+    CarForm {
+        code: "R&R",
+        name: "Rules & Regulations",
+        description: "Property or HOA rules and regulations",
         allows_multiple: false,
     },
     // Mandatory disclosures
@@ -2773,19 +2877,86 @@ const BUSINESS_OP_PURCHASE: &[DefaultItem] = &[
     item("WOO", FormGroup::ReleaseDisclosures, false),
 ];
 
-// Referral — a referral-fee deal, not a property file. The brokerage
-// refers the client out and papers the fee: the Referral Fee Agreement
-// is the deal's core document, and the fee's payout (commission
-// instructions + the other side's closing statement) is the compliance
-// evidence. Side-independent on purpose — you can refer a buyer or a
-// seller and the paperwork is identical — and every item sits in a
-// fixed group so the DB seed's one-group-per-form invariant holds
-// across all (side × condition) combinations.
-const REFERRAL_ANY_SIDE: &[DefaultItem] = &[
-    item("RFA", FormGroup::AdditionalDisclosures, true),
+// Referral — per the client's data sheet, the whole checklist is the
+// Referral Fee Agreement under its own "Referral Contract" heading.
+// Side-independent: refer a buyer or a seller, the paperwork is the
+// same.
+const REFERRAL_ANY_SIDE: &[DefaultItem] = &[item("RFA", FormGroup::ReferralContract, true)];
+
+// Commercial Lease + Rental/Lease — one shared printed data sheet.
+// Landlord (listing) side carries the Lease Listing Agreement; both
+// sides carry the lease contract itself (RLMM) and the application /
+// deposit paperwork; WFDA is marked "(Tenant Only)" on the sheet so it
+// appears only on the tenant side. The "Disclosures — If Applicable"
+// section maps to the shared Additional Disclosures group; the sheet's
+// "Application, Receipts & Reports" and "Governing Documents" sections
+// are lease-specific groups. Note CC&R/HOA deliberately sit under
+// Governing Documents here while the SALE checklists file them under
+// Escrow Documents — the seeder keys forms by (code, group) so both
+// placements coexist.
+const LEASE_LISTING: &[DefaultItem] = &[
+    item("ACT", FormGroup::MlsDataSheets, true),
+    item("PEND", FormGroup::MlsDataSheets, true),
+    item("RNTD", FormGroup::MlsDataSheets, true),
+    item("LL", FormGroup::LeaseListingContract, true),
+    item("RLMM", FormGroup::RentalContract, true),
+    item("AD", FormGroup::MandatoryDisclosures, true),
+    item("LCA", FormGroup::MandatoryDisclosures, true),
     item("ADM", FormGroup::AdditionalDisclosures, false),
-    item("COMM", FormGroup::EscrowDocuments, true),
-    item("CLSD", FormGroup::EscrowDocuments, true),
+    item("BIRN", FormGroup::AdditionalDisclosures, false),
+    item("DRA", FormGroup::AdditionalDisclosures, false),
+    item("EL", FormGroup::AdditionalDisclosures, false),
+    item("FEHN", FormGroup::AdditionalDisclosures, false),
+    item("HOA-IR", FormGroup::AdditionalDisclosures, false),
+    item("MII", FormGroup::AdditionalDisclosures, false),
+    item("MOI", FormGroup::AdditionalDisclosures, false),
+    item("MT", FormGroup::AdditionalDisclosures, false),
+    item("NOE", FormGroup::AdditionalDisclosures, false),
+    item("NRI", FormGroup::AdditionalDisclosures, false),
+    item("PMA", FormGroup::AdditionalDisclosures, false),
+    item("PMOI", FormGroup::AdditionalDisclosures, false),
+    item("PRQ", FormGroup::AdditionalDisclosures, false),
+    item("CCR", FormGroup::ApplicationReceiptsReports, true),
+    item("LRA", FormGroup::ApplicationReceiptsReports, true),
+    item("SDR", FormGroup::ApplicationReceiptsReports, true),
+    item("CC&R", FormGroup::GoverningDocuments, false),
+    item("HOA", FormGroup::GoverningDocuments, false),
+    item("R&R", FormGroup::GoverningDocuments, false),
+    item("CLR", FormGroup::ReleaseDisclosures, false),
+];
+
+// Tenant side: no landlord listing agreement; WFDA joins the mandatory
+// section per the sheet's "(Tenant Only)" note. Everything else
+// mirrors the listing side.
+const LEASE_TENANT: &[DefaultItem] = &[
+    item("ACT", FormGroup::MlsDataSheets, true),
+    item("PEND", FormGroup::MlsDataSheets, true),
+    item("RNTD", FormGroup::MlsDataSheets, true),
+    item("RLMM", FormGroup::RentalContract, true),
+    item("AD", FormGroup::MandatoryDisclosures, true),
+    item("LCA", FormGroup::MandatoryDisclosures, true),
+    item("WFDA", FormGroup::MandatoryDisclosures, true),
+    item("ADM", FormGroup::AdditionalDisclosures, false),
+    item("BIRN", FormGroup::AdditionalDisclosures, false),
+    item("DRA", FormGroup::AdditionalDisclosures, false),
+    item("EL", FormGroup::AdditionalDisclosures, false),
+    item("FEHN", FormGroup::AdditionalDisclosures, false),
+    item("HOA-IR", FormGroup::AdditionalDisclosures, false),
+    item("MII", FormGroup::AdditionalDisclosures, false),
+    item("MOI", FormGroup::AdditionalDisclosures, false),
+    item("MT", FormGroup::AdditionalDisclosures, false),
+    item("NOE", FormGroup::AdditionalDisclosures, false),
+    item("NRI", FormGroup::AdditionalDisclosures, false),
+    item("PMA", FormGroup::AdditionalDisclosures, false),
+    item("PMOI", FormGroup::AdditionalDisclosures, false),
+    item("PRQ", FormGroup::AdditionalDisclosures, false),
+    item("CCR", FormGroup::ApplicationReceiptsReports, true),
+    item("LRA", FormGroup::ApplicationReceiptsReports, true),
+    item("SDR", FormGroup::ApplicationReceiptsReports, true),
+    item("CC&R", FormGroup::GoverningDocuments, false),
+    item("HOA", FormGroup::GoverningDocuments, false),
+    item("R&R", FormGroup::GoverningDocuments, false),
+    item("CLR", FormGroup::ReleaseDisclosures, false),
 ];
 
 // Multi-Family — hidden from the new-transaction picker but kept here so
@@ -2830,10 +3001,19 @@ const MULTI_FAMILY_FALLBACK: &[DefaultItem] = &[
 /// in the same group so they render directly below the contract.
 fn contract_group_for(t: TransactionType, side: SalesSide) -> FormGroup {
     match (t, side) {
-        // Residential Purchase bundles RPA + RIPA → plural.
-        (TransactionType::Residential | TransactionType::RentalLease, SalesSide::Purchase) => {
-            FormGroup::PurchaseContracts
+        // Lease deals: special-condition addenda join the landlord's
+        // listing section when one exists, else the rental contract.
+        (TransactionType::CommercialLease | TransactionType::RentalLease, SalesSide::Purchase) => {
+            FormGroup::RentalContract
         }
+        (TransactionType::CommercialLease | TransactionType::RentalLease, _) => {
+            FormGroup::LeaseListingContract
+        }
+        // Referral: everything, addenda included, files under the one
+        // Referral Contract section.
+        (TransactionType::Referral, _) => FormGroup::ReferralContract,
+        // Residential Purchase bundles RPA + RIPA → plural.
+        (TransactionType::Residential, SalesSide::Purchase) => FormGroup::PurchaseContracts,
         // Manufactured Home bundles two contracts on each side → plural.
         (TransactionType::ManufacturedHome, SalesSide::Listing) => FormGroup::ListingContracts,
         (TransactionType::ManufacturedHome, SalesSide::Purchase) => FormGroup::PurchaseContracts,
@@ -2897,24 +3077,28 @@ fn special_condition_items(
 /// caller can mutate without affecting the static arrays.
 fn defaults_for(t: TransactionType, side: SalesSide) -> Vec<DefaultItem> {
     match (t, side) {
-        (TransactionType::Residential | TransactionType::RentalLease, SalesSide::Listing) => {
-            RESIDENTIAL_LISTING.to_vec()
-        }
-        (TransactionType::Residential | TransactionType::RentalLease, SalesSide::Purchase) => {
-            RESIDENTIAL_PURCHASE.to_vec()
-        }
-        (TransactionType::Residential | TransactionType::RentalLease, SalesSide::Both) => {
+        (TransactionType::Residential, SalesSide::Listing) => RESIDENTIAL_LISTING.to_vec(),
+        (TransactionType::Residential, SalesSide::Purchase) => RESIDENTIAL_PURCHASE.to_vec(),
+        (TransactionType::Residential, SalesSide::Both) => {
             merge_sides(RESIDENTIAL_LISTING, RESIDENTIAL_PURCHASE)
         }
 
-        (TransactionType::Commercial | TransactionType::CommercialLease, SalesSide::Listing) => {
-            COMMERCIAL_LISTING.to_vec()
-        }
-        (TransactionType::Commercial | TransactionType::CommercialLease, SalesSide::Purchase) => {
-            COMMERCIAL_PURCHASE.to_vec()
-        }
-        (TransactionType::Commercial | TransactionType::CommercialLease, SalesSide::Both) => {
+        (TransactionType::Commercial, SalesSide::Listing) => COMMERCIAL_LISTING.to_vec(),
+        (TransactionType::Commercial, SalesSide::Purchase) => COMMERCIAL_PURCHASE.to_vec(),
+        (TransactionType::Commercial, SalesSide::Both) => {
             merge_sides(COMMERCIAL_LISTING, COMMERCIAL_PURCHASE)
+        }
+
+        // Both lease types share the printed Commercial Lease +
+        // Rental/Lease data sheet.
+        (TransactionType::CommercialLease | TransactionType::RentalLease, SalesSide::Listing) => {
+            LEASE_LISTING.to_vec()
+        }
+        (TransactionType::CommercialLease | TransactionType::RentalLease, SalesSide::Purchase) => {
+            LEASE_TENANT.to_vec()
+        }
+        (TransactionType::CommercialLease | TransactionType::RentalLease, SalesSide::Both) => {
+            merge_sides(LEASE_LISTING, LEASE_TENANT)
         }
 
         (TransactionType::VacantLotsLand, SalesSide::Listing) => LOTS_LAND_LISTING.to_vec(),
