@@ -38,7 +38,18 @@
        on every event — if a role change or removal lands mid-stream,
        the server closes the connection and the client reconnects
        with fresh authorization. #}
-    <div data-init="@get('/app/stats/stream?status={{ filter_status }}{% if attention_on %}&attention=1{% endif %}')">
+    {# The second attribute is the self-healing path: Datastar's
+       fetch-SSE gives up after ~10 backed-off retries (≈2–3 minutes of
+       downtime — a long deploy, a sleeping dev server), after which a
+       long-lived tab would sit silently deaf forever. On exhaustion the
+       bundle dispatches a document-level `datastar-fetch` CustomEvent
+       with detail.type "retries-failed"; catching it for THIS element
+       and re-invoking the stream @get starts a fresh retry cycle, so
+       the connection always comes back eventually. (Tab-hidden /
+       laptop-sleep reconnects are already handled inside the bundle
+       via visibilitychange.) #}
+    <div data-init="@get('/app/stats/stream?status={{ filter_status }}{% if attention_on %}&attention=1{% endif %}')"
+         data-on:datastar-fetch="evt.detail.type === 'retries-failed' && evt.detail.el === el && @get('/app/stats/stream?status={{ filter_status }}{% if attention_on %}&attention=1{% endif %}')">
         {% include "partials/stat_grid.html" %}
     </div>
 

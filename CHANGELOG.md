@@ -31,7 +31,14 @@ the bottom-right of every page.
   quietly re-fetch and update in place, respecting whatever you've
   typed in the search box and your current filters. If you've
   scrolled deep into a long list, the refresh politely waits rather
-  than yanking you back to the top.
+  than yanking you back to the top. This works across roles — an
+  agent's window follows changes a broker makes, scoped to what the
+  agent is allowed to see.
+- **Long-lived tabs no longer go quietly deaf.** Previously, if the
+  server was unreachable for a couple of minutes (a deploy, a
+  restart), an open tab would stop retrying its live connection and
+  never update again until you reloaded. The page now detects the
+  give-up and reopens the connection itself, indefinitely.
 - **All 10 missing CAR forms are in the Add-an-item list**, including
   the four forms CAR released in June 2026: PRBS-B, PRBS-S, SWPI-C,
   and SWPI-Q. The picker now shows the complete CAR catalog — forms

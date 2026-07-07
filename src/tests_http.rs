@@ -2125,6 +2125,11 @@ async fn transactions_page_wires_live_stream_and_live_search() {
         body.contains(r#"data-on-signal-patch-filter="{include: /^txrev$/}""#),
         "live-rows listener must be filtered to txrev so typing (q patches) never triggers it"
     );
+    assert!(
+        body.contains("retries-failed"),
+        "the stream host must catch retries-failed and reopen the stream, or a \
+         long-lived tab goes permanently deaf after ~2 minutes of downtime"
+    );
 }
 
 /// The Add-an-item picker offers the whole CAR catalog — including
@@ -2770,5 +2775,109 @@ async fn stats_stream_pushes_row_refresh_signal_on_mutation() {
     assert!(
         buf.contains(r#"data: signals {"txrev":1}"#),
         "signals patch should bump txrev to 1; saw: {buf:?}"
+    );
+}
+
+/// An AGENT's open stream must react when a BROKER mutates the
+/// brokerage — the exact "broker deletes, agent's window doesn't move"
+/// report. Full integration: the broker calls the real delete endpoint
+/// while the agent's stream is connected; the agent must receive a
+/// fresh stat patch AND the txrev rows-refresh bump, rendered for
+/// their own (agent-scoped) visibility.
+#[tokio::test]
+async fn agent_stream_updates_when_broker_deletes() {
+    use axum::body::Body;
+    use axum::extract::ConnectInfo;
+    use axum::http::Request;
+    use http_body_util::BodyExt;
+    use std::net::SocketAddr;
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let broker = seed_user(&app.state, "boss@a").await;
+    let agent = seed_user(&app.state, "agent@a").await;
+    join(&app.state, &broker, &b, "broker").await;
+    join(&app.state, &agent, &b, "agent").await;
+    let tx = seed_tx(&app.state, &b, Some(&agent)).await;
+    let tx_key = crate::db::record_key(&tx);
+
+    // Agent opens the stream.
+    let cookie = session_cookie(&app, &agent);
+    let mut req = Request::builder()
+        .uri("/app/stats/stream")
+        .header("cookie", cookie)
+        .body(Body::empty())
+        .expect("build request");
+    req.extensions_mut().insert(ConnectInfo::<SocketAddr>(
+        "127.0.0.1:0".parse().expect("loopback addr"),
+    ));
+    let response = app
+        .router
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("router oneshot");
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut body = response.into_body();
+
+    // Drain the initial event — agent sees their 1 transaction.
+    let mut buf = String::new();
+    let started = std::time::Instant::now();
+    while started.elapsed() < Duration::from_millis(500) && !buf.contains("stat-grid") {
+        if let Ok(Some(Ok(frame))) = timeout(Duration::from_millis(250), body.frame()).await {
+            if let Some(data) = frame.data_ref() {
+                buf.push_str(&String::from_utf8_lossy(data));
+            }
+        } else {
+            break;
+        }
+    }
+    assert!(
+        buf.contains("stat-grid"),
+        "agent should get the initial stat patch; saw: {buf:?}"
+    );
+    buf.clear();
+
+    // Broker deletes the agent's transaction through the real endpoint.
+    let (status, _) = authed_post(
+        &app,
+        &broker,
+        &format!("/app/transactions/{tx_key}/delete"),
+        "",
+    )
+    .await;
+    assert!(
+        status.is_redirection(),
+        "broker delete should succeed, got {status}"
+    );
+
+    // The agent's stream must push a fresh (agent-scoped) stat patch
+    // plus the rows-refresh signal.
+    let started = std::time::Instant::now();
+    while started.elapsed() < Duration::from_secs(2)
+        && !(buf.contains("txrev") && buf.contains("stat-grid"))
+    {
+        if let Ok(Some(Ok(frame))) = timeout(Duration::from_millis(500), body.frame()).await {
+            if let Some(data) = frame.data_ref() {
+                buf.push_str(&String::from_utf8_lossy(data));
+            }
+        } else {
+            break;
+        }
+    }
+    assert!(
+        buf.contains("event: datastar-patch-elements") && buf.contains("stat-grid"),
+        "agent stream should push a stat patch after the broker's delete; saw: {buf:?}"
+    );
+    assert!(
+        buf.contains(r#"data: signals {"txrev":1}"#),
+        "agent stream should bump txrev after the broker's delete; saw: {buf:?}"
+    );
+    // The re-rendered agent grid reflects the deletion: zero transactions.
+    assert!(
+        buf.contains(">0<"),
+        "agent's re-rendered totals should show the transaction gone; saw: {buf:?}"
     );
 }
