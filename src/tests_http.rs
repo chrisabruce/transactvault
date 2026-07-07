@@ -2881,3 +2881,102 @@ async fn agent_stream_updates_when_broker_deletes() {
         "agent's re-rendered totals should show the transaction gone; saw: {buf:?}"
     );
 }
+
+/// Referral transaction type: creatable from the form, and its
+/// checklist is the referral-fee paperwork — not a property checklist.
+#[tokio::test]
+async fn referral_transaction_type_seeds_fee_checklist() {
+    let app = make_app().await;
+    crate::db::seed_forms(&app.state.db)
+        .await
+        .expect("seed forms");
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    join(&app.state, &broker, &b, "broker").await;
+    crate::db::forms::attach_default_state(&app.state.db, &b)
+        .await
+        .expect("attach state");
+
+    let (status, _) = authed_post(
+        &app,
+        &broker,
+        "/app/transactions",
+        "property_address=1+Referral+Way&transaction_type=referral&sales_type=referral&status=active",
+    )
+    .await;
+    assert!(
+        status.is_redirection(),
+        "create should redirect, got {status}"
+    );
+
+    #[derive(serde::Deserialize, surrealdb::types::SurrealValue)]
+    struct TxRow {
+        id: RecordId,
+        transaction_type: String,
+    }
+    let mut q = app
+        .state
+        .db
+        .query("SELECT id, transaction_type FROM transaction WHERE property_address = '1 Referral Way'")
+        .await
+        .expect("find tx");
+    let rows: Vec<TxRow> = q.take(0).unwrap_or_default();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].transaction_type, "referral");
+    let tx_id = rows[0].id.clone();
+
+    #[derive(serde::Deserialize, surrealdb::types::SurrealValue)]
+    struct ItemRow {
+        form_code: Option<String>,
+        required: bool,
+    }
+    let mut q = app
+        .state
+        .db
+        .query("SELECT form_code, required FROM $t->has_item->checklist_item")
+        .bind(("t", tx_id.clone()))
+        .await
+        .expect("load checklist");
+    let items: Vec<ItemRow> = q.take(0).unwrap_or_default();
+    let codes: Vec<&str> = items
+        .iter()
+        .filter_map(|i| i.form_code.as_deref())
+        .collect();
+
+    assert!(
+        codes.contains(&"RFA"),
+        "referral checklist needs the Referral Fee Agreement; got {codes:?}"
+    );
+    assert!(
+        codes.contains(&"COMM"),
+        "referral checklist needs commission instructions; got {codes:?}"
+    );
+    assert!(
+        codes.contains(&"CLSD"),
+        "referral checklist needs the closing statement; got {codes:?}"
+    );
+    assert!(
+        items
+            .iter()
+            .any(|i| i.form_code.as_deref() == Some("RFA") && i.required),
+        "RFA must be required"
+    );
+    assert!(
+        !codes.contains(&"RPA") && !codes.contains(&"TDS") && !codes.contains(&"ACT"),
+        "a referral must not get a property checklist; got {codes:?}"
+    );
+
+    // The show page renders the type and the picker still works.
+    let key = crate::db::record_key(&tx_id);
+    let (status, body) = authed_get(&app, &broker, &format!("/app/transactions/{key}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Referral"), "type label should render");
+
+    // The new-transaction form offers the type.
+    let (status, body) = authed_get(&app, &broker, "/app/transactions/new").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains(r#"value="referral""#),
+        "transaction-type dropdown should offer Referral"
+    );
+}

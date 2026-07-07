@@ -84,6 +84,11 @@ pub enum TransactionType {
     BusinessOpportunity,
     CommercialLease,
     RentalLease,
+    /// A referral-fee deal: the brokerage refers a client out and
+    /// collects a fee at the other side's closing. No property file of
+    /// its own — the checklist is the referral agreement plus the fee
+    /// paperwork (see `forms::REFERRAL_ANY_SIDE`).
+    Referral,
 }
 
 impl TransactionType {
@@ -97,6 +102,7 @@ impl TransactionType {
             Self::BusinessOpportunity => "business_opportunity",
             Self::CommercialLease => "commercial_lease",
             Self::RentalLease => "rental_lease",
+            Self::Referral => "referral",
         }
     }
 
@@ -110,6 +116,7 @@ impl TransactionType {
             Self::BusinessOpportunity => "Business Opportunity",
             Self::CommercialLease => "Commercial Lease",
             Self::RentalLease => "Rental / Lease",
+            Self::Referral => "Referral",
         }
     }
 
@@ -123,6 +130,7 @@ impl TransactionType {
             "business_opportunity" => Some(Self::BusinessOpportunity),
             "commercial_lease" => Some(Self::CommercialLease),
             "rental_lease" => Some(Self::RentalLease),
+            "referral" => Some(Self::Referral),
             _ => None,
         }
     }
@@ -131,7 +139,7 @@ impl TransactionType {
     /// `MultiFamily` is intentionally omitted — the variant is kept on the
     /// enum (so old persisted rows still parse) but is hidden from the
     /// picker since no per-type checklist exists for it yet.
-    pub fn all() -> [Self; 7] {
+    pub fn all() -> [Self; 8] {
         [
             Self::Residential,
             Self::Commercial,
@@ -140,6 +148,7 @@ impl TransactionType {
             Self::BusinessOpportunity,
             Self::CommercialLease,
             Self::RentalLease,
+            Self::Referral,
         ]
     }
 }

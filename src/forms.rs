@@ -277,12 +277,13 @@ pub fn canonical_position(code: &str) -> u32 {
         "PRBS-S" => 417,
         "QUAL" => 418,
         "RCSD" => 419,
-        "RR" => 420,
-        "RRRR" => 421,
-        "SWPI" => 422,
-        "SWPI-C" => 423,
-        "SWPI-Q" => 424,
-        "TA" => 425,
+        "RFA" => 420,
+        "RR" => 421,
+        "RRRR" => 422,
+        "SWPI" => 423,
+        "SWPI-C" => 424,
+        "SWPI-Q" => 425,
+        "TA" => 426,
 
         // Escrow Documents — alphabetical
         "APRL" => 600,
@@ -2772,6 +2773,21 @@ const BUSINESS_OP_PURCHASE: &[DefaultItem] = &[
     item("WOO", FormGroup::ReleaseDisclosures, false),
 ];
 
+// Referral — a referral-fee deal, not a property file. The brokerage
+// refers the client out and papers the fee: the Referral Fee Agreement
+// is the deal's core document, and the fee's payout (commission
+// instructions + the other side's closing statement) is the compliance
+// evidence. Side-independent on purpose — you can refer a buyer or a
+// seller and the paperwork is identical — and every item sits in a
+// fixed group so the DB seed's one-group-per-form invariant holds
+// across all (side × condition) combinations.
+const REFERRAL_ANY_SIDE: &[DefaultItem] = &[
+    item("RFA", FormGroup::AdditionalDisclosures, true),
+    item("ADM", FormGroup::AdditionalDisclosures, false),
+    item("COMM", FormGroup::EscrowDocuments, true),
+    item("CLSD", FormGroup::EscrowDocuments, true),
+];
+
 // Multi-Family — hidden from the new-transaction picker but kept here so
 // any old persisted rows still seed a sensible checklist. Lands in the
 // listing-contract bucket since the dual-side fallback uses listing
@@ -2920,6 +2936,10 @@ fn defaults_for(t: TransactionType, side: SalesSide) -> Vec<DefaultItem> {
         (TransactionType::BusinessOpportunity, SalesSide::Both) => {
             merge_sides(BUSINESS_OP_LISTING, BUSINESS_OP_PURCHASE)
         }
+
+        // Referral: the same minimal fee-paperwork checklist regardless
+        // of which side the client was referred from.
+        (TransactionType::Referral, _) => REFERRAL_ANY_SIDE.to_vec(),
 
         // Multi-Family: no per-side PDFs yet; serve the combined fallback
         // for every sales type so the broker still gets a usable checklist.

@@ -10,6 +10,15 @@ the bottom-right of every page.
 
 ### v0.4.0 — Live search, real-time fixes, team exports, and the full CAR catalog
 
+- **New "Referral" transaction type.** Referral-fee deals no longer
+  have to masquerade as Residential with a 60-item property checklist.
+  Pick Transaction Type → Referral and the checklist is the fee
+  paperwork: Referral Fee Agreement (required), Commission
+  Instructions and Closing Statement (required), plus an optional
+  Addendum slot — the same regardless of which side the client was
+  referred from. Admins can tailor which forms apply to referrals via
+  the new Referral checkbox in every form's applicability picker.
+
 - **Search-as-you-type actually works now.** On the Transactions page,
   typing in the search box used to reload the whole page — which froze
   mid-word and threw your cursor out of the box. Results now update

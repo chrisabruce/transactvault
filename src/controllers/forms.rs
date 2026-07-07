@@ -56,6 +56,7 @@ pub const APPLIES_TYPES: &[(&str, &str)] = &[
     ("business_opportunity", "Business Opportunity"),
     ("commercial_lease", "Commercial Lease"),
     ("rental_lease", "Rental / Lease"),
+    ("referral", "Referral"),
 ];
 pub const APPLIES_SIDES: &[(&str, &str)] = &[
     ("listing", "Listing"),
@@ -90,6 +91,8 @@ pub struct AppliesPicker {
     pub type_commercial_lease: Option<String>,
     #[serde(default)]
     pub type_rental_lease: Option<String>,
+    #[serde(default)]
+    pub type_referral: Option<String>,
 
     #[serde(default)]
     pub side_listing: Option<String>,
@@ -131,6 +134,9 @@ impl AppliesPicker {
         }
         if self.type_rental_lease.is_some() {
             v.push("rental_lease".into());
+        }
+        if self.type_referral.is_some() {
+            v.push("referral".into());
         }
         v
     }
@@ -457,6 +463,8 @@ pub struct CustomFormInput {
     #[serde(default)]
     pub type_rental_lease: Option<String>,
     #[serde(default)]
+    pub type_referral: Option<String>,
+    #[serde(default)]
     pub side_listing: Option<String>,
     #[serde(default)]
     pub side_purchase: Option<String>,
@@ -482,6 +490,7 @@ impl CustomFormInput {
             type_business_opportunity: self.type_business_opportunity.clone(),
             type_commercial_lease: self.type_commercial_lease.clone(),
             type_rental_lease: self.type_rental_lease.clone(),
+            type_referral: self.type_referral.clone(),
             side_listing: self.side_listing.clone(),
             side_purchase: self.side_purchase.clone(),
             side_both: self.side_both.clone(),
@@ -978,6 +987,8 @@ pub struct NewAdminFormInput {
     #[serde(default)]
     pub type_rental_lease: Option<String>,
     #[serde(default)]
+    pub type_referral: Option<String>,
+    #[serde(default)]
     pub side_listing: Option<String>,
     #[serde(default)]
     pub side_purchase: Option<String>,
@@ -1003,6 +1014,7 @@ impl NewAdminFormInput {
             type_business_opportunity: self.type_business_opportunity.clone(),
             type_commercial_lease: self.type_commercial_lease.clone(),
             type_rental_lease: self.type_rental_lease.clone(),
+            type_referral: self.type_referral.clone(),
             side_listing: self.side_listing.clone(),
             side_purchase: self.side_purchase.clone(),
             side_both: self.side_both.clone(),
@@ -1481,6 +1493,8 @@ pub struct EditAdminFormInput {
     #[serde(default)]
     pub type_rental_lease: Option<String>,
     #[serde(default)]
+    pub type_referral: Option<String>,
+    #[serde(default)]
     pub side_listing: Option<String>,
     #[serde(default)]
     pub side_purchase: Option<String>,
@@ -1506,6 +1520,7 @@ impl EditAdminFormInput {
             type_business_opportunity: self.type_business_opportunity.clone(),
             type_commercial_lease: self.type_commercial_lease.clone(),
             type_rental_lease: self.type_rental_lease.clone(),
+            type_referral: self.type_referral.clone(),
             side_listing: self.side_listing.clone(),
             side_purchase: self.side_purchase.clone(),
             side_both: self.side_both.clone(),

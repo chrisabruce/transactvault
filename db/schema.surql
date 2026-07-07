@@ -285,7 +285,7 @@ DEFINE FIELD OVERWRITE transaction_type        ON transaction TYPE string DEFAUL
     ASSERT $value IN [
         "residential", "commercial", "multi_family", "vacant_lots_land",
         "manufactured_home", "business_opportunity",
-        "commercial_lease", "rental_lease"
+        "commercial_lease", "rental_lease", "referral"
     ];
 DEFINE FIELD OVERWRITE special_sales_condition ON transaction TYPE string DEFAULT "none"
     ASSERT $value IN ["none", "probate", "short_sale", "reo"];
