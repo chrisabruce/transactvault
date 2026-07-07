@@ -624,6 +624,20 @@ fn stat_patch_event(html: &str) -> SseEvent {
         .data(data)
 }
 
+/// Bump the client's `txrev` signal — the "your rows are stale" nudge.
+/// The transactions list has a `data-on-signal-patch` listener filtered
+/// to `txrev` that re-fetches the results fragment with its CURRENT
+/// filter + live-typed query (signals ride along on the @get), which is
+/// why the server sends a version bump instead of rendered rows: it
+/// can't know what the user has typed since the stream opened. The
+/// value is a per-connection counter — it only needs to CHANGE, since
+/// Datastar's fine-grained signals skip no-op patches.
+fn tx_rev_event(rev: u64) -> SseEvent {
+    SseEvent::default()
+        .event("datastar-patch-signals")
+        .data(format!("signals {{\"txrev\":{rev}}}"))
+}
+
 /// `GET /app/stats/stream` — Server-Sent Events stream that pushes a
 /// fresh stat-grid fragment whenever some other action inside the
 /// subscriber's brokerage shifts their dashboard numbers. Replaces the
@@ -693,6 +707,11 @@ pub async fn stats_stream(
 
         let mut current_brokerage = initial_brokerage;
         let mut current_role = initial_role;
+        // Rows-refresh version counter. NOT bumped for the initial
+        // event: the page just rendered fresh rows, and stream
+        // reconnects would otherwise trigger a pointless re-fetch on
+        // every page load.
+        let mut rev: u64 = 0;
 
         loop {
             use tokio::sync::broadcast::error::RecvError;
@@ -743,7 +762,9 @@ pub async fn stats_stream(
             )
             .await
             {
+                rev += 1;
                 yield Ok(stat_patch_event(&html));
+                yield Ok(tx_rev_event(rev));
             }
         }
     };

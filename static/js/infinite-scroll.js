@@ -91,6 +91,12 @@
                 newRows.forEach(function (row) {
                     container.insertBefore(row, sentinel);
                 });
+                // Flag consumed pagination — the transactions page's
+                // live-rows listener skips its silent refresh once the
+                // user has scrolled past page one, so their position
+                // isn't yanked away. A live-search swap replaces the
+                // container and naturally resets the flag.
+                container.dataset.paginated = "1";
                 sentinel.parentNode.removeChild(sentinel);
                 inFlight.delete(url);
                 // The insertion above triggers the MutationObserver,

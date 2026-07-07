@@ -2117,6 +2117,14 @@ async fn transactions_page_wires_live_stream_and_live_search() {
         !body.contains("data-on-load"),
         "data-on-load matches no RC.6 plugin — it must not reappear"
     );
+    assert!(
+        body.contains("data-on-signal-patch__debounce"),
+        "live-rows listener must react to the stream's txrev signal"
+    );
+    assert!(
+        body.contains(r#"data-on-signal-patch-filter="{include: /^txrev$/}""#),
+        "live-rows listener must be filtered to txrev so typing (q patches) never triggers it"
+    );
 }
 
 /// The Add-an-item picker offers the whole CAR catalog — including
@@ -2682,5 +2690,85 @@ async fn dev_reset_then_reseed_rebuilds_full_catalog() {
         clr_count.map(|c| c.count).unwrap_or(0),
         1,
         "a full reset forgets pre-reset deletions — CLR is back"
+    );
+}
+
+/// After a brokerage mutation, the stats stream pushes BOTH the
+/// stat-grid element patch AND a `datastar-patch-signals` event bumping
+/// `txrev` — the signal the transactions page listens for to re-fetch
+/// its visible rows. No `txrev` on the initial connect event (rows just
+/// rendered; reconnects shouldn't re-fetch for nothing).
+#[tokio::test]
+async fn stats_stream_pushes_row_refresh_signal_on_mutation() {
+    use axum::body::Body;
+    use axum::extract::ConnectInfo;
+    use axum::http::Request;
+    use http_body_util::BodyExt;
+    use std::net::SocketAddr;
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    join(&app.state, &broker, &b, "broker").await;
+    seed_tx(&app.state, &b, Some(&broker)).await;
+
+    let cookie = session_cookie(&app, &broker);
+    let mut req = Request::builder()
+        .uri("/app/stats/stream")
+        .header("cookie", cookie)
+        .body(Body::empty())
+        .expect("build request");
+    req.extensions_mut().insert(ConnectInfo::<SocketAddr>(
+        "127.0.0.1:0".parse().expect("loopback addr"),
+    ));
+    let response = app
+        .router
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("router oneshot");
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut body = response.into_body();
+
+    // Drain the initial connect event, then fire a mutation.
+    let mut buf = String::new();
+    let started = std::time::Instant::now();
+    while started.elapsed() < Duration::from_millis(500) && !buf.contains("stat-grid") {
+        if let Ok(Some(Ok(frame))) = timeout(Duration::from_millis(250), body.frame()).await {
+            if let Some(data) = frame.data_ref() {
+                buf.push_str(&String::from_utf8_lossy(data));
+            }
+        } else {
+            break;
+        }
+    }
+    assert!(
+        !buf.contains("txrev"),
+        "initial connect must NOT bump txrev; saw: {buf:?}"
+    );
+
+    app.state
+        .events
+        .publish(crate::events::Event::BrokerageMutation(b.clone()));
+
+    let started = std::time::Instant::now();
+    while started.elapsed() < Duration::from_secs(2) && !buf.contains("txrev") {
+        if let Ok(Some(Ok(frame))) = timeout(Duration::from_millis(500), body.frame()).await {
+            if let Some(data) = frame.data_ref() {
+                buf.push_str(&String::from_utf8_lossy(data));
+            }
+        } else {
+            break;
+        }
+    }
+    assert!(
+        buf.contains("event: datastar-patch-signals"),
+        "mutation should push a signals patch; saw: {buf:?}"
+    );
+    assert!(
+        buf.contains(r#"data: signals {"txrev":1}"#),
+        "signals patch should bump txrev to 1; saw: {buf:?}"
     );
 }

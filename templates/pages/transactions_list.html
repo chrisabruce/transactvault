@@ -44,6 +44,22 @@
 
     {% include "partials/tx_toolbar.html" %}
 
+    {# Live rows. The stream above bumps the `txrev` signal on every
+       brokerage mutation (datastar-patch-signals); this listener
+       re-fetches the results fragment so the list itself updates —
+       not just the stat cards. Details that matter:
+       - the filter attribute restricts it to `txrev`, so the search
+         box patching `q` as you type never triggers it;
+       - the current `q` signal rides along on the @get, so a refresh
+         mid-search re-renders YOUR filtered view, never someone
+         else's idea of the list;
+       - the querySelector guard skips the refresh once the user has
+         infinite-scrolled past page one — silently resetting them to
+         page one would yank their scroll position;
+       - debounce coalesces mutation bursts into one re-fetch. #}
+    <div data-on-signal-patch__debounce.500ms="!document.querySelector('[data-infinite-list][data-paginated]') && @get('{{ live_results_url }}')"
+         data-on-signal-patch-filter="{include: /^txrev$/}"></div>
+
     {% include "partials/tx_results.html" %}
 </main>
 <script src="/static/js/infinite-scroll.js" defer></script>

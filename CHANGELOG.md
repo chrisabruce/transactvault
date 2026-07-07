@@ -25,6 +25,13 @@ the bottom-right of every page.
   build we ship, and pinned by regression tests. Numbers update
   instantly as your team works — approvals, uploads, comments, new
   transactions, status changes.
+- **The transaction list itself updates live too — not just the stat
+  cards.** When anything changes in your brokerage (a transaction
+  created or deleted, a status change, an approval), the visible rows
+  quietly re-fetch and update in place, respecting whatever you've
+  typed in the search box and your current filters. If you've
+  scrolled deep into a long list, the refresh politely waits rather
+  than yanking you back to the top.
 - **All 10 missing CAR forms are in the Add-an-item list**, including
   the four forms CAR released in June 2026: PRBS-B, PRBS-S, SWPI-C,
   and SWPI-Q. The picker now shows the complete CAR catalog — forms
