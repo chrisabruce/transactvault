@@ -1038,7 +1038,7 @@ async fn invite_accept_for_brand_new_user_creates_account() {
     assert!(
         status.is_redirection() || status.is_success(),
         "got {status} body={}",
-        &body.chars().take(2000).collect::<String>()
+        body.chars().take(2000).collect::<String>()
     );
 
     // The user row exists.
@@ -3173,4 +3173,73 @@ async fn engine_criteria_sync_repairs_stale_databases() {
         "recreated rows carry engine applicability; got {:?}",
         rlmm[0].applies_types
     );
+}
+
+/// A signed-out BROWSER NAVIGATION to an authenticated page redirects
+/// to /login (the incognito / fresh-machine / expired-session case)
+/// while programmatic requests — Datastar streams, fragment fetches —
+/// keep their plain 401, since a redirect would hand them login-page
+/// HTML to morph into the results region. Public pages stay public.
+#[tokio::test]
+async fn signed_out_navigation_redirects_to_login_but_fetches_get_401() {
+    let app = make_app().await;
+
+    // Browser navigation (Sec-Fetch-Mode: navigate) → login redirect.
+    let req = Request::builder()
+        .uri("/app/transactions")
+        .header("sec-fetch-mode", "navigate")
+        .header("accept", "text/html,application/xhtml+xml")
+        .body(Body::empty())
+        .unwrap();
+    let (status, _) = send(&app, req).await;
+    assert_eq!(
+        status,
+        StatusCode::SEE_OTHER,
+        "navigations should bounce to /login, not render a 401 page"
+    );
+
+    // Same for /admin.
+    let req = Request::builder()
+        .uri("/admin/forms")
+        .header("sec-fetch-mode", "navigate")
+        .header("accept", "text/html")
+        .body(Body::empty())
+        .unwrap();
+    let (status, _) = send(&app, req).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+
+    // A programmatic fetch (Sec-Fetch-Mode: cors — what fetch() and
+    // Datastar's SSE client send) keeps the 401.
+    let req = Request::builder()
+        .uri("/app/transactions?fragment=results")
+        .header("sec-fetch-mode", "cors")
+        .header("accept", "text/event-stream, text/html, application/json")
+        .header("datastar-request", "true")
+        .body(Body::empty())
+        .unwrap();
+    let (status, _) = send(&app, req).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // Legacy client without Sec-Fetch metadata but marked by Datastar
+    // also keeps the 401.
+    let req = Request::builder()
+        .uri("/app/stats/stream")
+        .header("accept", "text/event-stream, text/html, application/json")
+        .header("datastar-request", "true")
+        .body(Body::empty())
+        .unwrap();
+    let (status, _) = send(&app, req).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // Public pages are untouched — a cookie-less visitor gets the
+    // landing page.
+    let req = Request::builder()
+        .uri("/")
+        .header("sec-fetch-mode", "navigate")
+        .header("accept", "text/html")
+        .body(Body::empty())
+        .unwrap();
+    let (status, body) = send(&app, req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("<html"));
 }

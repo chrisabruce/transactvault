@@ -59,6 +59,11 @@ the bottom-right of every page.
   than yanking you back to the top. This works across roles — an
   agent's window follows changes a broker makes, scoped to what the
   agent is allowed to see.
+- **Signed-out visitors land on the login page, not an error.**
+  Opening an app link without a session — incognito window, new
+  device, expired login — used to show a bare "401 — Please sign in
+  to continue" error page. Browser navigations to any app or admin
+  page now redirect straight to the login screen.
 - **Long-lived tabs no longer go quietly deaf.** Previously, if the
   server was unreachable for a couple of minutes (a deploy, a
   restart), an open tab would stop retrying its live connection and

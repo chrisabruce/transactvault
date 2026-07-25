@@ -8,7 +8,7 @@ use std::time::Duration;
 use axum::Router;
 use axum::extract::Request;
 use axum::middleware::{Next, from_fn};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use tower_cookies::CookieManagerLayer;
 use tower_http::compression::CompressionLayer;
@@ -190,6 +190,10 @@ pub fn build(state: AppState) -> Router {
                 .on_response(DefaultOnResponse::new().level(Level::INFO))
                 .on_failure(DefaultOnFailure::new().level(Level::ERROR)),
         )
+        // Signed-out visitors navigating to an authenticated page get
+        // the login screen, not a bare 401 error page. See the fn doc
+        // for why only NAVIGATIONS are rewritten.
+        .layer(from_fn(redirect_unauthenticated))
         // Safety-net 5xx logger. `AppError::IntoResponse` already logs
         // every internal error it produces, but any response with a
         // 5xx status — including ones synthesized by middleware, body
@@ -213,6 +217,47 @@ pub fn build(state: AppState) -> Router {
             axum::http::StatusCode::GATEWAY_TIMEOUT,
             Duration::from_secs(60),
         ))
+}
+
+/// Turn a 401 on an `/app/*` or `/admin/*` BROWSER NAVIGATION into a
+/// redirect to `/login`. Without this, opening a bookmarked app URL in
+/// a fresh browser (incognito, new machine, expired session) lands on
+/// a bare "401 — Please sign in to continue" error page instead of the
+/// login screen.
+///
+/// Only navigations are rewritten. Programmatic requests — the
+/// Datastar stats stream, live-search fragment fetches, infinite
+/// scroll — must keep their plain 401: a redirect would hand them the
+/// login page's HTML, which Datastar would happily morph into the
+/// results region. Detection:
+/// - `Sec-Fetch-Mode: navigate` (every modern browser sends it on real
+///   navigations; fetch()/EventSource send `cors`/`same-origin`);
+/// - fallback for clients without Sec-Fetch metadata: an
+///   `Accept: text/html` request that is NOT marked by Datastar's
+///   `Datastar-Request` header.
+async fn redirect_unauthenticated(req: Request, next: Next) -> Response {
+    let gated_path = {
+        let p = req.uri().path();
+        p.starts_with("/app") || p.starts_with("/admin")
+    };
+    let is_navigation = match req.headers().get("sec-fetch-mode") {
+        Some(mode) => mode.as_bytes() == b"navigate",
+        None => {
+            !req.headers().contains_key("datastar-request")
+                && req
+                    .headers()
+                    .get(axum::http::header::ACCEPT)
+                    .and_then(|v| v.to_str().ok())
+                    .map(|a| a.contains("text/html"))
+                    .unwrap_or(false)
+        }
+    };
+
+    let response = next.run(req).await;
+    if gated_path && is_navigation && response.status() == axum::http::StatusCode::UNAUTHORIZED {
+        return axum::response::Redirect::to("/login").into_response();
+    }
+    response
 }
 
 /// Catch-all 5xx logger. Wraps every handler so a server-error
