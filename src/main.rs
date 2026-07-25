@@ -55,9 +55,15 @@ async fn main() -> anyhow::Result<()> {
         "starting TransactVault"
     );
 
-    let db = db::connect(&config)
-        .await
-        .context("connecting to SurrealDB")?;
+    // Arc-wrapped immediately: one shared handle = ONE SurrealDB
+    // session for the whole app. See the `state::Db` doc for why this
+    // matters (per-clone sessions raced registration and produced
+    // intermittent "Session not found" 500s).
+    let db: crate::state::Db = std::sync::Arc::new(
+        db::connect(&config)
+            .await
+            .context("connecting to SurrealDB")?,
+    );
 
     // DEV-ONLY: destructive reset. Opt-in via the literal phrase
     // `DEV_RESET_ON_BOOT=yes-destroy-all-data`. Order:
@@ -109,6 +115,36 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let state = AppState::new(db, storage, mailer, stripe_client, config.clone());
+
+    // Database heartbeat. The SDK's WS engine already sends protocol
+    // pings and auto-reconnects (verified in surrealdb 3.2.3 source:
+    // `PING_INTERVAL` + `router_reconnect`), so this is NOT about
+    // keeping TCP alive. Its job is end-to-end verification: a real
+    // RPC round-trip exercises the session layer that raw pings skip,
+    // so a broken session or half-dead router is detected — and
+    // triggers the SDK's recovery — between user requests instead of
+    // on someone's signup, and degradation shows up in the logs with
+    // a timestamp. No-op overhead on embedded engines.
+    {
+        let db = state.db.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(45));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            // The first tick fires immediately; skip it — boot just
+            // proved the connection works.
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                if let Err(e) = db.query("RETURN 1").await {
+                    tracing::warn!(
+                        error = %e,
+                        "database heartbeat failed — the connection will re-establish"
+                    );
+                }
+            }
+        });
+    }
+
     let app = router::build(state);
 
     let addr: SocketAddr = format!("{}:{}", config.host, config.port).parse()?;

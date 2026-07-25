@@ -59,6 +59,16 @@ the bottom-right of every page.
   than yanking you back to the top. This works across roles — an
   agent's window follows changes a broker makes, scoped to what the
   agent is allowed to see.
+- **Fixed the intermittent "something went wrong" errors (500s).**
+  Root cause: SurrealDB's v3 driver changed what cloning the client
+  means — every clone opens its own database session, registered in
+  the background — and the app was unknowingly creating one per
+  request, occasionally racing its own session setup ("Session not
+  found"). The app now shares a single session for its lifetime,
+  which is the driver's documented recommendation, and a background
+  heartbeat verifies the database link every 45 seconds so any
+  degradation is detected and healed between requests, with a log
+  trail.
 - **Readable production logs.** Human-readable log output
   (`PRETTY_LOGS=true`) is now the compose default and no longer
   spews ANSI color codes when running in a container — Dokploy's log

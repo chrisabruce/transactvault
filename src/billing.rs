@@ -365,7 +365,7 @@ mod tests {
             .expect("mem connect");
         db.use_ns("test").use_db("test").await.expect("use ns/db");
         crate::db::apply_schema(&db).await.expect("apply schema");
-        db
+        std::sync::Arc::new(db)
     }
 
     /// Insert a brokerage with the given fields and return its id. Uses
