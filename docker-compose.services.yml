@@ -18,7 +18,12 @@
 
 services:
     tv-surrealdb:
-        image: surrealdb/surrealdb:latest
+        # Pinned exactly — `:latest` on a database means every redeploy
+        # of this compose can silently jump versions. Before bumping:
+        # check what's running (`docker exec tv-surrealdb /surreal
+        # version`) and take an export; in-major v3.x upgrades are
+        # data-compatible.
+        image: surrealdb/surrealdb:v3.2.3
         container_name: tv-surrealdb
         restart: unless-stopped
         user: "0:0"
@@ -37,7 +42,15 @@ services:
             - dokploy-network
 
     tv-rustfs:
-        image: rustfs/rustfs:latest
+        # Pinned exactly (was `:latest` — RustFS has since moved from the
+        # alpha series to 1.0.0-beta.x). ⚠️ Before redeploying this on a
+        # host with real documents: check the currently-running image
+        # (`docker inspect --format '{{.Config.Image}}' tv-rustfs`) and
+        # back up the bucket — alpha→beta data-directory compatibility
+        # is NOT guaranteed. Production is slated to move to a 3rd-party
+        # S3 provider anyway; consider doing that move instead of
+        # upgrading rustfs in place.
+        image: rustfs/rustfs:1.0.0-beta.11
         container_name: tv-rustfs
         restart: unless-stopped
         user: "0:0"

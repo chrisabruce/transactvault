@@ -7,7 +7,10 @@ services:
   #                     or set them to ports you've reserved.
 
   surrealdb:
-    image: surrealdb/surrealdb:v3
+    # Pinned exactly — a database on a floating tag silently jumps
+    # versions on every pull. Bump deliberately (in-major v3.x upgrades
+    # are data-compatible; export first anyway).
+    image: surrealdb/surrealdb:v3.2.3
     restart: unless-stopped
     # Run as root in the container. The `surrealdb` image's non-root default
     # collides with named-volume ownership on some Docker hosts (Dokploy
@@ -34,14 +37,19 @@ services:
       - surreal-data:/data
 
   rustfs:
-    image: rustfs/rustfs:latest
+    # Pinned exactly (was `:latest`, which had drifted from
+    # 1.0.0-alpha.83 to the beta series). Boot + bucket-create verified
+    # against the app's storage layer on 2026-07-25. If rustfs fails to
+    # start after a version bump over an old data volume, wipe the
+    # local `rustfs-data` volume — dev objects are disposable.
+    image: rustfs/rustfs:1.0.0-beta.11
     restart: unless-stopped
     # Same reasoning as surrealdb — sidestep the host-volume UID clash.
     user: "0:0"
     environment:
-      # The rustfs/rustfs:latest image (v1.0.0-alpha.83) reads *_ACCESS_KEY /
-      # *_SECRET_KEY — the older *_ROOT_USER / *_ROOT_PASSWORD env vars are
-      # silently ignored and the server falls back to the default admin creds.
+      # beta.11 still reads *_ACCESS_KEY / *_SECRET_KEY (verified) —
+      # the older *_ROOT_USER / *_ROOT_PASSWORD env vars are silently
+      # ignored and the server falls back to the default admin creds.
       RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
       RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
       RUSTFS_ADDRESS: 0.0.0.0:9000
