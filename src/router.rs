@@ -13,7 +13,7 @@ use axum::routing::{get, post};
 use tower_cookies::CookieManagerLayer;
 use tower_http::compression::CompressionLayer;
 use tower_http::services::ServeDir;
-use tower_http::trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse, TraceLayer};
+use tower_http::trace::{DefaultOnFailure, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 
 use crate::controllers::{
@@ -31,6 +31,8 @@ pub fn build(state: AppState) -> Router {
         .route("/signup", get(auth::signup_form).post(auth::signup))
         .route("/signup/check-email", get(auth::signup_check_email))
         .route("/verify/{token}", get(auth::verify))
+        .route("/forgot", get(auth::forgot_form).post(auth::forgot))
+        .route("/reset/{token}", get(auth::reset_form).post(auth::reset))
         .route("/logout", post(auth::logout))
         .route(
             "/invite/{token}",
@@ -106,7 +108,14 @@ pub fn build(state: AppState) -> Router {
         )
         .route("/app/profile", get(profile::show).post(profile::update))
         .route("/app/profile/password", post(profile::change_password))
-        .route("/app/profile/avatar", post(profile::upload_avatar))
+        // Avatar uploads get their own small body limit. The handler
+        // rejects >8 MB, but only AFTER buffering the whole field, so
+        // without this every request could pin the global 100 MB cap.
+        .route(
+            "/app/profile/avatar",
+            post(profile::upload_avatar)
+                .layer(axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024)),
+        )
         .route("/app/profile/avatar/delete", post(profile::delete_avatar))
         .route("/app/users/{key}/avatar", get(profile::serve_avatar))
         .route("/app/subscribe/{slug}", get(subscribe::subscribe))
@@ -172,22 +181,38 @@ pub fn build(state: AppState) -> Router {
         .route("/admin/errors", get(admin::error_log))
         .route("/admin/changelog", get(admin::changelog));
 
-    Router::new()
+    let base = Router::new()
         .merge(public)
         .merge(app)
         .merge(admin_routes)
         .route("/webhooks/stripe", post(webhooks::stripe))
-        .route("/healthcheck", get(health::healthcheck))
-        .nest_service("/static", ServeDir::new("static"))
+        .route("/healthcheck", get(health::healthcheck));
+
+    // A route that always panics, so tests can assert what the panic
+    // path actually returns through the real middleware stack. Compiled
+    // out of every non-test build.
+    #[cfg(test)]
+    let base = base.route("/__test/panic", get(always_panics));
+
+    base.nest_service("/static", ServeDir::new("static"))
         .layer(CookieManagerLayer::new())
         .layer(CompressionLayer::new())
         .layer(
             TraceLayer::new_for_http()
-                .make_span_with(
-                    DefaultMakeSpan::new()
-                        .level(Level::INFO)
-                        .include_headers(false),
-                )
+                // Custom span instead of `DefaultMakeSpan`, purely to
+                // keep secrets out of the highest-volume log we emit:
+                // the default records the raw `uri`, and reset / verify
+                // / invite tokens travel as path segments, so every one
+                // of those links was printed in full at INFO on the
+                // request that used it.
+                .make_span_with(|req: &Request| {
+                    tracing::info_span!(
+                        "request",
+                        method = %req.method(),
+                        uri = %crate::sanitize::redact_secret_path(req.uri().path()),
+                        version = ?req.version(),
+                    )
+                })
                 .on_response(DefaultOnResponse::new().level(Level::INFO))
                 .on_failure(DefaultOnFailure::new().level(Level::ERROR)),
         )
@@ -195,6 +220,13 @@ pub fn build(state: AppState) -> Router {
         // the login screen, not a bare 401 error page. See the fn doc
         // for why only NAVIGATIONS are rewritten.
         .layer(from_fn(redirect_unauthenticated))
+        // CSRF: reject state-changing requests a browser reports as
+        // coming from another site. Sits above the handlers so it runs
+        // before any extractor or DB work.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            reject_cross_site_writes,
+        ))
         // Safety-net 5xx logger. `AppError::IntoResponse` already logs
         // every internal error it produces, but any response with a
         // 5xx status — including ones synthesized by middleware, body
@@ -220,12 +252,225 @@ pub fn build(state: AppState) -> Router {
             state.clone(),
             crate::audit::capture_errors,
         ))
-        .with_state(state)
+        .with_state(state.clone())
         .layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024))
         .layer(tower_http::timeout::TimeoutLayer::with_status_code(
             axum::http::StatusCode::GATEWAY_TIMEOUT,
             Duration::from_secs(60),
         ))
+        // Baseline security headers on every response (CSP,
+        // frame-ancestors, nosniff, referrer policy, HSTS on https).
+        //
+        // Deliberately the OUTERMOST layer. `.layer()` calls wrap the
+        // ones added before them, so while this sat further up the list
+        // it ran inside `CatchPanicLayer` and `TimeoutLayer` — meaning
+        // the two response kinds those layers synthesize, a panic-500
+        // and a 504, were the only ones served with no CSP, no
+        // `nosniff`, no `X-Frame-Options` and no HSTS. Out here it sees
+        // every response, however it was produced.
+        .layer(axum::middleware::from_fn_with_state(
+            state,
+            security_headers,
+        ))
+}
+
+/// Reject state-changing requests that a browser tells us came from
+/// another site.
+///
+/// The app authenticates with a cookie and every form is a plain
+/// `<form method="post">` with no CSRF token, so `SameSite=Lax` was the
+/// only thing preventing cross-site POSTs. Lax is scoped to the
+/// registrable domain, not the origin, which leaves two real holes:
+/// any sibling subdomain (`blog.`, a staging box, anything with a
+/// wildcard DNS record) counts as *same-site* and could POST to
+/// `/app/team/delete-brokerage` with the session cookie attached.
+///
+/// Fetch Metadata closes that without per-form tokens: browsers send
+/// `Sec-Fetch-Site` on every request and it cannot be forged by page
+/// script. We allow only `same-origin` (our own pages) and `none`
+/// (typed/bookmarked), which rejects `cross-site` AND `same-site`.
+///
+/// Non-browser clients send no `Sec-Fetch-Site` — we fall back to
+/// comparing `Origin` against `BASE_URL`, and allow the request when
+/// neither header is present. That is deliberate: it keeps the Stripe
+/// webhook (`POST /webhooks/stripe`, authenticated by signature) and
+/// any future API client working, while browsers — the only things
+/// that carry ambient cookies — are always covered.
+/// Handler behind the test-only `/__test/panic` route.
+///
+/// Lets the test suite assert what a panicking handler actually returns
+/// through the real middleware stack — notably that `security_headers`
+/// still decorates the 500 `CatchPanicLayer` synthesizes.
+#[cfg(test)]
+async fn always_panics() -> Response {
+    panic!("deliberate test panic")
+}
+
+/// Reduce a URL to its bare `scheme://host[:port]`, lowercased.
+///
+/// `BASE_URL` may carry a trailing slash or a path; an `Origin` header
+/// never does, but normalizing both sides means the comparison can't be
+/// broken by a stray slash in configuration.
+fn origin_of(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    if authority.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "{}://{}",
+        scheme.to_ascii_lowercase(),
+        authority.to_ascii_lowercase()
+    ))
+}
+
+/// True when `origin` names exactly the same origin as `base_url`.
+///
+/// Substring and prefix comparisons are unsafe here in both directions:
+/// `starts_with(origin)` accepts a shorter attacker domain that happens
+/// to prefix ours, and `contains` would accept
+/// `https://app.example.com.evil.test`. Only full equality of the
+/// normalized `scheme://host[:port]` triple is sound.
+pub(crate) fn origin_matches(base_url: &str, origin: &str) -> bool {
+    match (origin_of(base_url), origin_of(origin)) {
+        (Some(a), Some(b)) => a == b,
+        // An unparseable origin (including the literal `null` that
+        // sandboxed iframes and some redirects send) is never a match.
+        _ => false,
+    }
+}
+
+async fn reject_cross_site_writes(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let unsafe_method = matches!(
+        *req.method(),
+        axum::http::Method::POST
+            | axum::http::Method::PUT
+            | axum::http::Method::PATCH
+            | axum::http::Method::DELETE
+    );
+    if !unsafe_method {
+        return next.run(req).await;
+    }
+
+    // Read both headers up front so nothing borrows `req` across the
+    // move into `next.run`.
+    let fetch_site = req
+        .headers()
+        .get("sec-fetch-site")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    let origin = req
+        .headers()
+        .get(axum::http::header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    let described = format!("{} {}", req.method(), req.uri().path());
+
+    let allowed = match fetch_site.as_deref() {
+        Some("same-origin") | Some("none") => true,
+        // `cross-site` and `same-site` are both rejected — see the doc
+        // comment on why same-site is not good enough here.
+        Some(_) => false,
+        None => match origin.as_deref() {
+            // Exact `scheme://host[:port]` equality, both sides normalized.
+            //
+            // This was `base_url.starts_with(origin)`, which asks the
+            // question backwards: it accepts any origin that is a *prefix*
+            // of BASE_URL. With BASE_URL `https://app.transactvault.com`,
+            // an attacker holding the real domain `app.transactvault.co`
+            // passed — as did `https://app` and `https:`.
+            Some(origin) => origin_matches(&state.config.base_url, origin),
+            None => true,
+        },
+    };
+
+    if allowed {
+        next.run(req).await
+    } else {
+        tracing::warn!(request = %described, "blocked cross-site state-changing request");
+        (
+            axum::http::StatusCode::FORBIDDEN,
+            axum::response::Html(
+                "<!doctype html><title>403</title><h1>403</h1>\
+                 <p>This request looked like it came from another site, so it was blocked. \
+                 If you reached this page normally, please go back and try again.</p>",
+            ),
+        )
+            .into_response()
+    }
+}
+
+/// Attach baseline security headers to every response.
+///
+/// - `frame-ancestors` / `X-Frame-Options` stop clickjacking, which was
+///   wide open: a hostile page could frame the app and trick a signed-in
+///   broker into clicking Approve or Delete.
+/// - `form-action 'self'` stops an injected form from posting the user's
+///   data off-site; `base-uri 'self'` stops `<base>` hijacking of every
+///   relative URL on the page.
+/// - HSTS is emitted **only** when BASE_URL is https, because the header
+///   is sticky in browsers — shipping it from a local http build would
+///   poison the developer's browser for that host.
+///
+/// `style-src` includes jsDelivr because the avatar cropper ships a
+/// stylesheet from there (`pages/profile.html`) — omitting it silently
+/// rendered the cropper unstyled. Both CDN assets carry SRI hashes, so
+/// a compromised CDN cannot substitute different bytes.
+///
+/// The script policy is honest about what this app needs: Datastar
+/// compiles its `data-*` expressions with the `Function` constructor
+/// (`'unsafe-eval'`), the templates carry inline `<script>` blocks
+/// (`'unsafe-inline'`), and the bundle is served from jsDelivr. So CSP
+/// is defense in depth here, not an XSS cure — the cure is not
+/// interpolating untrusted data into those sinks (see
+/// `canonical_status_filter`). Self-hosting the bundle and moving the
+/// inline blocks into files would let this tighten considerably.
+async fn security_headers(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    req: Request,
+    next: Next,
+) -> Response {
+    use axum::http::HeaderValue;
+
+    let https = state.config.base_url.starts_with("https://");
+    let mut response = next.run(req).await;
+    let headers = response.headers_mut();
+
+    headers.insert(
+        "content-security-policy",
+        HeaderValue::from_static(
+            "default-src 'self'; \
+             script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; \
+             style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; \
+             img-src 'self' data:; \
+             connect-src 'self'; \
+             font-src 'self'; \
+             object-src 'none'; \
+             base-uri 'self'; \
+             form-action 'self'; \
+             frame-ancestors 'none'",
+        ),
+    );
+    headers.insert("x-frame-options", HeaderValue::from_static("DENY"));
+    headers.insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        "referrer-policy",
+        HeaderValue::from_static("strict-origin-when-cross-origin"),
+    );
+    if https {
+        headers.insert(
+            "strict-transport-security",
+            HeaderValue::from_static("max-age=31536000; includeSubDomains"),
+        );
+    }
+    response
 }
 
 /// Turn a 401 on an `/app/*` or `/admin/*` BROWSER NAVIGATION into a
@@ -281,10 +526,18 @@ async fn log_5xx(req: Request, next: Next) -> Response {
     let response = next.run(req).await;
     let status = response.status();
     if status.is_server_error() {
+        // Path redacted: reset / verify / invite tokens are path
+        // segments, and a 5xx during a reset would otherwise print a
+        // live token straight into the log stream.
+        let path = crate::sanitize::redact_secret_path(uri.path()).into_owned();
+        let target = match uri.query() {
+            Some(q) => format!("{path}?{q}"),
+            None => path,
+        };
         tracing::error!(
             %status,
             %method,
-            %uri,
+            uri = %target,
             "5xx response leaving the server"
         );
     }

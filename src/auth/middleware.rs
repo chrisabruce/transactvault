@@ -23,6 +23,10 @@ struct UserProfile {
     email: String,
     name: String,
     avatar_storage_key: Option<String>,
+    /// Current revocation counter. A token minted before the last
+    /// logout / password change carries an older value and is refused.
+    #[serde(default)]
+    token_version: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, SurrealValue)]
@@ -42,7 +46,7 @@ async fn load_session(
 ) -> Result<(Option<UserProfile>, Option<MembershipRow>), AppError> {
     let mut q = db
         .query(
-            "SELECT email, name, avatar_storage_key FROM ONLY $u; \
+            "SELECT email, name, avatar_storage_key, token_version FROM ONLY $u; \
              SELECT out AS brokerage, role FROM works_at WHERE in = $u LIMIT 1",
         )
         .bind(("u", user_id.clone()))
@@ -74,6 +78,13 @@ impl FromRequestParts<AppState> for CurrentUser {
         let user_id = claims.user_id();
         let (profile, membership) = load_session(&state.db, &user_id).await?;
         let profile = profile.ok_or(AppError::Unauthorized)?;
+        // Session revocation: reject tokens minted before the user's
+        // last logout or password change. Absent column ⇒ 0, so tokens
+        // issued before this feature shipped stay valid until their
+        // first revocation event.
+        if claims.tv != profile.token_version.unwrap_or(0) {
+            return Err(AppError::Unauthorized);
+        }
         let membership = membership.ok_or(AppError::Forbidden)?;
         let role = Role::parse(&membership.role).ok_or(AppError::Forbidden)?;
 
@@ -159,6 +170,9 @@ impl FromRequestParts<AppState> for LooseCurrentUser {
         let user_id = claims.user_id();
         let (profile, row) = load_session(&state.db, &user_id).await?;
         let profile = profile.ok_or(AppError::Unauthorized)?;
+        if claims.tv != profile.token_version.unwrap_or(0) {
+            return Err(AppError::Unauthorized);
+        }
         let membership = row.and_then(|r| {
             Role::parse(&r.role).map(|role| LooseMembership {
                 brokerage_id: r.brokerage,
@@ -190,6 +204,38 @@ impl FromRequestParts<AppState> for MaybeCurrentUser {
     ) -> Result<Self, Self::Rejection> {
         Ok(MaybeCurrentUser(
             CurrentUser::from_request_parts(parts, state).await.ok(),
+        ))
+    }
+}
+
+/// Optional *loose* variant — signed in, brokerage or not, or nobody.
+///
+/// Exists for logout. [`MaybeCurrentUser`] wraps [`CurrentUser`], which
+/// rejects with `Forbidden` when the `works_at` edge is missing, so a
+/// brokerage-less user (a removed agent, or someone sitting on
+/// `/app/no-brokerage` waiting to accept an invite) extracted as `None`
+/// and their logout silently skipped session revocation — the cookie
+/// cleared but the JWT stayed live for its full lifetime, and it
+/// regained full privileges the moment they joined a brokerage.
+///
+/// Resolves to `None` only when there is genuinely no live session: no
+/// cookie, an unsigned or expired token, a deleted user, or a token
+/// whose version has already been revoked. In each of those cases there
+/// is nothing left to revoke anyway.
+#[derive(Debug, Clone)]
+pub struct MaybeLooseCurrentUser(pub Option<LooseCurrentUser>);
+
+impl FromRequestParts<AppState> for MaybeLooseCurrentUser {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(MaybeLooseCurrentUser(
+            LooseCurrentUser::from_request_parts(parts, state)
+                .await
+                .ok(),
         ))
     }
 }

@@ -12,8 +12,6 @@
 // `controllers/transactions.rs`.
 #![allow(clippy::mutable_key_type)]
 
-use std::io::Write;
-
 use axum::body::Body;
 use axum::extract::{Multipart, Path, State};
 use axum::http::{StatusCode, header};
@@ -150,9 +148,14 @@ pub async fn upload(
                     .await
                     .map_err(|e| AppError::Internal(anyhow::anyhow!("store upload: {e}")))?;
 
+                // Scrubbed, not raw: `%` formats through `Display`, which
+                // the pretty formatter (the production default) emits
+                // verbatim, so a newline in either value would forge a
+                // whole log record. `form_code` is freely hand-typeable
+                // at the checklist form and stored without an ASSERT.
                 tracing::info!(
-                    %filename,
-                    %form_code,
+                    filename = %crate::sanitize::scrub(&filename),
+                    form_code = %crate::sanitize::scrub(&form_code),
                     bytes = size,
                     key = %storage_key,
                     "document streamed"
@@ -188,6 +191,51 @@ pub async fn upload(
     let UploadedDoc { doc, previous } =
         uploaded.ok_or_else(|| AppError::invalid("Please choose a file to upload."))?;
 
+    // SECURITY BACKSTOP — re-validate `item_id` here, after the
+    // multipart loop, and use the RecordId this query returns for every
+    // write below.
+    //
+    // The identical check inside the `"file"` arm above is only a
+    // pre-storage fast-fail, and it CANNOT be the only one: multipart
+    // part order is chosen by the client, so sending `file` before
+    // `item_id` leaves `item_id == None` when that arm runs and skips
+    // the guard entirely. The writes that follow then took a RecordId
+    // built straight from unvalidated client input — which let a caller
+    // attach a document to, and clear the review state of, a checklist
+    // item in ANOTHER brokerage, and bypass the approved-item lock on
+    // their own. Validating post-loop closes both regardless of order.
+    //
+    // A failure here leaves the document attached to the transaction
+    // (a legitimate transaction-level upload) but unlinked from any
+    // checklist item — no orphan, no partial write.
+    let validated_item: Option<RecordId> = match item_id.as_deref() {
+        Some(iid) => {
+            #[derive(serde::Deserialize, SurrealValue)]
+            struct ItemRow {
+                id: RecordId,
+                approval_status: String,
+            }
+            let mut r = state
+                .db
+                .query(
+                    "SELECT id, approval_status FROM ONLY $i \
+                     WHERE id IN (SELECT VALUE out FROM has_item WHERE in = $t)",
+                )
+                .bind(("i", RecordId::new("checklist_item", iid)))
+                .bind(("t", tx_id.clone()))
+                .await?;
+            let row: Option<ItemRow> = r.take(0).ok().flatten();
+            let row = row.ok_or(AppError::NotFound)?;
+            if row.approval_status == "approved" {
+                return Err(AppError::invalid(
+                    "This item has been approved and is locked. Ask a coordinator to deny it before uploading a replacement.",
+                ));
+            }
+            Some(row.id)
+        }
+        None => None,
+    };
+
     state
         .db
         .query("RELATE $t->has_document->$d; RELATE $u->uploaded->$d;")
@@ -196,8 +244,7 @@ pub async fn upload(
         .bind(("u", user.user_id.clone()))
         .await?;
 
-    if let Some(ref iid) = item_id {
-        let item_ref = RecordId::new("checklist_item", iid.as_str());
+    if let Some(item_ref) = validated_item.clone() {
         state
             .db
             .query("RELATE $d->for_item->$i")
@@ -236,8 +283,7 @@ pub async fn upload(
         // version stays one click away even after newer ones bury it in
         // the doc list. Only posted when this upload is tied to an item
         // — transaction-level uploads have no comment thread to land in.
-        if let Some(ref iid) = item_id {
-            let item_ref = RecordId::new("checklist_item", iid.as_str());
+        if let Some(item_ref) = validated_item {
             let body = format!(
                 "Uploaded v{} — replaces v{} of {}.",
                 doc.version, prev.version, prev.filename,
@@ -399,6 +445,13 @@ pub async fn delete(
 
 /// Stream a single document's bytes to the browser as a download
 /// (`Content-Disposition: attachment`). Same auth as preview.
+///
+/// Carries the same hardening headers as [`preview`]. The stored
+/// `Content-Type` is whatever the uploader's browser claimed (there is
+/// no magic-byte validation), so `nosniff` + a `sandbox` CSP make sure
+/// an `.html` or SVG masquerading as a contract can never execute in
+/// this origin if the disposition is ever relaxed or a browser decides
+/// to render it anyway.
 pub async fn download(
     State(state): State<AppState>,
     user: CurrentUser,
@@ -413,6 +466,9 @@ pub async fn download(
             header::CONTENT_DISPOSITION,
             format!("attachment; filename=\"{safe_name}\""),
         )
+        .header(header::CACHE_CONTROL, "private, no-store")
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Content-Security-Policy", "sandbox")
         .body(Body::from(bytes))
         .map_err(|e| AppError::Internal(anyhow::anyhow!("build response: {e}")))
 }
@@ -490,6 +546,29 @@ async fn authorize_and_fetch(
     Ok((doc, bytes))
 }
 
+/// Throttle a caller's ZIP exports.
+///
+/// Exports are the most expensive thing a signed-in user can ask for: up
+/// to [`EXPORT_MAX_BYTES`] streamed out of object storage into a temp
+/// file, per request. They are also plain `GET`s, so `SameSite=Lax`
+/// attaches the session cookie on a top-level navigation and the
+/// Fetch-Metadata layer — which only guards unsafe methods — never sees
+/// them. A hostile page could therefore drive a signed-in broker's
+/// browser through full-brokerage exports on repeat.
+///
+/// Keyed per user rather than per IP so one busy office cannot throttle
+/// a colleague.
+fn allow_export(state: &AppState, user: &CurrentUser) -> Result<(), AppError> {
+    let key = format!("export:{}", crate::db::record_key(&user.user_id));
+    if crate::security::allow_per_hour(&state.rate_limiter, &key, 30) {
+        Ok(())
+    } else {
+        Err(AppError::invalid(
+            "You've requested a lot of exports in a short time. Give it a few minutes and try again.",
+        ))
+    }
+}
+
 /// Download a ZIP of every document attached to a transaction — the
 /// one-click compliance export. Files are nested under their CAR form code
 /// folder so the archive mirrors the storage layout.
@@ -498,6 +577,7 @@ pub async fn export_zip(
     user: CurrentUser,
     Path(id): Path<String>,
 ) -> Result<Response, AppError> {
+    allow_export(&state, &user)?;
     let tx_id = RecordId::new("transaction", id.as_str());
     let tx = authorize_transaction(&state, &user, &tx_id).await?;
 
@@ -511,18 +591,11 @@ pub async fn export_zip(
         .await?;
     let documents: Vec<Document> = r.take(0)?;
 
-    let zip_bytes = build_zip(&state.storage, &tx, &documents).await?;
-    let zip_name = zip_filename_for(&tx);
-
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "application/zip")
-        .header(
-            header::CONTENT_DISPOSITION,
-            format!("attachment; filename=\"{zip_name}\""),
-        )
-        .body(Body::from(zip_bytes))
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("build response: {e}")))
+    let (manifest, items) = transaction_archive(&tx, &documents);
+    let body = stream_archive(&state.storage, manifest, items).await?;
+    // Same response builder as the team exports — this handler used to
+    // hand-roll an identical one.
+    zip_response(body, &format!("transactvault-{}", tx.property_address))
 }
 
 // ---------------------------------------------------------------------------
@@ -559,100 +632,143 @@ fn property_folder(tx: &Transaction) -> String {
     sanitize_path_segment(&raw)
 }
 
+/// Make one user-supplied string safe to use as a single path segment
+/// — in an S3 key and in a ZIP entry name.
+///
+/// Separators and control characters become `_`, and the result is
+/// never `.`, `..`, or empty.
+///
+/// The dot-segment rule is SECURITY, not cosmetics. Both consumers
+/// resolve `..` rather than treating it as a literal name:
+///
+/// - **S3 keys**: `rust-s3` builds the request URL with `Url::parse`,
+///   which applies WHATWG dot-segment removal *before* signing, so a
+///   key like `<brokerage>/../RPA/file` silently writes to `RPA/file`
+///   at the bucket root — outside the brokerage prefix that every
+///   prefix-scoped IAM policy, lifecycle rule and quota depends on.
+/// - **ZIP entries**: `ZipWriter::start_file` stores the name verbatim,
+///   so `../../../x` is a classic zip-slip against whoever extracts the
+///   compliance archive.
+///
+/// Callers must apply this to EVERY segment they interpolate. Form
+/// codes are the sharp edge: `checklists::create` deliberately accepts
+/// a hand-typed code for unknown forms, so `form_code` is
+/// attacker-controlled all the way to both sinks.
+///
+/// Longest a single path segment may be, in characters.
+///
+/// S3 caps a whole object key at 1024 bytes. A key here is
+/// `<brokerage>/<property>/<form code>/<filename>`, so bounding each
+/// segment keeps the composed key inside that budget no matter what a
+/// caller uploads — an unbounded filename previously produced a key the
+/// provider rejected, surfacing as a 500 at the end of a completed
+/// upload.
+const SEGMENT_MAX: usize = 120;
+
 fn sanitize_path_segment(s: &str) -> String {
-    s.chars()
+    // `is_unsafe_text_char` widens the old `is_control` test to the
+    // Unicode bidi overrides and zero-width characters. `is_control` is
+    // category Cc only, so U+202E RIGHT-TO-LEFT OVERRIDE used to survive
+    // into ZIP entry names and object keys, where it makes a listing show
+    // a different extension than the file actually has. The length cap
+    // keeps a long name from pushing the composed S3 key past the
+    // provider's 1024-byte limit, which surfaced as a 500 on upload.
+    let cleaned: String = crate::sanitize::truncate_chars(s, SEGMENT_MAX)
+        .chars()
         .map(|c| match c {
             '/' | '\\' | '\0' | ' ' => '_',
-            c if c.is_control() => '_',
+            c if crate::sanitize::is_unsafe_text_char(c) => '_',
             c => c,
         })
         .collect::<String>()
         .trim_matches('_')
-        .to_string()
+        .to_string();
+    // `.` and `..` survive the pass above untouched — neutralize them
+    // explicitly, along with the empty string.
+    if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
+        return "_".to_string();
+    }
+    cleaned
 }
 
-async fn build_zip(
-    storage: &Storage,
-    tx: &Transaction,
-    docs: &[Document],
-) -> Result<Vec<u8>, AppError> {
-    use zip::write::SimpleFileOptions;
+/// Make an untrusted value safe to interpolate into `MANIFEST.txt`.
+///
+/// The manifest is newline-delimited `Key: value`, so a newline inside a
+/// property address, agent name or brokerage name lets the person who
+/// typed it append lines of their own — `Document count: 99`, an extra
+/// `Property:` entry, a fabricated agent section. A compliance auditor
+/// reads that file as a statement of what the archive contains, which is
+/// exactly why forging lines in it matters even though nothing executes.
+fn manifest_field(s: &str) -> String {
+    crate::sanitize::scrub(s)
+}
 
-    // Missing-from-storage and transport-failure are both surfaced as a
-    // visible placeholder file in the ZIP so the export still completes;
-    // a busted single document shouldn't sink the whole compliance
-    // archive.
-    const MISSING: &[u8] = b"[file missing from storage]";
-    let payloads = futures::future::join_all(docs.iter().map(|doc| async move {
-        let bytes = match storage.get_bytes(&doc.storage_key).await {
-            Ok(Some(b)) => b,
-            Ok(None) => bytes::Bytes::from_static(MISSING),
-            Err(e) => {
-                tracing::warn!(error = %e, key = %doc.storage_key, "zip: get_bytes failed");
-                bytes::Bytes::from_static(MISSING)
-            }
-        };
-        (doc, bytes)
-    }))
-    .await;
-
-    let mut cursor = std::io::Cursor::new(Vec::new());
-    {
-        let mut writer = zip::ZipWriter::new(&mut cursor);
-        let options =
-            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-
-        let manifest = format!(
-            "TransactVault export\n\
-             Property: {}\n\
-             APN: {}\n\
-             Status: {}\n\
-             Type: {}\n\
-             Generated: {}\n\
-             Document count: {}\n",
-            tx.property_address,
-            tx.apn.as_deref().unwrap_or("—"),
-            tx.status,
-            tx.transaction_type,
-            chrono::Utc::now().to_rfc3339(),
-            docs.len(),
-        );
-        writer
-            .start_file("MANIFEST.txt", options)
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("zip manifest: {e}")))?;
-        writer
-            .write_all(manifest.as_bytes())
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("zip manifest write: {e}")))?;
-
-        for (doc, bytes) in payloads {
-            let arc_name = format!("{}/{}", doc.form_code, zip_safe_filename(doc));
-            writer
-                .start_file(arc_name, options)
-                .map_err(|e| AppError::Internal(anyhow::anyhow!("zip entry: {e}")))?;
-            writer
-                .write_all(&bytes)
-                .map_err(|e| AppError::Internal(anyhow::anyhow!("zip write: {e}")))?;
-        }
-        writer
-            .finish()
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("zip finish: {e}")))?;
-    }
-    Ok(cursor.into_inner())
+/// Entry list + manifest for a single transaction's archive, ready for
+/// [`stream_archive`].
+fn transaction_archive(tx: &Transaction, docs: &[Document]) -> (String, Vec<ArchiveItem>) {
+    let manifest = format!(
+        "TransactVault export\n\
+         Property: {}\n\
+         APN: {}\n\
+         Status: {}\n\
+         Type: {}\n\
+         Generated: {}\n\
+         Document count: {}\n",
+        manifest_field(&tx.property_address),
+        manifest_field(tx.apn.as_deref().unwrap_or("—")),
+        tx.status,
+        tx.transaction_type,
+        chrono::Utc::now().to_rfc3339(),
+        docs.len(),
+    );
+    let items = docs
+        .iter()
+        .map(|doc| ArchiveItem {
+            // Both segments sanitized — `form_code` is attacker-
+            // controlled and `start_file` stores names verbatim.
+            path: format!(
+                "{}/{}",
+                sanitize_path_segment(&doc.form_code),
+                zip_safe_filename(doc)
+            ),
+            storage_key: doc.storage_key.clone(),
+            size_bytes: doc.size_bytes,
+        })
+        .collect();
+    (manifest, items)
 }
 
 // ---------------------------------------------------------------------------
 // Team-level ZIP exports (broker only)
 // ---------------------------------------------------------------------------
 
-/// Hard ceiling on the total (uncompressed) content size of a multi-
-/// transaction export. These archives are assembled in memory — same as
-/// the single-transaction export — so an unbounded brokerage-wide pull
-/// could otherwise OOM the process. Past the cap we refuse with a
-/// message pointing at the narrower per-transaction export.
+/// Hard ceiling on the total (uncompressed) content size of one export.
+///
+/// Since [`stream_archive`] streams both in and out, this no longer
+/// guards process memory — it bounds **temp-file disk** and how long a
+/// single request can occupy a connection. Past the cap we refuse with
+/// a message pointing at the narrower per-transaction export.
 const EXPORT_MAX_BYTES: i64 = 400 * 1024 * 1024;
 
-/// One file destined for the archive: (entry path inside the ZIP, doc).
-type ArchiveEntry = (String, Document);
+/// Reject an export whose total content would exceed
+/// [`EXPORT_MAX_BYTES`], before a single byte is fetched.
+///
+/// `size_bytes` is trustworthy: it is written from the byte count
+/// `put_stream` actually observed, not from a client-supplied
+/// `Content-Length`.
+fn enforce_export_size(sizes: impl Iterator<Item = i64>) -> Result<(), AppError> {
+    let total: i64 = sizes.map(|b| b.max(0)).sum();
+    if total > EXPORT_MAX_BYTES {
+        return Err(AppError::invalid(format!(
+            "This export would be about {} MB — more than the {} MB limit for a \
+             single archive. Export individual transactions instead (each \
+             transaction page has its own Export ZIP button).",
+            total / (1024 * 1024),
+            EXPORT_MAX_BYTES / (1024 * 1024),
+        )));
+    }
+    Ok(())
+}
 
 /// Download a ZIP of every document across every transaction owned by
 /// one team member — the per-agent compliance archive on the Team page.
@@ -666,6 +782,7 @@ pub async fn export_member_zip(
     if !user.role.is_broker() {
         return Err(AppError::Forbidden);
     }
+    allow_export(&state, &user)?;
 
     // The target must be a member of the caller's brokerage — a broker
     // can't export another office's agent by guessing a user key.
@@ -713,11 +830,11 @@ pub async fn export_member_zip(
     // `<Property>/<FORM>/<file>` — property folders deduped so two
     // same-address transactions don't merge into one folder.
     let mut used_folders: Vec<String> = Vec::new();
-    let mut entries: Vec<ArchiveEntry> = Vec::new();
+    let mut entries: Vec<ArchiveItem> = Vec::new();
     let mut manifest = format!(
         "TransactVault agent export\nAgent: {} <{}>\nGenerated: {}\nTransactions: {}\n\n",
-        meta.name,
-        meta.email,
+        manifest_field(&meta.name),
+        manifest_field(&meta.email),
         chrono::Utc::now().to_rfc3339(),
         txs.len(),
     );
@@ -726,7 +843,7 @@ pub async fn export_member_zip(
         let docs = docs_by_tx.get(&tx.id).cloned().unwrap_or_default();
         manifest.push_str(&format!(
             "{folder}/ — {} ({} · {} document(s))\n",
-            tx.property_address,
+            manifest_field(&tx.property_address),
             tx.status,
             docs.len(),
         ));
@@ -736,15 +853,16 @@ pub async fn export_member_zip(
                 sanitize_path_segment(&doc.form_code),
                 zip_safe_filename(&doc)
             );
-            entries.push((path, doc));
+            entries.push(ArchiveItem {
+                path,
+                storage_key: doc.storage_key.clone(),
+                size_bytes: doc.size_bytes,
+            });
         }
     }
 
-    let zip_bytes = build_archive(&state.storage, entries, &manifest).await?;
-    zip_response(
-        zip_bytes,
-        &format!("transactvault-{}-transactions", meta.name),
-    )
+    let body = stream_archive(&state.storage, manifest, entries).await?;
+    zip_response(body, &format!("transactvault-{}-transactions", meta.name))
 }
 
 /// Download a ZIP of every document in the whole brokerage, organized
@@ -757,6 +875,7 @@ pub async fn export_brokerage_zip(
     if !user.role.is_broker() {
         return Err(AppError::Forbidden);
     }
+    allow_export(&state, &user)?;
 
     #[derive(serde::Deserialize, SurrealValue)]
     struct BrokerageMeta {
@@ -848,17 +967,17 @@ pub async fn export_brokerage_zip(
     });
 
     let mut used_folders: Vec<String> = Vec::new();
-    let mut entries: Vec<ArchiveEntry> = Vec::new();
+    let mut entries: Vec<ArchiveItem> = Vec::new();
     let mut manifest = format!(
         "TransactVault brokerage export\nBrokerage: {}\nGenerated: {}\nTransactions: {}\n\n",
-        brokerage_name,
+        manifest_field(&brokerage_name),
         chrono::Utc::now().to_rfc3339(),
         ordered.len(),
     );
     let mut last_agent = String::new();
     for (agent, tx) in &ordered {
         if *agent != last_agent {
-            manifest.push_str(&format!("\n== {agent} ==\n"));
+            manifest.push_str(&format!("\n== {} ==\n", manifest_field(agent)));
             last_agent = agent.clone();
         }
         let agent_folder = sanitize_path_segment(agent);
@@ -869,7 +988,7 @@ pub async fn export_brokerage_zip(
         let docs = docs_by_tx.get(&tx.id).cloned().unwrap_or_default();
         manifest.push_str(&format!(
             "{folder}/ — {} ({} · {} document(s))\n",
-            tx.property_address,
+            manifest_field(&tx.property_address),
             tx.status,
             docs.len(),
         ));
@@ -879,13 +998,17 @@ pub async fn export_brokerage_zip(
                 sanitize_path_segment(&doc.form_code),
                 zip_safe_filename(&doc)
             );
-            entries.push((path, doc));
+            entries.push(ArchiveItem {
+                path,
+                storage_key: doc.storage_key.clone(),
+                size_bytes: doc.size_bytes,
+            });
         }
     }
 
-    let zip_bytes = build_archive(&state.storage, entries, &manifest).await?;
+    let body = stream_archive(&state.storage, manifest, entries).await?;
     zip_response(
-        zip_bytes,
+        body,
         &format!("transactvault-{brokerage_name}-all-transactions"),
     )
 }
@@ -967,81 +1090,161 @@ fn unique_folder(base: &str, used: &mut Vec<String>) -> String {
     candidate
 }
 
-/// Assemble a multi-transaction archive: size-cap check, bounded-
-/// concurrency fetches from object storage (8 at a time — a brokerage
-/// export can span hundreds of objects and an unbounded join_all would
-/// open them all at once), placeholder bytes for anything missing, and
-/// a MANIFEST.txt at the root.
-async fn build_archive(
-    storage: &Storage,
-    entries: Vec<ArchiveEntry>,
-    manifest: &str,
-) -> Result<Vec<u8>, AppError> {
-    use futures::StreamExt;
-    use zip::write::SimpleFileOptions;
-
-    let total_bytes: i64 = entries.iter().map(|(_, d)| d.size_bytes.max(0)).sum();
-    if total_bytes > EXPORT_MAX_BYTES {
-        return Err(AppError::invalid(format!(
-            "This export would be about {} MB — more than the {} MB limit for a \
-             single archive. Export individual transactions instead (each \
-             transaction page has its own Export ZIP button).",
-            total_bytes / (1024 * 1024),
-            EXPORT_MAX_BYTES / (1024 * 1024),
-        )));
+/// Disambiguate an archive entry path against the ones already written.
+///
+/// [`unique_folder`] keeps two transactions from sharing a folder, but
+/// nothing kept two *files* from sharing a name, and
+/// [`sanitize_path_segment`] is lossy in a way that manufactures
+/// collisions: `Q1 report.pdf` and `Q1_report.pdf` both reduce to
+/// `Q1_report.pdf`. `ZipWriter` accepts duplicate names happily and most
+/// extractors keep only the last one, so a compliance export could
+/// silently ship fewer documents than it claimed — the manifest counted
+/// both.
+///
+/// The counter goes before the extension (`Q1_report~2.pdf`) so the file
+/// still opens in whatever application owns that type.
+fn unique_entry_path(path: &str, used: &mut std::collections::HashSet<String>) -> String {
+    if used.insert(path.to_string()) {
+        return path.to_string();
     }
-
-    const MISSING: &[u8] = b"[file missing from storage]";
-    let payloads: Vec<(String, bytes::Bytes)> =
-        futures::stream::iter(entries.into_iter().map(|(path, doc)| {
-            let storage = storage.clone();
-            async move {
-                let bytes = match storage.get_bytes(&doc.storage_key).await {
-                    Ok(Some(b)) => b,
-                    Ok(None) => bytes::Bytes::from_static(MISSING),
-                    Err(e) => {
-                        tracing::warn!(error = %e, key = %doc.storage_key, "export: get_bytes failed");
-                        bytes::Bytes::from_static(MISSING)
-                    }
-                };
-                (path, bytes)
-            }
-        }))
-        .buffered(8)
-        .collect()
-        .await;
-
-    let mut cursor = std::io::Cursor::new(Vec::new());
-    {
-        let mut writer = zip::ZipWriter::new(&mut cursor);
-        let options =
-            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-
-        writer
-            .start_file("MANIFEST.txt", options)
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("zip manifest: {e}")))?;
-        writer
-            .write_all(manifest.as_bytes())
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("zip manifest write: {e}")))?;
-
-        for (path, bytes) in payloads {
-            writer
-                .start_file(path, options)
-                .map_err(|e| AppError::Internal(anyhow::anyhow!("zip entry: {e}")))?;
-            writer
-                .write_all(&bytes)
-                .map_err(|e| AppError::Internal(anyhow::anyhow!("zip write: {e}")))?;
+    let (stem, ext) = match path.rsplit_once('.') {
+        // A leading dot is a dotfile, not an extension.
+        Some((stem, ext)) if !stem.is_empty() && !stem.ends_with('/') => {
+            (stem.to_string(), format!(".{ext}"))
         }
-        writer
-            .finish()
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("zip finish: {e}")))?;
+        _ => (path.to_string(), String::new()),
+    };
+    for n in 2.. {
+        let candidate = format!("{stem}~{n}{ext}");
+        if used.insert(candidate.clone()) {
+            return candidate;
+        }
     }
-    Ok(cursor.into_inner())
+    unreachable!("an unbounded counter always finds a free name")
 }
 
-/// Wrap finished ZIP bytes in a download response. `stem` is slugged
+/// One file destined for an archive: where it lands inside the ZIP and
+/// where to stream it from.
+struct ArchiveItem {
+    /// Path inside the archive. Every segment must already be
+    /// sanitized — [`sanitize_path_segment`] explains why.
+    path: String,
+    storage_key: String,
+    /// Used only for the pre-flight size check; the actual bytes are
+    /// streamed, never trusted from this number.
+    size_bytes: i64,
+}
+
+/// Build a ZIP and return it as a streaming response body.
+///
+/// Memory is O(one chunk), independent of both document size and
+/// document count. Two things make that true:
+///
+/// 1. **Objects stream in.** Each document is pulled from storage in
+///    chunks ([`Storage::get_stream`]) and fed straight into the
+///    compressor, instead of being materialized whole.
+/// 2. **The archive streams out.** The `zip` crate needs `Seek` (it
+///    rewrites local headers), so the archive is assembled in a
+///    temporary file rather than a `Vec`, then streamed to the client.
+///    `tempfile::tempfile()` unlinks the file the moment it is created,
+///    so it has no path, cannot be read by anything else, and is
+///    reclaimed by the OS even if the process is killed mid-export.
+///
+/// The previous implementation buffered every object AND the finished
+/// archive in memory, then held the whole thing for the response — a
+/// brokerage-wide export peaked around 1.6 GB and could OOM the
+/// process, taking every tenant down.
+///
+/// Disk replaces RAM here, which is the right trade for an export
+/// endpoint; [`EXPORT_MAX_BYTES`] still bounds how much of it a single
+/// request can use.
+///
+/// # Errors
+///
+/// Fails before any I/O when the archive would exceed
+/// [`EXPORT_MAX_BYTES`]. A document that is missing from storage (or
+/// whose fetch fails) does not fail the export — it becomes a visible
+/// placeholder file, so one broken object can't sink an entire
+/// compliance archive.
+async fn stream_archive(
+    storage: &Storage,
+    manifest: String,
+    items: Vec<ArchiveItem>,
+) -> Result<Body, AppError> {
+    use futures::StreamExt;
+    use std::io::{Seek, Write};
+    use zip::write::SimpleFileOptions;
+
+    enforce_export_size(items.iter().map(|i| i.size_bytes))?;
+
+    const MISSING: &[u8] = b"[file missing from storage]";
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+    let file = tokio::task::spawn_blocking(tempfile::tempfile)
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("spawn temp file: {e}")))?
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("create temp file: {e}")))?;
+    let mut writer = zip::ZipWriter::new(file);
+
+    writer
+        .start_file("MANIFEST.txt", options)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("zip manifest: {e}")))?;
+    writer
+        .write_all(manifest.as_bytes())
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("zip manifest write: {e}")))?;
+
+    // Seeded with the manifest so no document can shadow it.
+    let mut used_paths: std::collections::HashSet<String> =
+        std::iter::once("MANIFEST.txt".to_string()).collect();
+
+    for item in items {
+        let entry_path = unique_entry_path(&item.path, &mut used_paths);
+        writer
+            .start_file(entry_path, options)
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("zip entry: {e}")))?;
+
+        match storage.get_stream(&item.storage_key).await {
+            Ok(Some(mut stream)) => {
+                // Compress chunk-by-chunk. Each `next().await` is a
+                // yield point, so the short synchronous deflate bursts
+                // between them never starve the runtime.
+                while let Some(chunk) = stream.bytes.next().await {
+                    let chunk = chunk
+                        .map_err(|e| AppError::Internal(anyhow::anyhow!("stream object: {e}")))?;
+                    writer
+                        .write_all(&chunk)
+                        .map_err(|e| AppError::Internal(anyhow::anyhow!("zip write: {e}")))?;
+                }
+            }
+            Ok(None) => {
+                writer
+                    .write_all(MISSING)
+                    .map_err(|e| AppError::Internal(anyhow::anyhow!("zip write: {e}")))?;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, key = %item.storage_key, "export: object stream failed");
+                writer
+                    .write_all(MISSING)
+                    .map_err(|e| AppError::Internal(anyhow::anyhow!("zip write: {e}")))?;
+            }
+        }
+    }
+
+    // `finish` writes the central directory and hands the file back.
+    let mut file = writer
+        .finish()
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("zip finish: {e}")))?;
+    file.rewind()
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("rewind archive: {e}")))?;
+
+    Ok(Body::from_stream(tokio_util::io::ReaderStream::new(
+        tokio::fs::File::from_std(file),
+    )))
+}
+
+/// Wrap a streaming archive body in a download response. `stem` is slugged
 /// the same way the single-transaction export names its file.
-fn zip_response(zip_bytes: Vec<u8>, stem: &str) -> Result<Response, AppError> {
+fn zip_response(body: Body, stem: &str) -> Result<Response, AppError> {
     let slug: String = stem
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
@@ -1060,12 +1263,19 @@ fn zip_response(zip_bytes: Vec<u8>, stem: &str) -> Result<Response, AppError> {
             header::CONTENT_DISPOSITION,
             format!("attachment; filename=\"{name}\""),
         )
-        .body(Body::from(zip_bytes))
+        .body(body)
         .map_err(|e| AppError::Internal(anyhow::anyhow!("build response: {e}")))
 }
 
+/// Archive entry leaf name: the stored filename, with `_v2`-style
+/// version suffixes so multiple versions don't collide in one folder.
+///
+/// Runs through [`sanitize_path_segment`] because `sanitize_filename`
+/// (applied at upload) neutralizes separators but not dot segments —
+/// a file literally named `..` would otherwise become a traversing ZIP
+/// entry. Ordinary filenames pass through unchanged.
 fn zip_safe_filename(doc: &Document) -> String {
-    if doc.version > 1 {
+    let name = if doc.version > 1 {
         let (stem, ext) = split_filename(&doc.filename);
         if ext.is_empty() {
             format!("{stem}_v{}", doc.version)
@@ -1074,7 +1284,8 @@ fn zip_safe_filename(doc: &Document) -> String {
         }
     } else {
         doc.filename.clone()
-    }
+    };
+    sanitize_path_segment(&name)
 }
 
 fn split_filename(name: &str) -> (String, String) {
@@ -1084,27 +1295,12 @@ fn split_filename(name: &str) -> (String, String) {
     }
 }
 
-fn zip_filename_for(tx: &Transaction) -> String {
-    let slug: String = tx
-        .property_address
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect::<String>()
-        .trim_matches('_')
-        .to_string();
-    let stem = if slug.is_empty() {
-        "transaction".into()
-    } else {
-        slug
-    };
-    format!("transactvault-{stem}.zip")
-}
-
 fn sanitize_filename(name: String) -> String {
-    name.chars()
+    crate::sanitize::truncate_chars(&name, SEGMENT_MAX)
+        .chars()
         .map(|c| match c {
             '/' | '\\' | '\0' => '_',
-            c if c.is_control() => '_',
+            c if crate::sanitize::is_unsafe_text_char(c) => '_',
             c => c,
         })
         .collect::<String>()
@@ -1191,4 +1387,134 @@ async fn create_versioned_document(
         .ok_or_else(|| AppError::Internal(anyhow::anyhow!("CREATE document returned nothing")))?;
 
     Ok((previous, new))
+}
+
+#[cfg(test)]
+mod path_safety_tests {
+    use super::{manifest_field, sanitize_path_segment, split_filename, unique_entry_path};
+
+    /// A bidi override in a filename makes a listing show one extension
+    /// while the bytes are another — the classic `\u{202E}` trick turns
+    /// `Contract<RLO>gpj.exe` into a displayed `Contractexe.jpg`.
+    /// `char::is_control` is category Cc only and never caught it.
+    #[test]
+    fn bidi_overrides_do_not_survive_into_paths() {
+        let spoofed = sanitize_path_segment("Contract\u{202E}gpj.exe");
+        assert!(!spoofed.contains('\u{202E}'), "got {spoofed:?}");
+        assert_eq!(spoofed, "Contract_gpj.exe");
+
+        for c in ['\u{200B}', '\u{200E}', '\u{2028}', '\u{FEFF}', '\u{2066}'] {
+            let out = sanitize_path_segment(&format!("a{c}b"));
+            assert!(!out.contains(c), "U+{:04X} survived as {out:?}", c as u32);
+        }
+    }
+
+    /// S3 caps a key at 1024 bytes, and the key is four segments joined.
+    /// An unbounded filename used to produce a key the provider refused,
+    /// which surfaced as a 500 at the very end of a completed upload.
+    #[test]
+    fn path_segments_are_length_capped() {
+        let out = sanitize_path_segment(&"x".repeat(5000));
+        assert!(out.chars().count() <= super::SEGMENT_MAX, "{}", out.len());
+    }
+
+    /// Sanitizing is lossy, so distinct filenames can collide. ZIP
+    /// tolerates duplicate entry names and most extractors keep only the
+    /// last, which would silently drop documents from a compliance
+    /// export whose manifest counted them all.
+    #[test]
+    fn duplicate_archive_entries_are_disambiguated() {
+        let mut used = std::collections::HashSet::new();
+        used.insert("MANIFEST.txt".to_string());
+
+        assert_eq!(
+            unique_entry_path("RPA/report.pdf", &mut used),
+            "RPA/report.pdf"
+        );
+        assert_eq!(
+            unique_entry_path("RPA/report.pdf", &mut used),
+            "RPA/report~2.pdf",
+            "the counter goes before the extension so the file still opens"
+        );
+        assert_eq!(
+            unique_entry_path("RPA/report.pdf", &mut used),
+            "RPA/report~3.pdf"
+        );
+
+        // Nothing may shadow the manifest.
+        assert_eq!(
+            unique_entry_path("MANIFEST.txt", &mut used),
+            "MANIFEST~2.txt"
+        );
+
+        // Extensionless names and dotfiles still get a unique name.
+        assert_eq!(unique_entry_path("RPA/notes", &mut used), "RPA/notes");
+        assert_eq!(unique_entry_path("RPA/notes", &mut used), "RPA/notes~2");
+    }
+
+    /// `MANIFEST.txt` is newline-delimited `Key: value`, so a newline in
+    /// a property address let the person who typed it append lines an
+    /// auditor reads as a statement of what the archive contains.
+    #[test]
+    fn manifest_fields_cannot_forge_lines() {
+        let forged = manifest_field("123 Main St\nDocument count: 99\nProperty: 999 Fake Ave");
+        assert!(!forged.contains('\n'));
+        assert!(!forged.contains('\r'));
+        assert_eq!(
+            forged,
+            "123 Main St Document count: 99 Property: 999 Fake Ave"
+        );
+        // Ordinary addresses are untouched.
+        assert_eq!(
+            manifest_field("1250 Oak Ave, Suite 3"),
+            "1250 Oak Ave, Suite 3"
+        );
+    }
+
+    /// Dot segments must never survive: S3 URL building resolves them
+    /// (escaping the brokerage prefix) and ZIP extractors resolve them
+    /// on disk (zip-slip). Form codes reach both sinks and are
+    /// attacker-controlled — `checklists::create` accepts any
+    /// hand-typed code for unknown forms.
+    #[test]
+    fn dot_segments_are_neutralized() {
+        assert_eq!(sanitize_path_segment(".."), "_");
+        assert_eq!(sanitize_path_segment("."), "_");
+        assert_eq!(sanitize_path_segment(""), "_");
+        // Separators inside a segment are flattened, so a traversing
+        // code collapses to one inert segment.
+        assert_eq!(
+            sanitize_path_segment("../../etc/passwd"),
+            ".._.._etc_passwd"
+        );
+        assert_eq!(sanitize_path_segment("/absolute"), "absolute");
+        assert_eq!(sanitize_path_segment("a\\b"), "a_b");
+        assert_eq!(sanitize_path_segment("with space"), "with_space");
+        assert_eq!(sanitize_path_segment("nul\0byte"), "nul_byte");
+    }
+
+    /// Ordinary values pass through untouched — the guard must not
+    /// mangle real form codes or filenames.
+    #[test]
+    fn ordinary_segments_are_untouched() {
+        assert_eq!(sanitize_path_segment("RPA"), "RPA");
+        assert_eq!(sanitize_path_segment("SWPI-C"), "SWPI-C");
+        assert_eq!(sanitize_path_segment("CC&R"), "CC&R");
+        assert_eq!(
+            sanitize_path_segment("Disclosure.v2.pdf"),
+            "Disclosure.v2.pdf"
+        );
+    }
+
+    #[test]
+    fn split_filename_handles_dotfiles_and_bare_names() {
+        assert_eq!(
+            split_filename("report.pdf"),
+            ("report".to_string(), "pdf".to_string())
+        );
+        assert_eq!(
+            split_filename("no-extension"),
+            ("no-extension".to_string(), String::new())
+        );
+    }
 }

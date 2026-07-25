@@ -22,6 +22,7 @@ mod events;
 mod forms;
 mod models;
 mod router;
+mod sanitize;
 mod security;
 mod state;
 mod storage;

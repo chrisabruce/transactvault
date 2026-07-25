@@ -11,7 +11,7 @@
 {
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
-    "name": "{{ app_name }}",
+    "name": {{ app_name|json|safe }},
     "applicationCategory": "BusinessApplication",
     "description": "Modern real estate transaction management for California brokerages.",
     "operatingSystem": "Web",

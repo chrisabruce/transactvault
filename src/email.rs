@@ -153,7 +153,7 @@ impl Mailer {
         reply_to: Option<&str>,
     ) {
         let Some(client) = self.client.as_ref() else {
-            tracing::info!(%to, %subject, "email (suppressed — no POSTMARK_SERVER_TOKEN)");
+            tracing::info!(%to, subject = %crate::sanitize::scrub(subject), "email (suppressed — no POSTMARK_SERVER_TOKEN)");
             return;
         };
 
@@ -184,7 +184,7 @@ impl Mailer {
                         tracing::info!(
                             %to,
                             id = %parsed.message_id,
-                            %subject,
+                            subject = %crate::sanitize::scrub(subject),
                             "email sent"
                         );
                     }
@@ -197,7 +197,7 @@ impl Mailer {
                         // act on the code, not guess.
                         tracing::warn!(
                             %to,
-                            %subject,
+                            subject = %crate::sanitize::scrub(subject),
                             error_code = parsed.error_code,
                             message = %parsed.message,
                             "postmark rejected message"
@@ -209,7 +209,7 @@ impl Mailer {
                         // status that came back.
                         tracing::warn!(
                             %to,
-                            %subject,
+                            subject = %crate::sanitize::scrub(subject),
                             %status,
                             error = %e,
                             "postmark response body could not be parsed"
@@ -218,7 +218,7 @@ impl Mailer {
                 }
             }
             Err(err) => {
-                tracing::warn!(%to, %subject, error = %err, "postmark request failed");
+                tracing::warn!(%to, subject = %crate::sanitize::scrub(subject), error = %err, "postmark request failed");
             }
         }
     }
@@ -260,6 +260,59 @@ impl Mailer {
             link = link,
         );
         self.send(to, "Verify your TransactVault email", html, text)
+            .await;
+    }
+
+    /// Send a password-reset link.
+    ///
+    /// Only ever sent to an address that already has an account — the
+    /// request endpoint responds identically either way, so an attacker
+    /// can't use it to enumerate customers, and someone who didn't ask
+    /// for this simply never receives mail.
+    ///
+    /// `hours` is echoed into the copy so the stated expiry can't drift
+    /// from the configured one.
+    pub async fn send_password_reset(&self, to: &str, name: &str, link: &str, hours: i64) {
+        // Same dev affordance as the verify mail: with delivery
+        // disabled, log the link so local testing doesn't need a real
+        // inbox. Never logged when a Postmark token is configured.
+        if self.client.is_none() {
+            tracing::info!(%to, %link, "password reset link (dev — email suppressed)");
+        }
+        let window = if hours == 1 {
+            "1 hour".to_string()
+        } else {
+            format!("{hours} hours")
+        };
+        let html = format!(
+            "<!doctype html><html><body style=\"font-family:system-ui,sans-serif;color:#0f172a\">\
+               <p>Hi {name},</p>\
+               <p>We received a request to reset the password for your TransactVault \
+                  account. Choose a new one within the next {window}:</p>\
+               <p><a href=\"{link}\" \
+                     style=\"background:#0f766e;color:#fff;padding:10px 18px;\
+                            border-radius:8px;text-decoration:none;display:inline-block\">Set a new password</a></p>\
+               <p>If the button doesn't work, copy this URL into your browser:<br>\
+                  <span style=\"word-break:break-all\">{link}</span></p>\
+               <p style=\"color:#475569;font-size:0.9em\">If you didn't ask for this, you can ignore \
+                  this email — your password stays as it is, and the link expires on its own. \
+                  Signing in anywhere else is unaffected until the link is actually used.</p>\
+               <p>— The TransactVault team</p>\
+             </body></html>",
+            name = html_escape(name),
+            link = link,
+            window = window,
+        );
+        let text = format!(
+            "Hi {name},\n\n\
+             We received a request to reset the password for your TransactVault account. \
+             Choose a new one within the next {window}:\n\n\
+             {link}\n\n\
+             If you didn't ask for this, ignore this email — your password stays as it is \
+             and the link expires on its own.\n\n\
+             — The TransactVault team\n",
+        );
+        self.send(to, "Reset your TransactVault password", html, text)
             .await;
     }
 

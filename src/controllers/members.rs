@@ -6,9 +6,8 @@ use axum::response::{Html, IntoResponse, Redirect, Response};
 use humansize::{DECIMAL, format_size};
 use serde::Deserialize;
 use surrealdb::types::{RecordId, SurrealValue};
-use tower_cookies::{Cookie, Cookies};
+use tower_cookies::Cookies;
 
-use crate::auth::middleware::SESSION_COOKIE;
 use crate::auth::{CurrentUser, Role};
 use crate::controllers::auth::create_invitation;
 use crate::controllers::render;
@@ -58,6 +57,28 @@ pub async fn invite(
 
     let brokerage = load_brokerage(&state, &user).await?;
     let header = crate::controllers::common::build_app_header(&state, &user, "team").await;
+
+    // Throttle invites per brokerage. The field accepts a
+    // comma-separated list with no cap, so one compromised broker
+    // account was an unlimited email relay through our Postmark server
+    // — torching sender reputation for every tenant. 20 sends per
+    // 15 minutes is far above real onboarding use.
+    let rate_key = format!("invite:{}", crate::db::record_key(&user.brokerage_id));
+    if !crate::security::allow_per_quarter_hour(&state.rate_limiter, &rate_key, 20) {
+        return render(&TeamPage {
+            app_name: &state.config.app_name,
+            base_url: &state.config.base_url,
+            signed_in: true,
+            header,
+            members: load_members(&state, &user).await?,
+            pending: load_pending_invitations(&state, &user).await?,
+            invite_error: Some(
+                "That's a lot of invitations at once — wait a few minutes and send the rest.",
+            ),
+            invite_link: None,
+            invite_notice: None,
+        });
+    }
 
     let role = match input.role.as_str() {
         "broker" | "agent" | "coordinator" => input.role,
@@ -983,10 +1004,7 @@ pub async fn delete_brokerage(
     // is now pointing at nothing — clear it and bounce them to the
     // marketing site. The middleware would reject the next request
     // anyway, but doing it here gives a clean confirmation.
-    let mut clear = Cookie::new(SESSION_COOKIE, "");
-    clear.set_path("/");
-    clear.set_max_age(tower_cookies::cookie::time::Duration::seconds(0));
-    cookies.remove(clear);
+    crate::controllers::auth::clear_session_cookie(&state, &cookies);
 
     Ok(Redirect::to("/?deleted=1").into_response())
 }

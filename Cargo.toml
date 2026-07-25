@@ -1,6 +1,6 @@
 [package]
 name = "transactvault"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 description = "TransactVault — modern real estate transaction management for California brokerages."
 # Proprietary, all rights reserved — source is public on GitHub for
@@ -13,7 +13,7 @@ publish = false
 axum = { version = "0.8", features = ["macros", "multipart"] }
 tokio = { version = "1", features = ["full"] }
 surrealdb = { version = "3", features = ["kv-mem", "kv-surrealkv"] }
-askama = "0.14"
+askama = { version = "0.14", features = ["serde_json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 jsonwebtoken = "9"
@@ -39,6 +39,13 @@ mime = "0.3"
 http = "1"
 async-stream = "0.3"
 tokio-util = { version = "0.7", features = ["io"] }
+# Direct (previously transitive) — the ZIP export streams from an
+# unlinked temp file rather than buffering the whole archive in memory.
+tempfile = "3"
+# Direct (previously transitive via axum) — `FormWithApplies` parses one
+# form body into two types, which axum's `Form` can't express and
+# `serde(flatten)` can't help with (serde_urlencoded has no flatten).
+serde_urlencoded = "0.7"
 rust-s3 = { version = "0.37", default-features = false, features = ["tokio-rustls-tls"] }
 # Direct HTTP client for the Postmark transactional-email API. The
 # Postmark REST surface we use is a single `POST /email` call, so a

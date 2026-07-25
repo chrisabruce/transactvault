@@ -10,12 +10,12 @@
 {
     "@context": "https://schema.org",
     "@type": "Product",
-    "name": "{{ app_name }}",
+    "name": {{ app_name|json|safe }},
     "description": "Transaction management software for real estate brokerages.",
     "offers": [
         {% for view in tiers %}{
             "@type": "Offer",
-            "name": "{{ view.tier.name }}",
+            "name": {{ view.tier.name|json|safe }},
             "price": "{{ view.tier.price_cents / 100 }}",
             "priceCurrency": "USD"
         }{% if !loop.last %},{% endif %}{% endfor %}

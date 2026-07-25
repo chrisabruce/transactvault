@@ -13,6 +13,15 @@ pub struct Claims {
     pub sub: String,
     pub iat: usize,
     pub exp: usize,
+    /// Token version — a snapshot of the user's `token_version` at
+    /// issuance. The auth middleware compares it against the row's
+    /// current value and rejects the request on a mismatch, so bumping
+    /// the column revokes every outstanding session for that user.
+    ///
+    /// Defaults to `0` when absent so sessions issued before this field
+    /// existed keep working across the deploy that introduces it.
+    #[serde(default)]
+    pub tv: i64,
 }
 
 impl Claims {

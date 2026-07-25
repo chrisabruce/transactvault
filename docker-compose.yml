@@ -119,11 +119,24 @@ services:
       # Auth
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set}
       JWT_EXPIRY_HOURS: ${JWT_EXPIRY_HOURS:-168}
+      # Password-reset links are bearer credentials — keep the window short.
+      RESET_EXPIRY_HOURS: ${RESET_EXPIRY_HOURS:-1}
+      # Reverse-proxy hops in front of the app. Decides which
+      # X-Forwarded-For entry is trusted as the client IP for rate
+      # limiting; a spoofed header must not win. 1 = Traefik only.
+      TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-1}
 
-      # Resend
-      RESEND_API_KEY: ${RESEND_API_KEY:-}
-      RESEND_FROM: ${RESEND_FROM:-TransactVault <no-reply@transactvault.example>}
-      RESEND_REPLY_TO: ${RESEND_REPLY_TO:-}
+      # Postmark. These names must match what `src/config.rs` reads —
+      # they said RESEND_* until v0.4.0, left over from the v0.3.1
+      # provider switch, so a stack started from this file silently ran
+      # with email disabled (the mailer logs instead of sending, which
+      # breaks signup verification, invitations, and password reset).
+      # Production supplies these through the Dokploy Application's own
+      # environment; these defaults only cover local/stack runs.
+      POSTMARK_SERVER_TOKEN: ${POSTMARK_SERVER_TOKEN:-}
+      POSTMARK_FROM: ${POSTMARK_FROM:-TransactVault <no-reply@transactvault.example>}
+      POSTMARK_REPLY_TO: ${POSTMARK_REPLY_TO:-}
+      POSTMARK_MESSAGE_STREAM: ${POSTMARK_MESSAGE_STREAM:-outbound}
     # Dokploy's Traefik lives on the shared `dokploy-network`. The app must
     # join it to be reachable from the public domain; the `default` network
     # keeps the app, surrealdb and rustfs on an isolated internal network.

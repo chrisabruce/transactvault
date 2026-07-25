@@ -56,6 +56,20 @@ pub async fn update(
                 .into_response(),
         );
     }
+    // Refuse invisible characters outright rather than storing and
+    // scrubbing them later. A name flows into email subject lines, export
+    // manifests and log records; a bidi override here makes it render as
+    // a different name everywhere it appears.
+    if crate::sanitize::has_unsafe_text(&name) {
+        return Ok(render_profile(
+            &state,
+            &user,
+            Some("Name can't contain control or invisible characters."),
+            None,
+        )
+        .await?
+        .into_response());
+    }
 
     state
         .db
@@ -88,6 +102,7 @@ pub struct PasswordInput {
 pub async fn change_password(
     State(state): State<AppState>,
     user: CurrentUser,
+    cookies: tower_cookies::Cookies,
     Form(input): Form<PasswordInput>,
 ) -> Result<Response, AppError> {
     // Length + match checks before we even hash anything — fast
@@ -108,6 +123,23 @@ pub async fn change_password(
             &user,
             None,
             Some("The two new-password fields don't match."),
+        )
+        .await?
+        .into_response());
+    }
+
+    // Throttle: the current-password check below is an Argon2id
+    // verification (19 MiB, ~50-150 ms), so an unthrottled endpoint is
+    // both a guessing oracle against a hijacked session and a cheap
+    // memory/CPU sink. Keyed per user rather than per IP — this route
+    // is authenticated, so the account is the meaningful subject.
+    let rate_key = format!("password-change:{}", crate::db::record_key(&user.user_id));
+    if !crate::security::allow_per_quarter_hour(&state.rate_limiter, &rate_key, 10) {
+        return Ok(render_profile(
+            &state,
+            &user,
+            None,
+            Some("Too many password-change attempts. Wait a few minutes and try again."),
         )
         .await?
         .into_response());
@@ -140,6 +172,11 @@ pub async fn change_password(
         .bind(("h", new_hash))
         .await?;
 
+    // Revoke every other outstanding session. Changing a password is
+    // the canonical "I think I was compromised" action, and before this
+    // it did nothing to a token an attacker had already stolen.
+    crate::controllers::auth::bump_token_version(&state, &user.user_id).await;
+
     audit::record(
         &state.db,
         "password_changed",
@@ -150,6 +187,10 @@ pub async fn change_password(
         None,
     )
     .await;
+
+    // The caller's own cookie is now stale too — re-issue it so the
+    // person who just changed their password stays signed in.
+    crate::controllers::auth::reissue_session_cookie(&state, &cookies, &user.user_id).await?;
 
     Ok(Redirect::to("/app/profile").into_response())
 }

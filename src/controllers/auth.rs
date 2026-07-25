@@ -28,16 +28,20 @@ use surrealdb::types::{RecordId, SurrealValue};
 use tower_cookies::{Cookie, Cookies};
 
 use crate::audit;
-use crate::auth::middleware::{MaybeCurrentUser, SESSION_COOKIE};
+use crate::auth::middleware::{MaybeCurrentUser, MaybeLooseCurrentUser, SESSION_COOKIE};
 use crate::auth::{hash_password, issue_token, verify_password};
 use crate::controllers::render;
 use crate::error::AppError;
 use crate::models::{Brokerage, Invitation, NewBrokerage, NewInvitation, NewUser, User};
 use crate::security::{
-    self, allow_per_hour, allow_per_quarter_hour, client_ip, is_disposable_email, user_agent,
+    self, allow_per_hour, allow_per_quarter_hour, client_ip, is_disposable_email, throttle_key,
+    user_agent,
 };
 use crate::state::AppState;
-use crate::templates::{InvitePage, LoginPage, SignupPage, VerifyPendingPage, VerifyResultPage};
+use crate::templates::{
+    ForgotPasswordPage, InvitePage, LoginPage, ResetPasswordPage, SignupPage, VerifyPendingPage,
+    VerifyResultPage,
+};
 
 // ---------------------------------------------------------------------------
 // Signup
@@ -93,7 +97,7 @@ pub async fn signup(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Form(input): Form<SignupInput>,
 ) -> Result<Response, AppError> {
-    let ip = client_ip(&headers, Some(&peer));
+    let ip = client_ip(&headers, Some(&peer), state.config.trusted_proxy_hops);
     let ua = user_agent(&headers);
 
     // (1) Honeypot — bot autofilled the hidden field. Pretend success so the
@@ -175,6 +179,18 @@ pub async fn signup(
         return render_signup_error(
             &state,
             "Please fill in every field.",
+            signup_prefill(&input),
+        )
+        .await;
+    }
+    // Both values reach email subject lines, export manifests and log
+    // records as plain text. Rejecting invisible characters at the door
+    // beats scrubbing at every sink and hoping none was missed.
+    if crate::sanitize::has_unsafe_text(&name) || crate::sanitize::has_unsafe_text(&brokerage_name)
+    {
+        return render_signup_error(
+            &state,
+            "Names can't contain control or invisible characters.",
             signup_prefill(&input),
         )
         .await;
@@ -286,11 +302,19 @@ pub async fn signup(
         tracing::warn!(error = %e, "could not attach default form state at signup");
     }
 
+    // Detached for the same reason as the reset mail: the duplicate-address
+    // branch above returns without touching the network, so awaiting a
+    // Postmark round-trip here widens the timing gap between "registered"
+    // and "not registered" by a few hundred milliseconds. This does not
+    // make signup fully timing-uniform — the new-account path genuinely
+    // does more database work — but it removes the largest and most
+    // variable component of the difference.
     let verify_link = format!("{}/verify/{}", state.config.base_url, token);
-    state
-        .mailer
-        .send_verify(&user.email, &user.name, &verify_link)
-        .await;
+    let mailer = state.mailer.clone();
+    let (to, display_name) = (user.email.clone(), user.name.clone());
+    tokio::spawn(async move {
+        mailer.send_verify(&to, &display_name, &verify_link).await;
+    });
 
     audit::record(
         &state.db,
@@ -324,14 +348,16 @@ pub async fn signup_check_email(State(state): State<AppState>) -> Result<Html<St
 // Email verification
 // ---------------------------------------------------------------------------
 
+/// `GET /verify/{token}` — confirm an address, then send them to log in.
+///
+/// Never mints a session; see the note on the final redirect.
 pub async fn verify(
     State(state): State<AppState>,
-    cookies: Cookies,
     headers: HeaderMap,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Path(token): Path<String>,
 ) -> Result<Response, AppError> {
-    let ip = client_ip(&headers, Some(&peer));
+    let ip = client_ip(&headers, Some(&peer), state.config.trusted_proxy_hops);
     let ua = user_agent(&headers);
 
     let mut q = state
@@ -363,9 +389,9 @@ pub async fn verify(
     };
 
     if user.email_verified {
-        // Already verified; just sign them in if they aren't and redirect.
-        set_session_cookie(&state, &cookies, &user.id)?;
-        return Ok(Redirect::to("/app").into_response());
+        // Already verified — send them to sign in. See the note on the
+        // final redirect for why this route never mints a session.
+        return Ok(Redirect::to("/login?verified=1").into_response());
     }
 
     if user
@@ -426,8 +452,16 @@ pub async fn verify(
     )
     .await;
 
-    set_session_cookie(&state, &cookies, &user.id)?;
-    Ok(Redirect::to("/app").into_response())
+    // Deliberately NOT signing them in.
+    //
+    // This is a GET, so `SameSite=Lax` sends cookies on a top-level
+    // navigation and the Fetch-Metadata CSRF layer only guards unsafe
+    // methods. Minting a session here therefore gave anyone a
+    // session-fixation primitive: send a victim your own verification
+    // link, and their browser silently becomes *your* account — every
+    // document they then upload lands in the attacker's brokerage.
+    // Making them sign in costs one form and removes the primitive.
+    Ok(Redirect::to("/login?verified=1").into_response())
 }
 
 async fn lookup_brokerage_name(state: &AppState, user_id: &RecordId) -> String {
@@ -454,8 +488,19 @@ pub struct LoginInput {
     pub password: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct LoginQuery {
+    /// `1` right after a completed password reset.
+    #[serde(default)]
+    pub reset: Option<String>,
+    /// `1` right after a completed email verification.
+    #[serde(default)]
+    pub verified: Option<String>,
+}
+
 pub async fn login_form(
     State(state): State<AppState>,
+    axum::extract::Query(q): axum::extract::Query<LoginQuery>,
     MaybeCurrentUser(current): MaybeCurrentUser,
 ) -> Result<Response, AppError> {
     if current.is_some() {
@@ -467,6 +512,8 @@ pub async fn login_form(
         error: None,
         signed_in: false,
         email: String::new(),
+        just_reset: q.reset.as_deref() == Some("1"),
+        just_verified: q.verified.as_deref() == Some("1"),
     };
     Ok(render(&page)?.into_response())
 }
@@ -478,7 +525,7 @@ pub async fn login(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Form(input): Form<LoginInput>,
 ) -> Result<Response, AppError> {
-    let ip = client_ip(&headers, Some(&peer));
+    let ip = client_ip(&headers, Some(&peer), state.config.trusted_proxy_hops);
     let ua = user_agent(&headers);
     let email = input.email.trim().to_ascii_lowercase();
 
@@ -514,6 +561,15 @@ pub async fn login(
     let user: Option<User> = response.take(0)?;
 
     let Some(user) = user else {
+        // Burn the same Argon2id work an existing account would cost.
+        // Returning early here made the unknown-email path measurably
+        // faster (m=19 MiB, t=2 is tens of ms), turning login into a
+        // user-enumeration oracle — for a brokerage-compliance product
+        // that leaks the customer roster to anyone who can time a
+        // request.
+        verify_password(&input.password, dummy_password_hash())
+            .await
+            .ok();
         audit::record(
             &state.db,
             "login_failure",
@@ -588,7 +644,7 @@ pub async fn login(
     )
     .await;
 
-    set_session_cookie(&state, &cookies, &user.id)?;
+    set_session_cookie(&state, &cookies, &user.id).await?;
 
     // Send users without a brokerage to the friendly landing instead
     // of `/app`, which would otherwise 403 inside the `CurrentUser`
@@ -606,15 +662,21 @@ pub async fn login(
     Ok(Redirect::to("/app").into_response())
 }
 
+/// `POST /logout` — clear the cookie *and* revoke every live session.
+///
+/// Takes the loose extractor on purpose: `MaybeCurrentUser` resolves to
+/// `None` for a signed-in user with no brokerage, which used to skip the
+/// `bump_token_version` call below and leave a stolen JWT valid.
 pub async fn logout(
     State(state): State<AppState>,
     cookies: Cookies,
     headers: HeaderMap,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    MaybeCurrentUser(current): MaybeCurrentUser,
+    MaybeLooseCurrentUser(current): MaybeLooseCurrentUser,
 ) -> Redirect {
-    let ip = client_ip(&headers, Some(&peer));
+    let ip = client_ip(&headers, Some(&peer), state.config.trusted_proxy_hops);
     let ua = user_agent(&headers);
+    let logged_out_user = current.as_ref().map(|u| u.user_id.clone());
     if let Some(u) = current {
         audit::record(
             &state.db,
@@ -628,12 +690,60 @@ pub async fn logout(
         .await;
     }
 
+    if let Some(uid) = logged_out_user {
+        bump_token_version(&state, &uid).await;
+    }
+    clear_session_cookie(&state, &cookies);
+    Redirect::to("/")
+}
+
+/// Expire the session cookie, mirroring every attribute
+/// [`set_session_cookie`] sets.
+///
+/// Shared by logout and brokerage self-deletion so the two can't drift:
+/// a clearing cookie must match the original's `Path` (and `Secure`, on
+/// browsers that scope by it) or the browser keeps the live one.
+/// Re-issue the caller's session cookie after their token version was
+/// bumped, so the user who just changed their own password isn't logged
+/// out by their own action (every *other* session stays revoked).
+pub(crate) async fn reissue_session_cookie(
+    state: &AppState,
+    cookies: &Cookies,
+    user_id: &RecordId,
+) -> Result<(), AppError> {
+    set_session_cookie(state, cookies, user_id).await
+}
+
+/// Invalidate every outstanding session for a user by incrementing the
+/// counter their tokens were minted against.
+///
+/// Called on logout and password change. Without it, a JWT captured
+/// before either event stayed valid for its full lifetime — "sign out
+/// on the lost laptop" and "change my password because I was
+/// compromised" both did nothing to an already-stolen token.
+///
+/// Best-effort: a failure here is logged, never surfaced. Failing a
+/// logout because telemetry-adjacent bookkeeping broke would be worse
+/// than the (already clearing) cookie.
+pub(crate) async fn bump_token_version(state: &AppState, user_id: &RecordId) {
+    let result = state
+        .db
+        .query("UPDATE $u SET token_version = (token_version ?? 0) + 1")
+        .bind(("u", user_id.clone()))
+        .await;
+    if let Err(e) = result {
+        tracing::warn!(error = %e, "failed to bump token_version — sessions not revoked");
+    }
+}
+
+pub(crate) fn clear_session_cookie(state: &AppState, cookies: &Cookies) {
     let mut cookie = Cookie::new(SESSION_COOKIE, "");
     cookie.set_path("/");
     cookie.set_http_only(true);
+    cookie.set_same_site(tower_cookies::cookie::SameSite::Lax);
+    cookie.set_secure(state.config.base_url.starts_with("https://"));
     cookie.set_max_age(tower_cookies::cookie::time::Duration::seconds(0));
     cookies.remove(cookie);
-    Redirect::to("/")
 }
 
 // ---------------------------------------------------------------------------
@@ -752,7 +862,7 @@ pub async fn accept_invite(
     }
 
     let hashed = hash_password(&input.password).await?;
-    let ip = client_ip(&headers, Some(&peer));
+    let ip = client_ip(&headers, Some(&peer), state.config.trusted_proxy_hops);
     let ua = user_agent(&headers);
 
     // Invited users are pre-verified — the invite link itself was the
@@ -814,7 +924,7 @@ pub async fn accept_invite(
         .events
         .publish(crate::events::Event::UserMembershipChanged(user.id.clone()));
 
-    set_session_cookie(&state, &cookies, &user.id)?;
+    set_session_cookie(&state, &cookies, &user.id).await?;
     Ok(Redirect::to("/app").into_response())
 }
 
@@ -834,7 +944,12 @@ async fn load_invitation(
 ) -> Result<(Invitation, Brokerage, String), AppError> {
     let mut response = state
         .db
-        .query("SELECT * FROM invitation WHERE token = $t AND accepted = false AND declined = false LIMIT 1")
+        .query(
+            "SELECT * FROM invitation \
+             WHERE token = $t AND accepted = false AND declined = false \
+               AND expires_at > time::now() \
+             LIMIT 1",
+        )
         .bind(("t", token.to_string()))
         .await?;
     let invitation: Option<Invitation> = response.take(0)?;
@@ -861,24 +976,65 @@ struct NameOnly {
     name: String,
 }
 
-fn set_session_cookie(
+/// Mint a session JWT for `user_id` and set it as the session cookie.
+///
+/// Reads the user's current `token_version` and embeds it in the token,
+/// which is what lets [`bump_token_version`] revoke outstanding
+/// sessions. A missing row yields version 0 — the token is then
+/// rejected by the middleware anyway, since the user lookup fails.
+async fn set_session_cookie(
     state: &AppState,
     cookies: &Cookies,
     user_id: &RecordId,
 ) -> Result<(), AppError> {
     let key = crate::db::record_key(user_id);
-    let token = issue_token(&state.config, &key)
+    let mut q = state
+        .db
+        .query("SELECT VALUE token_version FROM ONLY $u")
+        .bind(("u", user_id.clone()))
+        .await?;
+    let token_version: i64 = q.take::<Option<i64>>(0).ok().flatten().unwrap_or(0);
+    let token = issue_token(&state.config, &key, token_version)
         .map_err(|e| AppError::Internal(anyhow::anyhow!("issue token: {e}")))?;
 
     let mut cookie = Cookie::new(SESSION_COOKIE, token);
     cookie.set_path("/");
     cookie.set_http_only(true);
     cookie.set_same_site(tower_cookies::cookie::SameSite::Lax);
+    // `Secure` on any HTTPS deployment: without it the browser attaches
+    // this multi-day session JWT to plain-http requests for the same
+    // host, so anyone on the network path can lift it by getting the
+    // victim to load `http://<app-host>/anything` (an <img> tag on any
+    // unencrypted page suffices). Derived from BASE_URL rather than
+    // hardcoded so local http dev still works.
+    cookie.set_secure(state.config.base_url.starts_with("https://"));
     cookie.set_max_age(tower_cookies::cookie::time::Duration::hours(
         state.config.jwt_expiry_hours,
     ));
     cookies.add(cookie);
     Ok(())
+}
+
+/// A real Argon2id PHC hash of a fixed throwaway password, used to
+/// equalize login timing when the submitted email doesn't exist.
+///
+/// Computed once on first use — the parameters (and therefore the
+/// verification cost) match anything [`hash_password`] produces.
+fn dummy_password_hash() -> &'static str {
+    use std::sync::OnceLock;
+    static HASH: OnceLock<String> = OnceLock::new();
+    HASH.get_or_init(|| {
+        use argon2::password_hash::{PasswordHasher, SaltString, rand_core::OsRng};
+        let salt = SaltString::generate(&mut OsRng);
+        argon2::Argon2::default()
+            .hash_password(b"timing-equalizer-not-a-real-password", &salt)
+            .map(|h| h.to_string())
+            // A failure here would only cost the timing defense, never
+            // correctness — `verify_password` treats a malformed hash as
+            // "does not match".
+            .unwrap_or_default()
+    })
+    .as_str()
 }
 
 /// Everything worth re-populating from a failed signup submission —
@@ -927,6 +1083,8 @@ async fn render_login_error(
         error: Some(message),
         signed_in: false,
         email,
+        just_reset: false,
+        just_verified: false,
     };
     Ok(render(&page)?.into_response())
 }
@@ -1034,4 +1192,316 @@ mod base64_stub {
         }
         out
     }
+}
+
+// ---------------------------------------------------------------------------
+// Password reset
+// ---------------------------------------------------------------------------
+//
+// Threat model, since this flow is a standing account-takeover primitive:
+//
+// - **Enumeration.** `POST /forgot` responds identically whether or not
+//   the address exists, and does the same visible work either way.
+// - **Token strength.** 256 bits from the OS CSPRNG. The signup/invite
+//   tokens are UUIDv7 (~74 bits of randomness plus a guessable
+//   timestamp) — fine for those, not for a bearer credential that
+//   grants takeover.
+// - **Token at rest.** Only a SHA-256 hash is stored. A database dump,
+//   a backup, or an admin reading rows cannot seize accounts.
+// - **Blast radius.** Completing a reset bumps `token_version`, so every
+//   session the attacker may already hold dies with it.
+// - **Single use + short expiry**, and requesting a new link invalidates
+//   the previous one.
+
+/// Hash a reset token for storage/lookup. Deterministic (unlike a
+/// password hash) because we must find the row by the presented token;
+/// pre-image resistance is what protects the stored value, and the
+/// token's own 256 bits of entropy make brute force irrelevant.
+fn hash_reset_token(token: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(token.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+/// 256 bits of CSPRNG output, URL-safe. `OsRng` (not `thread_rng`) so
+/// the source is unambiguously the OS entropy pool.
+fn generate_reset_token() -> String {
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    base64_stub::encode(&bytes)
+}
+
+pub async fn forgot_form(
+    State(state): State<AppState>,
+    MaybeCurrentUser(current): MaybeCurrentUser,
+) -> Result<Response, AppError> {
+    if current.is_some() {
+        return Ok(Redirect::to("/app").into_response());
+    }
+    Ok(render(&ForgotPasswordPage {
+        app_name: &state.config.app_name,
+        base_url: &state.config.base_url,
+        signed_in: false,
+        error: None,
+        sent: false,
+        email: String::new(),
+    })?
+    .into_response())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ForgotInput {
+    pub email: String,
+}
+
+/// `POST /forgot` — issue a reset link.
+///
+/// Always renders the same "check your inbox" confirmation. An unknown
+/// address, an unverified account, and a successful send are
+/// indistinguishable to the caller.
+pub async fn forgot(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Form(input): Form<ForgotInput>,
+) -> Result<Response, AppError> {
+    let ip = client_ip(&headers, Some(&peer), state.config.trusted_proxy_hops);
+    let ua = user_agent(&headers);
+    let email = input.email.trim().to_ascii_lowercase();
+
+    // The confirmation every caller sees, whatever actually happened.
+    let confirm = |state: &AppState| {
+        render(&ForgotPasswordPage {
+            app_name: &state.config.app_name,
+            base_url: &state.config.base_url,
+            signed_in: false,
+            error: None,
+            sent: true,
+            email: String::new(),
+        })
+    };
+
+    // Throttle per IP *and* per address: the first bounds mass
+    // enumeration, the second stops someone mailbombing one person by
+    // replaying the form.
+    //
+    // The `&&` short-circuit is deliberate. Evaluating both arms
+    // unconditionally used to insert a limiter entry keyed on the
+    // submitted address *even when the IP was already throttled*, handing
+    // an attacker an unbounded supply of attacker-named keys — enough to
+    // drive the limiter map past its ceiling and, back when eviction was a
+    // `clear()`, wipe the brute-force defenses on every other route.
+    // `throttle_key` additionally caps each entry at a fixed size.
+    let allowed = allow_per_hour(&state.rate_limiter, &format!("forgot-ip:{ip}"), 10)
+        && allow_per_hour(
+            &state.rate_limiter,
+            &throttle_key("forgot-email", &email),
+            5,
+        );
+    if !allowed {
+        audit::record(
+            &state.db,
+            "password_reset_failed",
+            None,
+            Some(email),
+            Some(ip),
+            ua,
+            Some("rate limited".into()),
+        )
+        .await;
+        return Ok(confirm(&state)?.into_response());
+    }
+
+    let mut q = state
+        .db
+        .query("SELECT * FROM user WHERE email = $e LIMIT 1")
+        .bind(("e", email.clone()))
+        .await?;
+    let user: Option<User> = q.take(0)?;
+
+    if let Some(user) = user {
+        let token = generate_reset_token();
+        let expiry = Utc::now() + Duration::hours(state.config.reset_expiry_hours);
+        state
+            .db
+            .query("UPDATE $u SET reset_token_hash = $h, reset_expires = $x")
+            .bind(("u", user.id.clone()))
+            .bind(("h", hash_reset_token(&token)))
+            .bind(("x", expiry))
+            .await?;
+
+        // Send off the request path. Awaiting here would make this branch
+        // take an HTTPS round-trip to Postmark (~100-400ms) that the
+        // unknown-address branch below does not, turning the uniform
+        // response into a timing oracle that answers "is this address
+        // registered?" without any statistics. Detaching it equalizes the
+        // two paths; a send failure is already logged inside the mailer.
+        let link = format!("{}/reset/{token}", state.config.base_url);
+        let mailer = state.mailer.clone();
+        let (to, name) = (user.email.clone(), user.name.clone());
+        let window = state.config.reset_expiry_hours;
+        tokio::spawn(async move {
+            mailer.send_password_reset(&to, &name, &link, window).await;
+        });
+
+        audit::record(
+            &state.db,
+            "password_reset_requested",
+            Some(user.id.clone()),
+            Some(user.email.clone()),
+            Some(ip),
+            ua,
+            None,
+        )
+        .await;
+    } else {
+        // Unknown address: record the attempt (useful signal when
+        // someone is probing) but tell the caller nothing.
+        audit::record(
+            &state.db,
+            "password_reset_failed",
+            None,
+            Some(email),
+            Some(ip),
+            ua,
+            Some("no account".into()),
+        )
+        .await;
+    }
+
+    Ok(confirm(&state)?.into_response())
+}
+
+/// Look up the account a reset token belongs to, enforcing single-use
+/// and expiry. Returns `None` for unknown, already-used, or expired
+/// tokens — the caller must not distinguish between them.
+async fn user_for_reset_token(state: &AppState, token: &str) -> Result<Option<User>, AppError> {
+    let mut q = state
+        .db
+        .query(
+            "SELECT * FROM user \
+             WHERE reset_token_hash = $h AND reset_expires > time::now() \
+             LIMIT 1",
+        )
+        .bind(("h", hash_reset_token(token)))
+        .await?;
+    Ok(q.take(0)?)
+}
+
+pub async fn reset_form(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+) -> Result<Response, AppError> {
+    let valid = user_for_reset_token(&state, &token).await?.is_some();
+    Ok(render(&ResetPasswordPage {
+        app_name: &state.config.app_name,
+        base_url: &state.config.base_url,
+        signed_in: false,
+        token,
+        error: None,
+        valid,
+    })?
+    .into_response())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ResetInput {
+    pub new_password: String,
+    pub confirm_password: String,
+}
+
+/// `POST /reset/{token}` — set the new password.
+///
+/// On success: writes the hash, **revokes every existing session** for
+/// the account (the point of a reset — an attacker holding a stolen
+/// cookie loses it here), clears the token so the link can't be
+/// replayed, and marks the address verified, since receiving the mail
+/// proves inbox control.
+pub async fn reset(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Path(token): Path<String>,
+    Form(input): Form<ResetInput>,
+) -> Result<Response, AppError> {
+    let ip = client_ip(&headers, Some(&peer), state.config.trusted_proxy_hops);
+    let ua = user_agent(&headers);
+
+    let invalid_page = |state: &AppState, token: String, msg: Option<&str>, valid: bool| {
+        render(&ResetPasswordPage {
+            app_name: &state.config.app_name,
+            base_url: &state.config.base_url,
+            signed_in: false,
+            token,
+            error: msg,
+            valid,
+        })
+    };
+
+    let Some(user) = user_for_reset_token(&state, &token).await? else {
+        audit::record(
+            &state.db,
+            "password_reset_failed",
+            None,
+            None,
+            Some(ip),
+            ua,
+            Some("invalid or expired token".into()),
+        )
+        .await;
+        return Ok(invalid_page(&state, token, None, false)?.into_response());
+    };
+
+    if input.new_password.len() < 8 {
+        return Ok(invalid_page(
+            &state,
+            token,
+            Some("Password must be at least 8 characters."),
+            true,
+        )?
+        .into_response());
+    }
+    if input.new_password != input.confirm_password {
+        return Ok(invalid_page(
+            &state,
+            token,
+            Some("The two password fields don't match."),
+            true,
+        )?
+        .into_response());
+    }
+
+    let hashed = hash_password(&input.new_password).await?;
+    state
+        .db
+        .query(
+            "UPDATE $u SET password_hash = $h, \
+             reset_token_hash = NONE, reset_expires = NONE, \
+             email_verified = true, \
+             verification_token = NONE, verification_expires = NONE",
+        )
+        .bind(("u", user.id.clone()))
+        .bind(("h", hashed))
+        .await?;
+
+    // Kill every session that existed before this reset.
+    bump_token_version(&state, &user.id).await;
+
+    audit::record(
+        &state.db,
+        "password_reset_completed",
+        Some(user.id.clone()),
+        Some(user.email.clone()),
+        Some(ip),
+        ua,
+        None,
+    )
+    .await;
+
+    // Deliberately NOT signing them in: a fresh login proves they know
+    // the password they just set, and avoids handing a session to
+    // whoever happened to open the link.
+    Ok(Redirect::to("/login?reset=1").into_response())
 }

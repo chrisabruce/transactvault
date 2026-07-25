@@ -1,40 +1,31 @@
-//! `/healthcheck` — liveness, system stats, DB + storage + mailer probes.
+//! `/healthcheck` — minimal unauthenticated liveness probe.
+//!
+//! Intentionally leaks nothing about the host or the build: see the
+//! comment in [`healthcheck`] for why each field was removed.
 
 use axum::Json;
 use axum::extract::State;
 use serde_json::{Value, json};
-use sysinfo::System;
 
 use crate::state::AppState;
 
 pub async fn healthcheck(State(state): State<AppState>) -> Json<Value> {
+    // Deliberately minimal and cheap. This endpoint is unauthenticated
+    // (load balancers and uptime probes need it), so it must not be
+    // either an information source or an amplifier:
+    //
+    // - No version, host memory, CPU count or disk figures. Those told
+    //   an attacker exactly which build to match CVEs against and
+    //   sketched the host's capacity. Build version is still visible to
+    //   signed-in users in the page footer and on /admin/changelog.
+    // - No `System::new_all()`. It enumerated every process on the host
+    //   on every hit — an unauthenticated CPU amplifier.
+    // - No storage round-trip. Probing S3 per request let anyone drive
+    //   traffic (and cost) against the bucket; DB reachability alone is
+    //   a good liveness signal, and storage failures surface loudly in
+    //   /admin/errors.
     let db_ok = state.db.health().await.is_ok();
-    // A reachable bucket is healthy whether the probe key exists or not —
-    // we only care that the transport round-tripped successfully.
-    let storage_ok = state.storage.get_bytes(".__healthcheck__").await.is_ok();
-
-    let mut sys = System::new_all();
-    sys.refresh_all();
-
-    let overall = if db_ok && storage_ok {
-        "ok"
-    } else {
-        "degraded"
-    };
-
     Json(json!({
-        "version": env!("CARGO_PKG_VERSION"),
-        "app": state.config.app_name,
-        "status": overall,
-        "system": {
-            "memory_total": humansize::format_size(sys.total_memory(), humansize::BINARY),
-            "memory_used":  humansize::format_size(sys.used_memory(), humansize::BINARY),
-            "cpu_count":    sys.cpus().len(),
-        },
-        "services": {
-            "database": if db_ok { "up" } else { "down" },
-            "storage":  if storage_ok { "up" } else { "down" },
-            "email":    if state.config.email.is_enabled() { "enabled" } else { "disabled" },
-        }
+        "status": if db_ok { "ok" } else { "degraded" },
     }))
 }

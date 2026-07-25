@@ -28,7 +28,8 @@
            placeholder="Search Address, Client, MLS…"
            autocomplete="off"
            data-bind:q
-           data-on:input__debounce.350ms="@get('{{ live_results_url }}')">
+           data-results-url="{{ live_results_url }}"
+           data-on:input__debounce.350ms="@get(el.dataset.resultsUrl)">
     <select name="status" aria-label="Status" class="tx-toolbar-select">
         <option value="all"{% if filter_status == "all" || filter_status == "" %} selected{% endif %}>All statuses</option>
         <option value="active"{% if filter_status == "active" %} selected{% endif %}>Active</option>

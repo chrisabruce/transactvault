@@ -5604,7 +5604,7 @@ dependencies = [
 
 [[package]]
 name = "transactvault"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "argon2",
@@ -5632,9 +5632,11 @@ dependencies = [
  "rust-s3",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sha2",
  "surrealdb",
  "sysinfo 0.33.1",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",

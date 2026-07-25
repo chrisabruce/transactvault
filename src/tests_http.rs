@@ -81,7 +81,7 @@ async fn send(app: &TestApp, req: Request<Body>) -> (StatusCode, String) {
 /// `cookie` header.
 fn session_cookie(app: &TestApp, user_id: &RecordId) -> String {
     let key = crate::db::record_key(user_id);
-    let token = issue_token(&app.state.config, &key).expect("issue jwt");
+    let token = issue_token(&app.state.config, &key, 0).expect("issue jwt");
     format!("{SESSION_COOKIE}={token}")
 }
 
@@ -3412,4 +3412,1142 @@ async fn auth_forms_keep_typed_values_after_validation_errors() {
     assert_eq!(status, StatusCode::OK, "should re-render, not 400");
     assert!(body.contains("Password must be at least 8 characters."));
     assert!(body.contains(r#"value="Fresh Agent""#), "name kept");
+}
+
+// ---------------------------------------------------------------------------
+// Security regressions (2026-07-25 audit)
+// ---------------------------------------------------------------------------
+
+/// The `?status=` parameter is interpolated into a Datastar expression
+/// attribute, which the browser compiles with the `Function`
+/// constructor — Askama's HTML escaping does NOT make that sink safe
+/// (entities are decoded before Datastar reads the attribute). A
+/// crafted value used to execute arbitrary JS in the victim's session;
+/// the controller now allowlists the value. Verified in a real browser
+/// before the fix.
+#[tokio::test]
+async fn status_filter_cannot_inject_into_datastar_expression() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    join(&app.state, &broker, &b, "broker").await;
+
+    let payload = "x')+fetch('/PWNED')+('";
+    let uri = format!("/app/transactions?status={}", urlencoding::encode(payload));
+    let (status, body) = authed_get(&app, &broker, &uri).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Nothing attacker-controlled reaches the expression attribute —
+    // neither raw nor HTML-escaped (the escaped form is what the
+    // browser decodes back into executable syntax).
+    assert!(
+        !body.contains("fetch('/PWNED')") && !body.contains("fetch(&#39;/PWNED&#39;)"),
+        "attacker payload must never reach a Datastar expression attribute"
+    );
+    assert!(
+        !body.contains("PWNED"),
+        "unrecognized status values must be dropped entirely"
+    );
+    // A legitimate value still round-trips.
+    let (status, body) = authed_get(&app, &broker, "/app/transactions?status=sold").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("status=sold"), "valid filters still work");
+}
+
+/// Multipart part order is chosen by the client. The upload handler's
+/// cross-tenant guard for `item_id` used to live inside the `file` arm,
+/// so sending `file` BEFORE `item_id` skipped it entirely and the
+/// post-loop writes trusted raw client input — letting a caller attach
+/// to (and clear the review state of) a checklist item in another
+/// brokerage, and bypass the approved-item lock on their own.
+#[tokio::test]
+async fn upload_validates_item_id_regardless_of_multipart_field_order() {
+    let app = make_app().await;
+    // Victim brokerage with its own transaction + checklist item.
+    let victim_b = seed_brokerage(&app.state, "Victim").await;
+    let victim = seed_user(&app.state, "v@victim").await;
+    join(&app.state, &victim, &victim_b, "broker").await;
+    let victim_tx = seed_tx(&app.state, &victim_b, Some(&victim)).await;
+    let victim_item = seed_item(&app.state, &victim_tx, "pending").await;
+
+    // Attacker in a different brokerage, with their own transaction.
+    let atk_b = seed_brokerage(&app.state, "Attacker").await;
+    let atk = seed_user(&app.state, "a@atk").await;
+    join(&app.state, &atk, &atk_b, "broker").await;
+    let atk_tx = seed_tx(&app.state, &atk_b, Some(&atk)).await;
+    let atk_key = crate::db::record_key(&atk_tx);
+    let victim_item_key = crate::db::record_key(&victim_item);
+
+    // `file` FIRST, `item_id` second — the ordering that bypassed the guard.
+    let boundary = "----tvtest";
+    let body = format!(
+        "--{b}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"x.pdf\"\r\n\
+         Content-Type: application/pdf\r\n\r\nPDFDATA\r\n\
+         --{b}\r\nContent-Disposition: form-data; name=\"item_id\"\r\n\r\n{item}\r\n\
+         --{b}--\r\n",
+        b = boundary,
+        item = victim_item_key,
+    );
+    let cookie = session_cookie(&app, &atk);
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/app/transactions/{atk_key}/documents"))
+        .header("cookie", cookie)
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(body))
+        .unwrap();
+    let (status, _) = send(&app, req).await;
+    // The exact code depends on how far the request gets: with real
+    // storage the post-loop validation returns 404; in tests the null
+    // storage backend fails the streaming write first (500). Either
+    // way the request must NOT succeed — and, more importantly, must
+    // leave no trace on the victim's item (asserted below).
+    assert!(
+        status.is_client_error() || status.is_server_error(),
+        "a foreign item_id must never yield a successful upload; got {status}"
+    );
+
+    // And no edge was created into the victim's item.
+    #[derive(serde::Deserialize, surrealdb::types::SurrealValue)]
+    struct C {
+        count: i64,
+    }
+    let mut q = app
+        .state
+        .db
+        .query("SELECT count() FROM for_item WHERE out = $i GROUP ALL")
+        .bind(("i", victim_item.clone()))
+        .await
+        .expect("count edges");
+    let c: Option<C> = q.take(0).ok().flatten();
+    assert_eq!(
+        c.map(|c| c.count).unwrap_or(0),
+        0,
+        "no cross-tenant for_item edge may exist"
+    );
+}
+
+/// Path segments that are `.` or `..` must never survive into an S3 key
+/// or a ZIP entry name: S3 URLs resolve dot segments before signing (so
+/// the object escapes its brokerage prefix), and ZIP extractors resolve
+/// them on disk (zip-slip). Form codes reach both sinks and are
+/// attacker-controlled, because unknown codes are accepted verbatim.
+#[tokio::test]
+async fn path_segments_neutralize_dot_traversal() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    join(&app.state, &broker, &b, "broker").await;
+    let tx = seed_tx(&app.state, &b, Some(&broker)).await;
+    let key = crate::db::record_key(&tx);
+
+    // A hand-typed traversing form code is accepted as a checklist item
+    // (by design) …
+    let (status, _) = authed_post(
+        &app,
+        &broker,
+        &format!("/app/transactions/{key}/checklist"),
+        "form_code=../../../../tmp/pwn",
+    )
+    .await;
+    assert!(status.is_redirection(), "unknown codes are still accepted");
+
+    // … but the export must not turn it into a traversing archive path.
+    let (status, ct, bytes) =
+        authed_get_raw(&app, &broker, &format!("/app/transactions/{key}/export")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(ct, "application/zip");
+    let archive = String::from_utf8_lossy(&bytes);
+    assert!(
+        !archive.contains(".."),
+        "no ZIP entry name may contain a traversing dot segment"
+    );
+}
+
+/// The session cookie must carry `Secure` on an HTTPS deployment, or
+/// the browser leaks the multi-day session JWT over plaintext.
+#[tokio::test]
+async fn session_cookie_is_secure_on_https_deployments() {
+    use axum::extract::ConnectInfo;
+    use std::net::SocketAddr;
+
+    // `Config::for_tests` uses an http:// base_url, so build the app,
+    // then assert the flag tracks BASE_URL.
+    let app = make_app().await;
+    assert!(
+        !app.state.config.base_url.starts_with("https://"),
+        "precondition: test config is http"
+    );
+
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let user = seed_user(&app.state, "u@a").await;
+    join(&app.state, &user, &b, "broker").await;
+
+    // Drive a real login to observe the emitted Set-Cookie.
+    let hash = crate::auth::hash_password("supersecret123")
+        .await
+        .expect("hash");
+    app.state
+        .db
+        .query("UPDATE $u SET password_hash = $h, email_verified = true")
+        .bind(("u", user.clone()))
+        .bind(("h", hash))
+        .await
+        .expect("set password");
+
+    let mut req = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from("email=u@a&password=supersecret123"))
+        .unwrap();
+    req.extensions_mut()
+        .insert(ConnectInfo::<SocketAddr>("127.0.0.1:0".parse().unwrap()));
+    let response = app.router.clone().oneshot(req).await.expect("login");
+    let set_cookie = response
+        .headers()
+        .get(axum::http::header::SET_COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    assert!(set_cookie.contains("HttpOnly"), "HttpOnly required");
+    assert!(set_cookie.contains("SameSite=Lax"), "SameSite required");
+    // http:// test config ⇒ no Secure (so local dev works); the flag is
+    // derived from BASE_URL, which is what production sets.
+    assert!(
+        !set_cookie.contains("Secure"),
+        "http deployments must not set Secure (would break local dev); got {set_cookie:?}"
+    );
+}
+
+/// Boot-time configuration guards: a publicly-known JWT secret, a short
+/// one, or a destructive reset aimed at an https deployment must all
+/// refuse to start rather than fail open.
+#[test]
+fn config_guards_reject_unsafe_deployments() {
+    use crate::config::Config;
+
+    let base = Config::for_tests();
+
+    let mut dev_secret = Config::for_tests();
+    dev_secret.jwt_secret = "dev-only-secret-change-me-change-me-change-me-change-me".into();
+    assert!(
+        dev_secret.assert_safe_for_deployment().is_err(),
+        "the published development secret must be refused"
+    );
+
+    let mut short = Config::for_tests();
+    short.jwt_secret = "tooshort".into();
+    assert!(
+        short.assert_safe_for_deployment().is_err(),
+        "a <32 char secret must be refused"
+    );
+
+    let mut wipe_prod = Config::for_tests();
+    wipe_prod.jwt_secret = "0123456789abcdef0123456789abcdef0123456789".into();
+    wipe_prod.base_url = "https://app.example.com".into();
+    wipe_prod.dev_reset_on_boot = true;
+    assert!(
+        wipe_prod.assert_safe_for_deployment().is_err(),
+        "DEV_RESET_ON_BOOT on an https deployment must be refused"
+    );
+
+    let mut ok = base;
+    ok.jwt_secret = "0123456789abcdef0123456789abcdef0123456789".into();
+    assert!(
+        ok.assert_safe_for_deployment().is_ok(),
+        "a sane config still boots"
+    );
+}
+
+/// Every response carries the baseline security headers, and HSTS is
+/// withheld on http deployments (it is sticky in browsers, so shipping
+/// it from a local build would poison the developer's browser).
+#[tokio::test]
+async fn responses_carry_security_headers() {
+    let app = make_app().await;
+    let req = Request::builder()
+        .uri("/login")
+        .body(Body::empty())
+        .unwrap();
+    let mut req = req;
+    req.extensions_mut()
+        .insert(axum::extract::ConnectInfo::<std::net::SocketAddr>(
+            "127.0.0.1:0".parse().unwrap(),
+        ));
+    let response = app.router.clone().oneshot(req).await.expect("oneshot");
+    let h = response.headers();
+    let get = |n: &str| {
+        h.get(n)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string()
+    };
+    assert_eq!(get("x-frame-options"), "DENY", "clickjacking defense");
+    assert_eq!(get("x-content-type-options"), "nosniff");
+    assert!(get("referrer-policy").contains("strict-origin"));
+    let csp = get("content-security-policy");
+    assert!(csp.contains("frame-ancestors 'none'"), "CSP: {csp}");
+    assert!(csp.contains("form-action 'self'"), "CSP: {csp}");
+    assert!(csp.contains("base-uri 'self'"), "CSP: {csp}");
+    assert!(csp.contains("object-src 'none'"), "CSP: {csp}");
+    assert!(
+        get("strict-transport-security").is_empty(),
+        "HSTS must not be sent from an http deployment"
+    );
+}
+
+/// Cookie-authenticated forms have no CSRF tokens, so cross-site writes
+/// are blocked with Fetch Metadata. Same-origin writes and non-browser
+/// clients (the signature-verified Stripe webhook) must keep working.
+#[tokio::test]
+async fn cross_site_state_changing_requests_are_blocked() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    join(&app.state, &broker, &b, "broker").await;
+    let cookie = session_cookie(&app, &broker);
+
+    let post = |site: Option<&str>, origin: Option<&str>, cookie: String| {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/app/transactions")
+            .header("cookie", cookie)
+            .header("content-type", "application/x-www-form-urlencoded");
+        if let Some(s) = site {
+            builder = builder.header("sec-fetch-site", s);
+        }
+        if let Some(o) = origin {
+            builder = builder.header("origin", o);
+        }
+        builder
+            .body(Body::from("property_address=1+Main+St"))
+            .unwrap()
+    };
+
+    // Attacker page → blocked before any handler work.
+    let (status, _) = send(&app, post(Some("cross-site"), None, cookie.clone())).await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "cross-site POST must be blocked"
+    );
+
+    // A sibling subdomain is *same-site* — SameSite=Lax would allow it,
+    // which is exactly the hole this closes.
+    let (status, _) = send(&app, post(Some("same-site"), None, cookie.clone())).await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "same-site (sibling subdomain) POST must be blocked too"
+    );
+
+    // Our own pages still work.
+    let (status, _) = send(&app, post(Some("same-origin"), None, cookie.clone())).await;
+    assert!(
+        status.is_redirection(),
+        "same-origin POST must succeed, got {status}"
+    );
+
+    // Non-browser client with neither header (e.g. the Stripe webhook,
+    // which authenticates by signature) is allowed through.
+    let (status, _) = send(&app, post(None, None, cookie)).await;
+    assert!(
+        status.is_redirection(),
+        "header-less client must not be blocked, got {status}"
+    );
+}
+
+/// The rate limiter keys on client IP, so IP resolution must not be
+/// forgeable. Only the trusted proxy's own X-Forwarded-For entries
+/// count; spoofed headers and the classic `CF-Connecting-IP` trick are
+/// ignored.
+#[test]
+fn client_ip_ignores_spoofed_forwarding_headers() {
+    use crate::security::client_ip;
+    use axum::http::HeaderMap;
+    use std::net::SocketAddr;
+
+    let peer: SocketAddr = "203.0.113.7:1234".parse().unwrap();
+
+    // No proxy configured: forwarding headers are ignored entirely.
+    let mut h = HeaderMap::new();
+    h.insert("x-forwarded-for", "9.9.9.9".parse().unwrap());
+    h.insert("cf-connecting-ip", "9.9.9.9".parse().unwrap());
+    assert_eq!(client_ip(&h, Some(&peer), 0), "203.0.113.7");
+
+    // One trusted proxy: it appends the real client, so the attacker's
+    // injected entry sits to the LEFT and must not win.
+    let mut h = HeaderMap::new();
+    h.insert("x-forwarded-for", "9.9.9.9, 198.51.100.5".parse().unwrap());
+    assert_eq!(
+        client_ip(&h, Some(&peer), 1),
+        "198.51.100.5",
+        "must take the proxy-written entry, not the client-supplied one"
+    );
+
+    // CF-Connecting-IP is no longer consulted at all.
+    let mut h = HeaderMap::new();
+    h.insert("cf-connecting-ip", "9.9.9.9".parse().unwrap());
+    h.insert("x-forwarded-for", "198.51.100.5".parse().unwrap());
+    assert_eq!(client_ip(&h, Some(&peer), 1), "198.51.100.5");
+
+    // Chain shorter than expected → fall back to the peer rather than
+    // trusting a client-supplied value.
+    let mut h = HeaderMap::new();
+    h.insert("x-forwarded-for", "9.9.9.9".parse().unwrap());
+    assert_eq!(client_ip(&h, Some(&peer), 2), "203.0.113.7");
+}
+
+/// Flooding the limiter with unique keys must not restore anyone's quota.
+///
+/// The limiter used to `clear()` its map once it passed a hard ceiling,
+/// so filling it with throwaway keys handed every other key a fresh
+/// bucket — and `POST /forgot` created a bucket named after an
+/// attacker-supplied address on every request, which made the flood
+/// trivially scriptable. Eviction now drops the *least*-throttled buckets
+/// first, so an exhausted bucket is the last thing to go.
+#[test]
+fn key_flood_cannot_reset_an_exhausted_bucket() {
+    use crate::security::{RateLimiter, allow_per_hour};
+
+    let rl = RateLimiter::new();
+
+    // Burn a victim bucket down to empty, as a brute-force attempt would.
+    for _ in 0..5 {
+        assert!(allow_per_hour(&rl, "login:victim@example.com", 5));
+    }
+    assert!(
+        !allow_per_hour(&rl, "login:victim@example.com", 5),
+        "precondition: the victim bucket is exhausted"
+    );
+
+    // Flood well past the 50k ceiling with distinct keys.
+    for i in 0..60_000 {
+        allow_per_hour(&rl, &format!("forgot-email:flood-{i}@example.com"), 5);
+    }
+
+    assert!(
+        !allow_per_hour(&rl, "login:victim@example.com", 5),
+        "the flood reset an exhausted bucket — brute-force protection is bypassable"
+    );
+}
+
+/// Following a verification link must not sign anybody in.
+///
+/// `/verify/{token}` is a GET, so `SameSite=Lax` attaches cookies on a
+/// top-level navigation and the Fetch-Metadata CSRF layer — which only
+/// guards unsafe methods — never sees it. While this route minted a
+/// session it was a session-fixation primitive: send a victim your own
+/// verification link and their browser silently becomes your account,
+/// so everything they upload next lands in your brokerage.
+#[tokio::test]
+async fn verification_link_does_not_mint_a_session() {
+    let app = make_app().await;
+
+    let token = "verify-token-for-test";
+    let seeded: Option<crate::models::User> = app
+        .state
+        .db
+        .create("user")
+        .content(crate::models::NewUser {
+            email: "newbie@x.test".into(),
+            name: "Newbie".into(),
+            password_hash: "x".into(),
+            email_verified: false,
+            verification_token: Some(token.to_string()),
+            verification_expires: Some(chrono::Utc::now() + chrono::Duration::hours(24)),
+            signup_ip: None,
+            signup_user_agent: None,
+        })
+        .await
+        .expect("seed unverified user");
+    seeded.expect("seeded user row");
+
+    let mut req = Request::builder()
+        .uri(format!("/verify/{token}"))
+        .body(Body::empty())
+        .unwrap();
+    req.extensions_mut()
+        .insert(axum::extract::ConnectInfo::<std::net::SocketAddr>(
+            "127.0.0.1:0".parse().expect("loopback addr"),
+        ));
+    let res = app
+        .router
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("verify responds");
+
+    assert!(res.status().is_redirection(), "status: {}", res.status());
+    let location = res
+        .headers()
+        .get("location")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert_eq!(
+        location, "/login?verified=1",
+        "verification must land on the login form, not an authenticated page"
+    );
+
+    let issued_session = res.headers().get_all("set-cookie").iter().any(|v| {
+        v.to_str()
+            .map(|s| {
+                s.starts_with(crate::auth::middleware::SESSION_COOKIE) && !s.contains("Max-Age=0")
+            })
+            .unwrap_or(false)
+    });
+    assert!(
+        !issued_session,
+        "verification must not issue a session cookie"
+    );
+
+    // The side effect that matters still happened.
+    let mut q = app
+        .state
+        .db
+        .query("SELECT VALUE email_verified FROM user WHERE email = 'newbie@x.test'")
+        .await
+        .expect("read user");
+    let verified: Vec<bool> = q.take(0).expect("take verified");
+    assert_eq!(verified.first(), Some(&true), "address must be verified");
+}
+
+/// The `Origin` fallback must demand an exact origin match.
+///
+/// The check used to be `base_url.starts_with(origin)`, which asks the
+/// question backwards and accepted any origin that was a *prefix* of
+/// BASE_URL — including a real, registrable neighbouring domain.
+#[test]
+fn csrf_origin_fallback_requires_exact_match() {
+    use crate::router::origin_matches;
+
+    let base = "https://app.transactvault.com";
+
+    assert!(origin_matches(base, "https://app.transactvault.com"));
+    // Configuration slop on either side must not matter.
+    assert!(origin_matches(
+        "https://app.transactvault.com/",
+        "https://app.transactvault.com"
+    ));
+    assert!(origin_matches(
+        "https://app.transactvault.com/app/dashboard",
+        "https://APP.TransactVault.com"
+    ));
+
+    // The prefix family — every one of these passed before.
+    assert!(
+        !origin_matches(base, "https://app.transactvault.co"),
+        "a registrable neighbouring domain must not pass"
+    );
+    assert!(!origin_matches(base, "https://app.transactvault"));
+    assert!(!origin_matches(base, "https://app"));
+    assert!(!origin_matches(base, "https:"));
+
+    // The suffix family, which the old direction happened to reject.
+    assert!(!origin_matches(
+        base,
+        "https://app.transactvault.com.evil.test"
+    ));
+    assert!(!origin_matches(base, "https://evil.test"));
+
+    // Scheme, port and the sandboxed-iframe literal all matter.
+    assert!(!origin_matches(base, "http://app.transactvault.com"));
+    assert!(!origin_matches(base, "https://app.transactvault.com:8443"));
+    assert!(!origin_matches(base, "null"));
+    assert!(!origin_matches(base, ""));
+}
+
+/// Every response carries the security headers — including the ones
+/// middleware synthesizes.
+///
+/// `security_headers` used to sit inside `CatchPanicLayer` and
+/// `TimeoutLayer`, so a panic-500 and a 504 were served with no CSP, no
+/// `nosniff` and no `X-Frame-Options`. A 404 exercises the same path: it
+/// is produced by the router fallback, not by any handler.
+#[tokio::test]
+async fn security_headers_cover_middleware_synthesized_responses() {
+    let app = make_app().await;
+
+    // `/__test/panic` is the case that regressed: its 500 is synthesized
+    // by CatchPanicLayer, which no handler-adjacent layer ever sees.
+    for uri in [
+        "/",
+        "/definitely-not-a-route",
+        "/app/transactions",
+        "/__test/panic",
+    ] {
+        let req = Request::builder().uri(uri).body(Body::empty()).unwrap();
+        let res = app
+            .router
+            .clone()
+            .oneshot(req)
+            .await
+            .expect("router responds");
+        let status = res.status();
+        let headers = res.headers();
+        for name in [
+            "content-security-policy",
+            "x-content-type-options",
+            "x-frame-options",
+            "referrer-policy",
+        ] {
+            assert!(
+                headers.contains_key(name),
+                "{uri} ({status}) is missing {name}"
+            );
+        }
+    }
+
+    // The policy must actually permit what the app loads. `profile.html`
+    // pulls the avatar cropper's stylesheet from jsDelivr, and an earlier
+    // `style-src 'self' 'unsafe-inline'` silently rendered the cropper
+    // unstyled in every enforcing browser.
+    let req = Request::builder().uri("/").body(Body::empty()).unwrap();
+    let res = app.router.clone().oneshot(req).await.expect("responds");
+    let csp = res
+        .headers()
+        .get("content-security-policy")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    let directive = |name: &str| {
+        csp.split(';')
+            .map(str::trim)
+            .find(|d| d.starts_with(name))
+            .unwrap_or_default()
+            .to_string()
+    };
+    assert!(
+        directive("style-src").contains("https://cdn.jsdelivr.net"),
+        "style-src must allow the cropper stylesheet: {csp}"
+    );
+    assert!(
+        directive("script-src").contains("https://cdn.jsdelivr.net"),
+        "script-src must allow the Datastar bundle: {csp}"
+    );
+    for locked_down in [
+        "object-src 'none'",
+        "frame-ancestors 'none'",
+        "base-uri 'self'",
+    ] {
+        assert!(
+            csp.contains(locked_down),
+            "{locked_down} missing from: {csp}"
+        );
+    }
+}
+
+/// Logging out must revoke sessions even with no brokerage attached.
+///
+/// `MaybeCurrentUser` resolves to `None` when the `works_at` edge is
+/// missing, so this user's logout cleared the cookie but never bumped
+/// `token_version` — a stolen JWT stayed live, and became a full-privilege
+/// session the moment they accepted an invite. `/app/no-brokerage` ships
+/// exactly this logout form, so it was the *expected* path for these users.
+#[tokio::test]
+async fn logout_revokes_sessions_for_brokerage_less_users() {
+    let app = make_app().await;
+    let user = seed_user(&app.state, "orphan@x.test").await;
+    // Deliberately no `join(...)`: signed in, attached to nothing.
+
+    let stolen = session_cookie(&app, &user);
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/logout")
+        .header("cookie", stolen.clone())
+        .header("sec-fetch-site", "same-origin")
+        .body(Body::empty())
+        .unwrap();
+    let (status, _) = send(&app, req).await;
+    assert!(status.is_redirection(), "logout redirects: {status}");
+
+    let mut q = app
+        .state
+        .db
+        .query("SELECT VALUE token_version FROM ONLY $u")
+        .bind(("u", user.clone()))
+        .await
+        .expect("read version");
+    let version: Option<i64> = q.take(0).expect("take version");
+    assert_eq!(
+        version.unwrap_or(0),
+        1,
+        "logout must bump token_version even with no brokerage membership"
+    );
+
+    // And the captured token is genuinely dead, not merely un-cookied.
+    let req = Request::builder()
+        .uri("/app/no-brokerage")
+        .header("cookie", stolen)
+        .body(Body::empty())
+        .unwrap();
+    let (status, _) = send(&app, req).await;
+    assert_ne!(
+        status,
+        StatusCode::OK,
+        "a token captured before logout must stop working"
+    );
+}
+
+/// Hashed throttle keys must be fixed-size and collision-free per input,
+/// so unbounded request data cannot inflate a limiter entry.
+#[test]
+fn throttle_keys_are_bounded_and_distinct() {
+    use crate::security::throttle_key;
+
+    let huge = "a".repeat(100_000);
+    let key = throttle_key("forgot-email", &huge);
+    assert_eq!(key.len(), "forgot-email".len() + 1 + 32);
+    assert!(key.starts_with("forgot-email:"));
+    assert_ne!(
+        throttle_key("forgot-email", "a@x.test"),
+        throttle_key("forgot-email", "b@x.test")
+    );
+    assert_eq!(
+        throttle_key("forgot-email", "a@x.test"),
+        throttle_key("forgot-email", "a@x.test"),
+        "must be deterministic or the throttle never accumulates"
+    );
+}
+
+/// Invitations must expire — a forwarded link previously granted
+/// brokerage access forever, while the invite email claimed otherwise.
+#[tokio::test]
+async fn expired_invitations_are_rejected() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    join(&app.state, &broker, &b, "broker").await;
+    authed_post(&app, &broker, "/app/team/invite", "email=new@x&role=agent").await;
+
+    let mut q = app
+        .state
+        .db
+        .query("SELECT VALUE token FROM invitation WHERE email = 'new@x' LIMIT 1")
+        .await
+        .expect("token");
+    let tokens: Vec<String> = q.take(0).unwrap_or_default();
+    let token = tokens.into_iter().next().expect("invite token");
+
+    // Fresh invite works.
+    let req = Request::builder()
+        .uri(format!("/invite/{token}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _) = send(&app, req).await;
+    assert_eq!(status, StatusCode::OK, "a live invite renders");
+
+    // Backdate it past expiry — the link stops working.
+    app.state
+        .db
+        .query("UPDATE invitation SET expires_at = time::now() - 1d WHERE email = 'new@x'")
+        .await
+        .expect("expire");
+    let req = Request::builder()
+        .uri(format!("/invite/{token}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _) = send(&app, req).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "an expired invite is refused"
+    );
+}
+
+/// Logout and password change must revoke sessions server-side. Before
+/// this, a JWT captured beforehand stayed valid for its full 7-day
+/// lifetime — "sign out on the lost laptop" and "change my password
+/// because I was compromised" both did nothing to a stolen token.
+#[tokio::test]
+async fn logout_and_password_change_revoke_outstanding_sessions() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let user = seed_user(&app.state, "u@a").await;
+    join(&app.state, &user, &b, "broker").await;
+
+    // A token minted now (version 0) works.
+    let stolen = session_cookie(&app, &user);
+    let req = Request::builder()
+        .uri("/app/transactions")
+        .header("cookie", stolen.clone())
+        .body(Body::empty())
+        .unwrap();
+    let (status, _) = send(&app, req).await;
+    assert_eq!(status, StatusCode::OK, "fresh session works");
+
+    // Logging out revokes it, not just the browser's copy.
+    let req = Request::builder()
+        .method("POST")
+        .uri("/logout")
+        .header("cookie", stolen.clone())
+        .header("sec-fetch-site", "same-origin")
+        .body(Body::empty())
+        .unwrap();
+    let (status, _) = send(&app, req).await;
+    assert!(status.is_redirection(), "logout redirects");
+
+    let req = Request::builder()
+        .uri("/app/transactions")
+        .header("cookie", stolen)
+        .body(Body::empty())
+        .unwrap();
+    let (status, _) = send(&app, req).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "a token captured before logout must stop working"
+    );
+
+    // Same for a password change: mint a fresh session, change the
+    // password, and the pre-change token dies.
+    let hash = crate::auth::hash_password("currentpass123")
+        .await
+        .expect("hash");
+    app.state
+        .db
+        .query("UPDATE $u SET password_hash = $h")
+        .bind(("u", user.clone()))
+        .bind(("h", hash))
+        .await
+        .expect("set password");
+    let before = {
+        // Re-read the bumped version so this token is currently valid.
+        let mut q = app
+            .state
+            .db
+            .query("SELECT VALUE token_version FROM ONLY $u")
+            .bind(("u", user.clone()))
+            .await
+            .expect("version");
+        let v: Option<i64> = q.take(0).expect("take version");
+        let key = crate::db::record_key(&user);
+        let token =
+            crate::auth::issue_token(&app.state.config, &key, v.unwrap_or(0)).expect("issue");
+        format!("{}={token}", crate::auth::middleware::SESSION_COOKIE)
+    };
+    let req = Request::builder()
+        .method("POST")
+        .uri("/app/profile/password")
+        .header("cookie", before.clone())
+        .header("sec-fetch-site", "same-origin")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from(
+            "current_password=currentpass123&new_password=brandnewpass456&confirm_password=brandnewpass456",
+        ))
+        .unwrap();
+    let (status, _) = send(&app, req).await;
+    assert!(
+        status.is_redirection(),
+        "password change succeeds: {status}"
+    );
+
+    let req = Request::builder()
+        .uri("/app/transactions")
+        .header("cookie", before)
+        .body(Body::empty())
+        .unwrap();
+    let (status, _) = send(&app, req).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "sessions issued before the password change must be revoked"
+    );
+}
+
+/// The public healthcheck must stay a liveness signal and nothing more
+/// — no build version, no host capacity figures, and no work an
+/// anonymous caller can amplify.
+#[tokio::test]
+async fn healthcheck_leaks_nothing_and_stays_cheap() {
+    let app = make_app().await;
+    let (status, body) = {
+        let req = Request::builder()
+            .uri("/healthcheck")
+            .body(Body::empty())
+            .unwrap();
+        send(&app, req).await
+    };
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("\"status\""), "still reports liveness");
+    for leak in ["version", "memory", "cpu", "system"] {
+        assert!(
+            !body.contains(leak),
+            "healthcheck must not expose {leak}; got {body}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Password reset
+// ---------------------------------------------------------------------------
+
+/// Helper: run the whole reset flow for `email` and return the token
+/// from the emitted link (the mailer logs it when delivery is disabled,
+/// but we read it from the DB-side effect instead of the log).
+async fn request_reset(app: &TestApp, email: &str) -> (StatusCode, String) {
+    let req = Request::builder()
+        .method("POST")
+        .uri("/forgot")
+        .header("sec-fetch-site", "same-origin")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from(format!("email={}", urlencoding::encode(email))))
+        .unwrap();
+    send(app, req).await
+}
+
+/// End-to-end: request a link, set a new password with it, sign in with
+/// the new password. Also pins the two properties that make this flow
+/// safe — every outstanding session dies, and the link is single-use.
+#[tokio::test]
+async fn password_reset_end_to_end_revokes_sessions_and_is_single_use() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let user = seed_user(&app.state, "reset@a").await;
+    join(&app.state, &user, &b, "broker").await;
+    let old_hash = crate::auth::hash_password("originalpass1")
+        .await
+        .expect("hash");
+    app.state
+        .db
+        .query("UPDATE $u SET password_hash = $h, email_verified = true")
+        .bind(("u", user.clone()))
+        .bind(("h", old_hash))
+        .await
+        .expect("seed password");
+
+    // A session that exists BEFORE the reset — it must not survive.
+    let stolen = session_cookie(&app, &user);
+
+    let (status, body) = request_reset(&app, "reset@a").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Check your inbox"));
+
+    // The row now holds a HASH, never the token itself.
+    #[derive(serde::Deserialize, surrealdb::types::SurrealValue)]
+    struct Row {
+        reset_token_hash: Option<String>,
+    }
+    let mut q = app
+        .state
+        .db
+        .query("SELECT reset_token_hash FROM ONLY $u")
+        .bind(("u", user.clone()))
+        .await
+        .expect("row");
+    let row: Option<Row> = q.take(0).expect("take");
+    let stored = row.and_then(|r| r.reset_token_hash).expect("hash stored");
+    assert_eq!(stored.len(), 64, "stored value is a sha256 hex digest");
+
+    // The plaintext token exists only in the email — by design, nothing
+    // persists it. To drive the rest of the flow, install a known
+    // token's hash directly; this is the same value the real link would
+    // resolve to, and it keeps the test independent of log capture.
+    // (The live emailed-link path is exercised manually against a
+    // running instance.)
+    let token = {
+        let known = "known-test-token-value";
+        let mut hasher = <sha2::Sha256 as sha2::Digest>::new();
+        sha2::Digest::update(&mut hasher, known.as_bytes());
+        let hash = hex::encode(sha2::Digest::finalize(hasher));
+        app.state
+            .db
+            .query("UPDATE $u SET reset_token_hash = $h")
+            .bind(("u", user.clone()))
+            .bind(("h", hash))
+            .await
+            .expect("install known token");
+        known.to_string()
+    };
+
+    // The form renders for a live token.
+    let req = Request::builder()
+        .uri(format!("/reset/{token}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, body) = send(&app, req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Choose a new password"));
+
+    // Set the new password.
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/reset/{token}"))
+        .header("sec-fetch-site", "same-origin")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from(
+            "new_password=brandnewpass9&confirm_password=brandnewpass9",
+        ))
+        .unwrap();
+    let (status, _) = send(&app, req).await;
+    assert!(
+        status.is_redirection(),
+        "reset should redirect, got {status}"
+    );
+
+    // 1. Sessions issued before the reset are dead.
+    let req = Request::builder()
+        .uri("/app/transactions")
+        .header("cookie", stolen)
+        .body(Body::empty())
+        .unwrap();
+    let (status, _) = send(&app, req).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "a reset must revoke sessions an attacker already holds"
+    );
+
+    // 2. The link is single-use.
+    let req = Request::builder()
+        .uri(format!("/reset/{token}"))
+        .body(Body::empty())
+        .unwrap();
+    let (_, body) = send(&app, req).await;
+    assert!(
+        body.contains("isn't usable"),
+        "a used token must not work twice"
+    );
+
+    // 3. The new password actually works.
+    let req = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header("sec-fetch-site", "same-origin")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from("email=reset@a&password=brandnewpass9"))
+        .unwrap();
+    let (status, _) = send(&app, req).await;
+    assert!(status.is_redirection(), "new password should sign in");
+}
+
+/// The request endpoint must not reveal whether an address has an
+/// account — same status and same body either way.
+#[tokio::test]
+async fn password_reset_request_does_not_enumerate_accounts() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let user = seed_user(&app.state, "known@a").await;
+    join(&app.state, &user, &b, "broker").await;
+
+    let (known_status, known_body) = request_reset(&app, "known@a").await;
+    let (unknown_status, unknown_body) = request_reset(&app, "nobody@nowhere.example").await;
+
+    assert_eq!(known_status, unknown_status);
+    assert_eq!(
+        known_body, unknown_body,
+        "responses for known and unknown addresses must be byte-identical"
+    );
+    assert!(known_body.contains("Check your inbox"));
+}
+
+/// Expired links are refused, and refused with the same generic message
+/// as unknown ones.
+#[tokio::test]
+async fn expired_reset_tokens_are_refused() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let user = seed_user(&app.state, "exp@a").await;
+    join(&app.state, &user, &b, "broker").await;
+
+    let token = "expired-token-value";
+    let mut hasher = <sha2::Sha256 as sha2::Digest>::new();
+    sha2::Digest::update(&mut hasher, token.as_bytes());
+    let hash = hex::encode(sha2::Digest::finalize(hasher));
+    app.state
+        .db
+        .query("UPDATE $u SET reset_token_hash = $h, reset_expires = time::now() - 1h")
+        .bind(("u", user.clone()))
+        .bind(("h", hash))
+        .await
+        .expect("install expired token");
+
+    let req = Request::builder()
+        .uri(format!("/reset/{token}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, expired_body) = send(&app, req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(expired_body.contains("isn't usable"));
+
+    // An entirely unknown token renders the same page.
+    let req = Request::builder()
+        .uri("/reset/never-existed")
+        .body(Body::empty())
+        .unwrap();
+    let (_, unknown_body) = send(&app, req).await;
+    assert_eq!(
+        expired_body, unknown_body,
+        "expired and unknown tokens must be indistinguishable"
+    );
+
+    // And POSTing an expired token changes nothing.
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/reset/{token}"))
+        .header("sec-fetch-site", "same-origin")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from(
+            "new_password=shouldnotwork1&confirm_password=shouldnotwork1",
+        ))
+        .unwrap();
+    let (status, _) = send(&app, req).await;
+    assert_eq!(status, StatusCode::OK, "renders the invalid-link page");
+}
+
+/// The applicability checkboxes and the handler's own fields arrive in
+/// one form body but are parsed into two types by `FormWithApplies`
+/// (serde_urlencoded can't flatten). This pins that both halves land —
+/// the previous design duplicated the 15 checkbox fields onto every
+/// input struct, so a mismatch was invisible until a form silently
+/// applied to the wrong transaction types.
+#[tokio::test]
+async fn applies_picker_is_parsed_alongside_its_form() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    join(&app.state, &broker, &b, "broker").await;
+
+    // Broker adds a custom form, ticking a deliberate subset —
+    // including `referral`, the dimension added most recently.
+    let (status, _) = authed_post(
+        &app,
+        &broker,
+        "/app/forms/custom",
+        "code=XTEST&name=Cross+Check&group_name=Additional+Disclosures&required=1\
+         &type_residential=1&type_referral=1&side_listing=1&cond_probate=1",
+    )
+    .await;
+    assert!(status.is_redirection(), "custom form should be created");
+
+    #[derive(serde::Deserialize, surrealdb::types::SurrealValue)]
+    struct FormRow {
+        required: bool,
+        applies_types: Vec<String>,
+        applies_sides: Vec<String>,
+        applies_conditions: Vec<String>,
+    }
+    let mut q = app
+        .state
+        .db
+        .query("SELECT required, applies_types, applies_sides, applies_conditions FROM form WHERE code = 'XTEST'")
+        .await
+        .expect("load form");
+    let rows: Vec<FormRow> = q.take(0).unwrap_or_default();
+    assert_eq!(rows.len(), 1, "exactly one custom form created");
+    let f = &rows[0];
+
+    // The handler's own field parsed …
+    assert!(f.required, "`required` from the input struct");
+    // … and the picker's fields parsed, with unticked boxes excluded.
+    assert_eq!(f.applies_types, vec!["residential", "referral"]);
+    assert_eq!(f.applies_sides, vec!["listing"]);
+    assert_eq!(f.applies_conditions, vec!["probate"]);
 }

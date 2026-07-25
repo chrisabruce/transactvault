@@ -20,13 +20,17 @@ pub async fn record(
     user_agent: Option<String>,
     detail: Option<String>,
 ) {
+    // Same bounding as `record_error`: every one of these columns is
+    // populated from request data on at least one call path.
     let new = NewAuditEvent {
         kind: kind.to_string(),
-        actor_email,
+        actor_email: actor_email.as_deref().map(crate::sanitize::scrub),
         actor,
-        ip,
-        user_agent,
-        detail,
+        ip: ip.as_deref().map(crate::sanitize::scrub),
+        user_agent: user_agent.as_deref().map(crate::sanitize::scrub),
+        detail: detail
+            .as_deref()
+            .map(|d| crate::sanitize::scrub_line(d, 2000)),
     };
     let result: Result<Option<AuditEvent>, _> = db.create("audit_event").content(new).await;
     if let Err(e) = result {
@@ -62,16 +66,23 @@ pub async fn capture_errors(
     // response may be needed later but the request is consumed by
     // `next.run`.
     let method = req.method().to_string();
-    let path = req
-        .uri()
-        .path_and_query()
-        .map(|p| p.to_string())
-        .unwrap_or_else(|| req.uri().path().to_string());
+    // Path only — NOT path_and_query. Query strings carry search terms
+    // (`/app/search?q=<client name>`), which are customer PII we should
+    // not be parking in an admin-readable table for 30 days. The path
+    // plus the error chain is enough to diagnose.
+    // Redacted as well as query-stripped: reset / verify / invite tokens
+    // ride in the PATH, so without this a failed reset parked a live
+    // token in a table any super-admin can read for 30 days.
+    let path = crate::sanitize::redact_secret_path(req.uri().path()).into_owned();
     let peer = req
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|c| c.0);
-    let ip = crate::security::client_ip(req.headers(), peer.as_ref());
+    let ip = crate::security::client_ip(
+        req.headers(),
+        peer.as_ref(),
+        state.config.trusted_proxy_hops,
+    );
     let user_agent = crate::security::user_agent(req.headers());
     // Attribute the error to a user when a valid session cookie rides
     // along — decoded locally, no DB hit on the request path.
@@ -161,7 +172,11 @@ async fn record_error(
         detail: truncate(detail, 2000),
         actor_email,
         ip,
-        user_agent,
+        // `user_agent` is a raw request header: bounded in charset by
+        // hyper (visible ASCII + HTAB, so no CRLF) but not in length,
+        // and these rows live 30 days and render 200-at-a-time on
+        // /admin/errors.
+        user_agent: user_agent.as_deref().map(crate::sanitize::scrub),
     };
     let result: Result<Option<ErrorEvent>, _> = db.create("error_event").content(new).await;
     match result {

@@ -61,7 +61,19 @@ pub async fn create(
         .map(|v| matches!(v, "1" | "true" | "on" | "yes"))
         .unwrap_or(false);
 
-    let new_item = match input.form_code.as_deref().filter(|s| !s.is_empty()) {
+    // Scrubbed before anything downstream sees it. A code that matches no
+    // known form is kept verbatim by design (see below), and
+    // `checklist_item.form_code` has no ASSERT, so without this a newline
+    // typed here reached the upload log line and the export manifest —
+    // both of which are plain text an operator or auditor reads as
+    // authoritative.
+    let submitted_code = input
+        .form_code
+        .as_deref()
+        .map(|c| crate::sanitize::scrub_line(c, 80))
+        .filter(|s| !s.is_empty());
+
+    let new_item = match submitted_code.as_deref() {
         Some(code) => {
             // Resolve metadata from the brokerage's DB catalog first —
             // that's what the Add-an-item picker offered, and it's the

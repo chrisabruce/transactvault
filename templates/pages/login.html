@@ -14,6 +14,19 @@
             <p class="alert error" role="alert">{{ msg }}</p>
         {% when None %}{% endmatch %}
 
+        {% if just_verified %}
+            <p class="alert success" role="status">
+                Email verified. Sign in to get started.
+            </p>
+        {% endif %}
+
+        {% if just_reset %}
+            <p class="alert success" role="status">
+                Password updated. Sign in with your new password — you've been signed out
+                everywhere else.
+            </p>
+        {% endif %}
+
         <button type="button" class="btn google" disabled>Continue with Google <small>(coming soon)</small></button>
         <p class="auth-divider">or with email</p>
 
@@ -33,6 +46,8 @@
         </form>
 
         <footer>
+            <a href="/forgot">Forgot your password?</a>
+            <br>
             New here? <a href="/signup">Create a brokerage account</a>
         </footer>
     </section>

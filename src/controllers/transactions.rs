@@ -215,7 +215,7 @@ pub async fn list(
     // which defeats the purpose of leaving the cards on the page.)
     let totals = stat_grid_totals(&state, &transactions, user.role, &user.brokerage_id).await?;
 
-    let status_filter = filters.status.clone().unwrap_or_default();
+    let status_filter = canonical_status_filter(filters.status.as_deref().unwrap_or_default());
     if !status_filter.is_empty() && status_filter != "all" {
         // `open` is a legacy alias meaning Active OR Pending. The
         // dashboard no longer links to it (Active and Pending are now
@@ -495,6 +495,33 @@ fn derive_active_filter(status: &str, attention_on: bool) -> &'static str {
     }
 }
 
+/// Canonicalize the `?status=` filter to a value from a fixed
+/// allowlist, mapping anything unrecognized to `""` (no filter).
+///
+/// SECURITY: this is the primary defense for a real reflected-XSS
+/// hole, not a nicety. `filter_status` is interpolated into the
+/// transactions page's Datastar `data-init` attribute, whose value
+/// Datastar compiles with the JavaScript `Function` constructor.
+/// Askama's HTML escaping does NOT protect that sink — the browser
+/// decodes `&#39;` back to a literal `'` before Datastar reads the
+/// attribute, so a crafted `?status=x')+fetch(...)+('` escaped the
+/// string literal and executed in the victim's session (verified in a
+/// real browser against the pinned bundle). Filtering at the source
+/// means the value is safe everywhere it is used — the attribute, the
+/// stat-card URLs, and the fragment URLs alike.
+///
+/// Keep in sync with the `<select name="status">` options in
+/// `partials/tx_toolbar.html`. `open` is a legacy alias (Active OR
+/// Pending) kept for old bookmarks.
+fn canonical_status_filter(raw: &str) -> String {
+    match raw {
+        "all" | "active" | "pending" | "sold" | "canceled" | "withdrawn" | "open" => {
+            raw.to_string()
+        }
+        _ => String::new(),
+    }
+}
+
 /// Extract the `q` signal from Datastar's GET-request signal payload
 /// (`?datastar=<json>`). `None` when the param is absent or malformed,
 /// so callers fall back to the regular `q` query param.
@@ -531,7 +558,7 @@ pub async fn stats_fragment(
 ) -> Result<Html<String>, AppError> {
     let transactions = load_visible_transactions(&state, &user).await?;
     let totals = stat_grid_totals(&state, &transactions, user.role, &user.brokerage_id).await?;
-    let status_filter = filters.status.clone().unwrap_or_default();
+    let status_filter = canonical_status_filter(filters.status.as_deref().unwrap_or_default());
     let attention_on = is_truthy(&filters.attention);
     let active_filter = derive_active_filter(&status_filter, attention_on).to_string();
     render(&StatGridFragment {
@@ -882,6 +909,19 @@ pub async fn create(
         .filter(|s| !s.is_empty())
         .map(str::to_string);
 
+    // Both land in the newline-delimited `MANIFEST.txt` of a compliance
+    // export. That sink scrubs too, but refusing here means the stored
+    // record matches what the auditor reads.
+    if crate::sanitize::has_unsafe_text(&address_input)
+        || apn_input
+            .as_deref()
+            .is_some_and(crate::sanitize::has_unsafe_text)
+    {
+        return Err(AppError::invalid(
+            "Property address and APN can't contain control or invisible characters.",
+        ));
+    }
+
     let property_address = match (address_input.is_empty(), &apn_input) {
         (false, _) => address_input,
         (true, Some(apn)) => format!("APN {apn}"),
@@ -1216,6 +1256,19 @@ pub async fn update(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
+
+    // Both land in the newline-delimited `MANIFEST.txt` of a compliance
+    // export. That sink scrubs too, but refusing here means the stored
+    // record matches what the auditor reads.
+    if crate::sanitize::has_unsafe_text(&address_input)
+        || apn_input
+            .as_deref()
+            .is_some_and(crate::sanitize::has_unsafe_text)
+    {
+        return Err(AppError::invalid(
+            "Property address and APN can't contain control or invisible characters.",
+        ));
+    }
 
     let property_address = match (address_input.is_empty(), &apn_input) {
         (false, _) => address_input,
@@ -1561,7 +1614,7 @@ pub async fn search(
     // plain param.
     let query = signal_query(&input.datastar).unwrap_or_else(|| input.q.unwrap_or_default());
     let needle = query.trim().to_ascii_lowercase();
-    let status_filter = input.status.clone().unwrap_or_default();
+    let status_filter = canonical_status_filter(input.status.as_deref().unwrap_or_default());
     let sort_key = input
         .sort
         .as_deref()

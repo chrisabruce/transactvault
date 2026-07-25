@@ -8,6 +8,130 @@ the bottom-right of every page.
 
 ## July 2026
 
+### v0.5.0 — Security hardening, password reset, and the 500s fix
+
+- **Fixed the intermittent "something went wrong" errors (500s).**
+  Root cause: SurrealDB's v3 driver changed what cloning the client
+  means — every clone opens its own database session, registered in
+  the background — and the app was unknowingly creating one per
+  request, occasionally racing its own session setup ("Session not
+  found"). The app now shares a single session for its lifetime,
+  which is the driver's documented recommendation, and a background
+  heartbeat verifies the database link every 45 seconds so any
+  degradation is detected and healed between requests, with a log
+  trail.
+
+- **Password reset.** There was no way to recover a forgotten password
+  — a user had to be deleted and re-invited, which detached them from
+  their transactions. There's now a "Forgot your password?" link on the
+  sign-in page: enter your email, get a link, choose a new password.
+  Links last one hour and work once. Completing a reset signs you out
+  everywhere else, so it doubles as the recovery path if you think
+  someone else has access to your account. The request page says the
+  same thing whether or not an account exists, so it can't be used to
+  discover who has one.
+
+- **Large exports no longer strain the server.** ZIP exports used to be
+  assembled entirely in memory — every document, plus the finished
+  archive, plus a copy held for the download — so a big brokerage
+  export could consume well over a gigabyte and risk taking the site
+  down. Documents now stream from storage through the compressor and
+  out to your browser, so memory stays flat no matter how large the
+  archive is. Verified with a 114 MB export: server memory didn't rise
+  at all.
+
+**Security hardening.** A full security audit was performed on this
+release and every finding is fixed. Nothing below was known to have
+been exploited; several were serious enough to fix before shipping.
+
+- **Two exploitable flaws closed.** A crafted link to the transactions
+  page could run arbitrary code in the browser of whoever clicked it,
+  acting as that user; and a hand-built upload request could attach a
+  document to — and clear the review status of — a checklist item in
+  *another* brokerage. Both are fixed and covered by tests.
+- **Sessions can now be revoked.** Signing out, and changing your
+  password, immediately invalidate every other session for your
+  account. Previously a session that had been copied stayed usable
+  until it expired on its own.
+- **Session cookies are marked `Secure`** on any HTTPS deployment, so
+  they can't leak over an unencrypted connection.
+- **Cross-site request forgery is blocked** for every action that
+  changes data, including from sibling subdomains.
+- **Browser hardening headers** are now sent on every page
+  (anti-clickjacking, content policy, referrer policy, and HSTS on
+  HTTPS).
+- **Rate limits actually hold.** They keyed off a header a caller
+  could forge, which made the login and signup limits bypassable;
+  IP detection now trusts only the reverse proxy. Password changes and
+  team invitations are rate-limited too.
+- **Invitations expire** after 14 days — the invite email always said
+  they did, and now that's true.
+- **Exports are bounded.** A single-transaction export had no size
+  limit, so a large one could exhaust server memory and take the site
+  down for everyone.
+- **Smaller fixes:** login no longer reveals whether an email is
+  registered (via response timing); the public health endpoint no
+  longer discloses build and host details; document downloads carry
+  stricter headers; the error log no longer stores search terms; and
+  the app refuses to start with a default/weak `JWT_SECRET`, or with
+  the destructive `DEV_RESET_ON_BOOT` flag set on an HTTPS deployment.
+
+A second audit pass went back over the fixes above, looking specifically
+for text that reaches somewhere it isn't escaped. It found no way to
+inject anything into a page, and these further issues:
+
+- **Rate limits could be wiped by flooding them.** Past a ceiling, the
+  limiter used to reset itself — handing every account a fresh
+  allowance — and the "forgot password" form let anyone fill it up on
+  demand. In effect the brute-force protection on sign-in could be
+  switched off from a public form. The limiter now discards its
+  least-restricted entries instead of resetting, so an exhausted limit
+  is the last thing to go.
+- **Verification links no longer sign you in.** Clicking one confirmed
+  your address *and* started a session, which meant a link sent to you
+  by someone else could quietly sign you into **their** account — and
+  anything you filed next would land in their brokerage. Verifying now
+  takes you to the sign-in page.
+- **Signing out always ends every session.** For a user not currently
+  attached to a brokerage — someone just removed, or waiting to accept
+  an invitation — signing out cleared the browser but left the session
+  itself alive, and it regained full access as soon as they joined a
+  brokerage.
+- **Reset and invitation links are no longer written to logs.** These
+  links carry a single-use secret in the address, and every request
+  address was being recorded — including into the admin error screen,
+  which keeps 30 days of history. A live password-reset link could sit
+  there, readable and usable.
+- **Names and addresses can't forge log or export entries.** Text
+  fields flow into server logs and into the `MANIFEST.txt` inside an
+  export, both of which are line-based. A deliberately placed line
+  break let someone add convincing-looking lines of their own — a fake
+  document count in a compliance export, or a fabricated log entry.
+  Invisible and direction-reversing characters are now refused on the
+  way in; a filename using one to disguise its file type (showing
+  `.jpg` while actually being `.exe`) no longer survives into an
+  export.
+- **Exports no longer drop look-alike files.** Two documents whose
+  names differed only by punctuation could end up sharing a name inside
+  the ZIP, and most unzip tools keep only the last — so an export could
+  quietly contain fewer documents than its own manifest listed.
+  Duplicates now get numbered.
+- **Error and timeout pages carry the security headers too.** They were
+  the only responses served without them.
+- **A neighbouring domain could pass the cross-site check.** The
+  fallback check for non-browser clients compared addresses loosely
+  enough that a lookalike domain (`…vault.co` against `…vault.com`)
+  was accepted. It's now an exact match.
+- **The "forgot password" page no longer reveals who has an account.**
+  It always showed the same message, but took noticeably longer when
+  the address existed, because it waited for the email to send. It
+  no longer waits.
+- **Third-party scripts and styles are locked to a known version.**
+  The two files loaded from a public CDN are now checked against a
+  fingerprint, so a change at the CDN can't alter what runs in your
+  browser. (This also restores the avatar cropper's styling, which the
+  new content policy had been blocking.)
+
 ### v0.4.0 — Live search, real-time fixes, team exports, and the full CAR catalog
 
 - **New "Referral" transaction type.** Referral-fee deals no longer
@@ -59,16 +183,6 @@ the bottom-right of every page.
   than yanking you back to the top. This works across roles — an
   agent's window follows changes a broker makes, scoped to what the
   agent is allowed to see.
-- **Fixed the intermittent "something went wrong" errors (500s).**
-  Root cause: SurrealDB's v3 driver changed what cloning the client
-  means — every clone opens its own database session, registered in
-  the background — and the app was unknowingly creating one per
-  request, occasionally racing its own session setup ("Session not
-  found"). The app now shares a single session for its lifetime,
-  which is the driver's documented recommendation, and a background
-  heartbeat verifies the database link every 45 seconds so any
-  degradation is detected and healed between requests, with a log
-  trail.
 - **Readable production logs.** Human-readable log output
   (`PRETTY_LOGS=true`) is now the compose default and no longer
   spews ANSI color codes when running in a container — Dokploy's log

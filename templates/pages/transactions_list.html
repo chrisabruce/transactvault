@@ -48,8 +48,15 @@
        the connection always comes back eventually. (Tab-hidden /
        laptop-sleep reconnects are already handled inside the bundle
        via visibilitychange.) #}
-    <div data-init="@get('/app/stats/stream?status={{ filter_status }}{% if attention_on %}&attention=1{% endif %}')"
-         data-on:datastar-fetch="evt.detail.type === 'retries-failed' && evt.detail.el === el && @get('/app/stats/stream?status={{ filter_status }}{% if attention_on %}&attention=1{% endif %}')">
+    {# `|urlencode_strict` is SECURITY, not tidiness: these attribute
+       values are JavaScript expressions that Datastar compiles with the
+       Function constructor, and Askama's HTML escaping does not protect
+       that sink (the browser decodes entities before Datastar reads the
+       attribute). The controller also allowlists `filter_status`
+       (`canonical_status_filter`) — belt and braces, because anything
+       interpolated here is one typo away from being executable. #}
+    <div data-init="@get('/app/stats/stream?status={{ filter_status|urlencode_strict }}{% if attention_on %}&attention=1{% endif %}')"
+         data-on:datastar-fetch="evt.detail.type === 'retries-failed' && evt.detail.el === el && @get('/app/stats/stream?status={{ filter_status|urlencode_strict }}{% if attention_on %}&attention=1{% endif %}')">
         {% include "partials/stat_grid.html" %}
     </div>
 
@@ -68,7 +75,8 @@
          infinite-scrolled past page one — silently resetting them to
          page one would yank their scroll position;
        - debounce coalesces mutation bursts into one re-fetch. #}
-    <div data-on-signal-patch__debounce.500ms="!document.querySelector('[data-infinite-list][data-paginated]') && @get('{{ live_results_url }}')"
+    <div data-results-url="{{ live_results_url }}"
+         data-on-signal-patch__debounce.500ms="!document.querySelector('[data-infinite-list][data-paginated]') && @get(el.dataset.resultsUrl)"
          data-on-signal-patch-filter="{include: /^txrev$/}"></div>
 
     {% include "partials/tx_results.html" %}

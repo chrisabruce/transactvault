@@ -115,6 +115,13 @@ pub struct LoginPage<'a> {
     /// Re-populated after a failed attempt so the user only retypes
     /// their password.
     pub email: String,
+    /// Set by `?reset=1` after a completed password reset — renders the
+    /// "signed out everywhere else" confirmation.
+    pub just_reset: bool,
+    /// Set by `?verified=1` after email verification. Verification
+    /// deliberately does not sign the user in (see `auth::verify`), so
+    /// this explains why they've landed on a login form.
+    pub just_verified: bool,
 }
 
 /// Values to re-populate the signup form with after a validation error
@@ -142,6 +149,38 @@ pub struct SignupPage<'a> {
     /// What the user had typed when a validation error re-rendered the
     /// page. Empty on a fresh GET.
     pub prefill: SignupPrefill,
+}
+
+/// `/forgot` — request a password-reset link.
+///
+/// `sent = true` renders the confirmation shown for EVERY submission,
+/// existing address or not: the response must not reveal whether an
+/// account exists.
+#[derive(Template)]
+#[template(path = "pages/forgot_password.html")]
+pub struct ForgotPasswordPage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+    pub signed_in: bool,
+    pub error: Option<&'a str>,
+    pub sent: bool,
+    /// Re-populated on a validation error so the address isn't retyped.
+    pub email: String,
+}
+
+/// `/reset/{token}` — choose a new password.
+///
+/// `valid = false` renders one generic "link isn't usable" message for
+/// unknown, expired, and already-used tokens alike.
+#[derive(Template)]
+#[template(path = "pages/reset_password.html")]
+pub struct ResetPasswordPage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+    pub signed_in: bool,
+    pub token: String,
+    pub error: Option<&'a str>,
+    pub valid: bool,
 }
 
 /// "Check your inbox" landing rendered after every signup outcome — keeps

@@ -221,7 +221,21 @@ DEFINE FIELD OVERWRITE avatar_storage_key ON user TYPE option<string>;
 -- Email verification — accounts start unverified; the welcome email is only
 -- sent AFTER the user clicks the verification link, proving they own the
 -- inbox. The verify-token is cleared on success.
+-- Session revocation counter. Every issued JWT embeds the value it was
+-- minted with; the auth middleware rejects a token whose value is stale.
+-- Bumping this invalidates every outstanding session for the user, which
+-- is what makes logout and password-change actually revoke access rather
+-- than merely clearing one browser's cookie.
+DEFINE FIELD OVERWRITE token_version ON user TYPE int DEFAULT 0;
 DEFINE FIELD OVERWRITE email_verified       ON user TYPE bool DEFAULT false;
+-- Password reset. We store a SHA-256 HASH of the emailed token, never
+-- the token itself: a database dump (or anyone who can read a row)
+-- must not be able to seize accounts. Lookup hashes the presented
+-- token and matches on that. Single-use — both fields are cleared the
+-- moment a reset succeeds.
+DEFINE FIELD OVERWRITE reset_token_hash    ON user TYPE option<string>;
+DEFINE FIELD OVERWRITE reset_expires       ON user TYPE option<datetime>;
+DEFINE INDEX OVERWRITE idx_user_reset_token ON user FIELDS reset_token_hash;
 DEFINE FIELD OVERWRITE verification_token   ON user TYPE option<string>;
 DEFINE FIELD OVERWRITE verification_expires ON user TYPE option<datetime>;
 
@@ -258,6 +272,13 @@ DEFINE FIELD OVERWRITE invited_by ON invitation TYPE record<user>;
 DEFINE FIELD OVERWRITE accepted   ON invitation TYPE bool DEFAULT false;
 DEFINE FIELD OVERWRITE declined   ON invitation TYPE bool DEFAULT false;
 DEFINE FIELD OVERWRITE created_at ON invitation TYPE datetime DEFAULT time::now();
+-- Invitations expire. Without this an invite link granted brokerage
+-- access forever — and the invitation email told recipients it expires
+-- automatically, which was untrue. Defaulted so rows written before
+-- this field existed (and any future writer that forgets it) still get
+-- a bounded lifetime rather than an unbounded one.
+DEFINE FIELD OVERWRITE expires_at ON invitation TYPE datetime
+    DEFAULT time::now() + 14d;
 DEFINE INDEX OVERWRITE idx_invitation_token ON invitation FIELDS token UNIQUE;
 
 -- Defense-in-depth against duplicate-pending invitations. The
@@ -411,6 +432,8 @@ DEFINE FIELD OVERWRITE kind ON audit_event TYPE string
         "invite_accepted", "invite_declined", "admin_view",
         "document_deleted",
         "profile_updated", "password_changed", "avatar_updated",
+        "password_reset_requested", "password_reset_completed",
+        "password_reset_failed",
         "brokerage_deleted", "transaction_deleted",
         "transaction_reassigned",
         "member_removed",

@@ -75,11 +75,61 @@ pub const APPLIES_CONDITIONS: &[(&str, &str)] = &[
     ("reo", "REO / Foreclosure"),
 ];
 
+/// Extractor for a form body that carries an applicability picker
+/// alongside its own fields: yields the handler's own input type `T`
+/// **and** the shared [`AppliesPicker`].
+///
+/// Why this exists: `serde_urlencoded` (what `axum::Form` uses) does not
+/// support `#[serde(flatten)]`, so a nested `applies: AppliesPicker`
+/// field cannot be expressed. The previous workaround copy-pasted all
+/// fourteen checkbox fields onto every input struct plus a hand-written
+/// field-by-field `applies_picker()` — four copies of the same list,
+/// and the obvious place for "I added a transaction type and updated
+/// three of the four" to go wrong.
+///
+/// Instead we read the body once and deserialize it twice: into `T`
+/// (which ignores the picker keys) and into `AppliesPicker` (whose
+/// fields all default, so it ignores everything else). Form bodies are
+/// a few hundred bytes, so the second parse is free.
+///
+/// # Errors
+///
+/// Returns `400` with the deserializer's message when the body isn't
+/// valid form encoding or `T`'s required fields are missing —
+/// matching `axum::Form`'s behaviour.
+pub struct FormWithApplies<T>(pub T, pub AppliesPicker);
+
+impl<T, S> axum::extract::FromRequest<S> for FormWithApplies<T>
+where
+    T: serde::de::DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = AppError;
+
+    async fn from_request(req: axum::extract::Request, state: &S) -> Result<Self, Self::Rejection> {
+        let bytes = axum::body::Bytes::from_request(req, state)
+            .await
+            .map_err(|e| AppError::invalid(format!("could not read form body: {e}")))?;
+        let value: T = serde_urlencoded::from_bytes(&bytes)
+            .map_err(|e| AppError::invalid(format!("invalid form submission: {e}")))?;
+        // Every `AppliesPicker` field is `#[serde(default)]`, so this
+        // parse only fails on a malformed body — which the parse above
+        // would already have rejected.
+        let picker: AppliesPicker = serde_urlencoded::from_bytes(&bytes)
+            .map_err(|e| AppError::invalid(format!("invalid applicability selection: {e}")))?;
+        Ok(Self(value, picker))
+    }
+}
+
 /// Checkbox state for a form's applicability picker. Each field is
 /// `Some(_)` when the matching `<dimension>_<slug>` checkbox is ticked
-/// (the value sent is `"1"`; we just check presence). Both the admin
-/// and broker create handlers embed this so the same checkbox markup
-/// works in both templates.
+/// (the value sent is `"1"`; we just check presence).
+///
+/// This is the single definition of the checkbox set — the admin
+/// add/edit forms and the broker custom-form page all receive it via
+/// [`FormWithApplies`], so adding a dimension means editing one struct,
+/// one `types()`/`sides()`/`conditions()` arm, and one `APPLIES_*`
+/// table.
 #[derive(Debug, Default, Deserialize)]
 pub struct AppliesPicker {
     #[serde(default)]
@@ -449,68 +499,12 @@ pub struct CustomFormInput {
     pub group_name: String,
     #[serde(default)]
     pub required: Option<String>,
-    // Applicability picker — `serde_urlencoded` doesn't support
-    // `#[serde(flatten)]`, so the checkbox fields live on this struct
-    // directly. `applies_picker()` packages them into an
-    // `AppliesPicker` for the shared helper.
-    #[serde(default)]
-    pub type_residential: Option<String>,
-    #[serde(default)]
-    pub type_commercial: Option<String>,
-    #[serde(default)]
-    pub type_vacant_lots_land: Option<String>,
-    #[serde(default)]
-    pub type_manufactured_home: Option<String>,
-    #[serde(default)]
-    pub type_business_opportunity: Option<String>,
-    #[serde(default)]
-    pub type_commercial_lease: Option<String>,
-    #[serde(default)]
-    pub type_rental_lease: Option<String>,
-    #[serde(default)]
-    pub type_referral: Option<String>,
-    #[serde(default)]
-    pub side_listing: Option<String>,
-    #[serde(default)]
-    pub side_purchase: Option<String>,
-    #[serde(default)]
-    pub side_both: Option<String>,
-    #[serde(default)]
-    pub cond_none: Option<String>,
-    #[serde(default)]
-    pub cond_probate: Option<String>,
-    #[serde(default)]
-    pub cond_short_sale: Option<String>,
-    #[serde(default)]
-    pub cond_reo: Option<String>,
-}
-
-impl CustomFormInput {
-    fn applies_picker(&self) -> AppliesPicker {
-        AppliesPicker {
-            type_residential: self.type_residential.clone(),
-            type_commercial: self.type_commercial.clone(),
-            type_vacant_lots_land: self.type_vacant_lots_land.clone(),
-            type_manufactured_home: self.type_manufactured_home.clone(),
-            type_business_opportunity: self.type_business_opportunity.clone(),
-            type_commercial_lease: self.type_commercial_lease.clone(),
-            type_rental_lease: self.type_rental_lease.clone(),
-            type_referral: self.type_referral.clone(),
-            side_listing: self.side_listing.clone(),
-            side_purchase: self.side_purchase.clone(),
-            side_both: self.side_both.clone(),
-            cond_none: self.cond_none.clone(),
-            cond_probate: self.cond_probate.clone(),
-            cond_short_sale: self.cond_short_sale.clone(),
-            cond_reo: self.cond_reo.clone(),
-        }
-    }
 }
 
 pub async fn add_custom(
     State(state): State<AppState>,
     user: CurrentUser,
-    Form(input): Form<CustomFormInput>,
+    FormWithApplies(input, applies): FormWithApplies<CustomFormInput>,
 ) -> Result<Redirect, AppError> {
     if !user.role.is_broker() {
         return Err(AppError::Forbidden);
@@ -530,8 +524,7 @@ pub async fn add_custom(
     // Picker-driven applicability. Unchecking everything in a
     // dimension means "applies to all of that dimension" — see
     // `applies_or_all` for the rationale.
-    let (applies_types, applies_sides, applies_conditions) =
-        applies_or_all(&input.applies_picker());
+    let (applies_types, applies_sides, applies_conditions) = applies_or_all(&applies);
     let created: Option<CreatedForm> = state
         .db
         .create("form")
@@ -975,67 +968,13 @@ pub struct NewAdminFormInput {
     pub form_order: Option<i64>,
     #[serde(default)]
     pub required: Option<String>,
-    // Applicability picker — same inlined-fields pattern as
-    // `CustomFormInput` (serde_urlencoded won't flatten).
-    #[serde(default)]
-    pub type_residential: Option<String>,
-    #[serde(default)]
-    pub type_commercial: Option<String>,
-    #[serde(default)]
-    pub type_vacant_lots_land: Option<String>,
-    #[serde(default)]
-    pub type_manufactured_home: Option<String>,
-    #[serde(default)]
-    pub type_business_opportunity: Option<String>,
-    #[serde(default)]
-    pub type_commercial_lease: Option<String>,
-    #[serde(default)]
-    pub type_rental_lease: Option<String>,
-    #[serde(default)]
-    pub type_referral: Option<String>,
-    #[serde(default)]
-    pub side_listing: Option<String>,
-    #[serde(default)]
-    pub side_purchase: Option<String>,
-    #[serde(default)]
-    pub side_both: Option<String>,
-    #[serde(default)]
-    pub cond_none: Option<String>,
-    #[serde(default)]
-    pub cond_probate: Option<String>,
-    #[serde(default)]
-    pub cond_short_sale: Option<String>,
-    #[serde(default)]
-    pub cond_reo: Option<String>,
-}
-
-impl NewAdminFormInput {
-    fn applies_picker(&self) -> AppliesPicker {
-        AppliesPicker {
-            type_residential: self.type_residential.clone(),
-            type_commercial: self.type_commercial.clone(),
-            type_vacant_lots_land: self.type_vacant_lots_land.clone(),
-            type_manufactured_home: self.type_manufactured_home.clone(),
-            type_business_opportunity: self.type_business_opportunity.clone(),
-            type_commercial_lease: self.type_commercial_lease.clone(),
-            type_rental_lease: self.type_rental_lease.clone(),
-            type_referral: self.type_referral.clone(),
-            side_listing: self.side_listing.clone(),
-            side_purchase: self.side_purchase.clone(),
-            side_both: self.side_both.clone(),
-            cond_none: self.cond_none.clone(),
-            cond_probate: self.cond_probate.clone(),
-            cond_short_sale: self.cond_short_sale.clone(),
-            cond_reo: self.cond_reo.clone(),
-        }
-    }
 }
 
 pub async fn admin_add_form(
     State(state): State<AppState>,
     SuperAdmin(_user): SuperAdmin,
     Path(key): Path<String>,
-    Form(input): Form<NewAdminFormInput>,
+    FormWithApplies(input, applies): FormWithApplies<NewAdminFormInput>,
 ) -> Result<Redirect, AppError> {
     let code = input.code.trim().to_ascii_uppercase();
     let name = input.name.trim().to_string();
@@ -1050,8 +989,7 @@ pub async fn admin_add_form(
     assert_groups_in_set(&state.db, &set_id, &[group_key]).await?;
     let group_id = RecordId::new("form_group", group_key);
     let required = matches!(input.required.as_deref(), Some("1" | "true" | "on" | "yes"));
-    let (applies_types, applies_sides, applies_conditions) =
-        applies_or_all(&input.applies_picker());
+    let (applies_types, applies_sides, applies_conditions) = applies_or_all(&applies);
     let created: Option<CreatedForm> = state
         .db
         .create("form")
@@ -1483,58 +1421,6 @@ pub struct EditAdminFormInput {
     pub form_order: Option<i64>,
     #[serde(default)]
     pub required: Option<String>,
-    #[serde(default)]
-    pub type_residential: Option<String>,
-    #[serde(default)]
-    pub type_commercial: Option<String>,
-    #[serde(default)]
-    pub type_vacant_lots_land: Option<String>,
-    #[serde(default)]
-    pub type_manufactured_home: Option<String>,
-    #[serde(default)]
-    pub type_business_opportunity: Option<String>,
-    #[serde(default)]
-    pub type_commercial_lease: Option<String>,
-    #[serde(default)]
-    pub type_rental_lease: Option<String>,
-    #[serde(default)]
-    pub type_referral: Option<String>,
-    #[serde(default)]
-    pub side_listing: Option<String>,
-    #[serde(default)]
-    pub side_purchase: Option<String>,
-    #[serde(default)]
-    pub side_both: Option<String>,
-    #[serde(default)]
-    pub cond_none: Option<String>,
-    #[serde(default)]
-    pub cond_probate: Option<String>,
-    #[serde(default)]
-    pub cond_short_sale: Option<String>,
-    #[serde(default)]
-    pub cond_reo: Option<String>,
-}
-
-impl EditAdminFormInput {
-    fn applies_picker(&self) -> AppliesPicker {
-        AppliesPicker {
-            type_residential: self.type_residential.clone(),
-            type_commercial: self.type_commercial.clone(),
-            type_vacant_lots_land: self.type_vacant_lots_land.clone(),
-            type_manufactured_home: self.type_manufactured_home.clone(),
-            type_business_opportunity: self.type_business_opportunity.clone(),
-            type_commercial_lease: self.type_commercial_lease.clone(),
-            type_rental_lease: self.type_rental_lease.clone(),
-            type_referral: self.type_referral.clone(),
-            side_listing: self.side_listing.clone(),
-            side_purchase: self.side_purchase.clone(),
-            side_both: self.side_both.clone(),
-            cond_none: self.cond_none.clone(),
-            cond_probate: self.cond_probate.clone(),
-            cond_short_sale: self.cond_short_sale.clone(),
-            cond_reo: self.cond_reo.clone(),
-        }
-    }
 }
 
 /// POST `/admin/forms/{set_key}/forms/{form_key}/edit` — persist
@@ -1544,7 +1430,7 @@ pub async fn admin_update_form(
     State(state): State<AppState>,
     SuperAdmin(_user): SuperAdmin,
     Path(p): Path<ToggleFormPath>,
-    Form(input): Form<EditAdminFormInput>,
+    FormWithApplies(input, applies): FormWithApplies<EditAdminFormInput>,
 ) -> Result<Redirect, AppError> {
     let set_id = RecordId::new("form_set", p.key.as_str());
     assert_forms_in_set(&state.db, &set_id, &[p.form_key.as_str()]).await?;
@@ -1554,8 +1440,7 @@ pub async fn admin_update_form(
         return Err(AppError::invalid("Form name is required."));
     }
     let required = matches!(input.required.as_deref(), Some("1" | "true" | "on" | "yes"));
-    let (applies_types, applies_sides, applies_conditions) =
-        applies_or_all(&input.applies_picker());
+    let (applies_types, applies_sides, applies_conditions) = applies_or_all(&applies);
     let form_id = RecordId::new("form", p.form_key.as_str());
     state
         .db

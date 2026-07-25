@@ -190,6 +190,29 @@ impl Storage {
         }
     }
 
+    /// Open an object as a chunk stream instead of buffering it whole.
+    ///
+    /// [`Self::get_bytes`] materializes the entire object (and copies it
+    /// once more on the way out), which is fine for serving one document
+    /// to a browser but ruinous for archive building — a 20-document
+    /// export used to hold every byte in memory at once. Streaming lets
+    /// the ZIP writer consume a few kilobytes at a time, so peak memory
+    /// is independent of both document size and document count.
+    ///
+    /// Returns `Ok(None)` when the key doesn't exist, matching
+    /// `get_bytes`, so callers keep the same missing-object handling.
+    pub async fn get_stream(
+        &self,
+        key: &str,
+    ) -> anyhow::Result<Option<s3::request::ResponseDataStream>> {
+        match self.bucket.get_object_stream(key).await {
+            Ok(stream) if stream.status_code == 404 => Ok(None),
+            Ok(stream) => Ok(Some(stream)),
+            Err(e) if is_not_found(&e) => Ok(None),
+            Err(e) => Err(anyhow::anyhow!("get_object_stream: {e}")),
+        }
+    }
+
     /// **DEV-ONLY.** Delete every object in the bucket. Walks the bucket
     /// listing (paged via S3's continuation tokens) and issues `DeleteObject`
     /// for each key. The bucket itself is left in place so the next write

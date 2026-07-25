@@ -31,6 +31,11 @@ pub struct Config {
     /// extractor; this is independent of the per-brokerage `broker` role.
     pub super_admin_emails: Vec<String>,
 
+    /// Password-reset link expiry, in hours. Deliberately short — the
+    /// link is a bearer credential that grants account takeover, so it
+    /// should outlive a slow inbox but nothing more.
+    pub reset_expiry_hours: i64,
+
     /// Verification-link expiry. After this window the user has to request
     /// a fresh link to finish signup. 24 hours is a reasonable default.
     pub verification_expiry_hours: i64,
@@ -54,6 +59,14 @@ pub struct Config {
     /// can't be flipped on by a typo or a copy-pasted env var. Never set in
     /// production.
     pub dev_reset_on_boot: bool,
+
+    /// How many reverse proxies sit in front of the app. Only the last
+    /// this-many `X-Forwarded-For` entries were written by
+    /// infrastructure we control, so this decides which entry
+    /// [`crate::security::client_ip`] trusts as the real client. `1`
+    /// suits the standard single-Traefik deployment; `0` means the app
+    /// is exposed directly and forwarding headers are ignored.
+    pub trusted_proxy_hops: usize,
 
     pub rustfs: RustFsConfig,
     pub email: EmailConfig,
@@ -142,10 +155,12 @@ impl Config {
             jwt_expiry_hours: 24,
             super_admin_emails: vec!["admin@test".into()],
             verification_expiry_hours: 24,
+            reset_expiry_hours: 1,
             pow_difficulty_bits: 0,
             signup_rate_per_hour: 1000,
             login_rate_per_quarter_hour: 1000,
             dev_reset_on_boot: false,
+            trusted_proxy_hops: 0,
             rustfs: RustFsConfig {
                 endpoint: "http://127.0.0.1:1".into(),
                 region: "us-east-1".into(),
@@ -171,7 +186,7 @@ impl Config {
     /// back to development defaults, but `JWT_SECRET` must be overridden in
     /// any shared/production deployment.
     pub fn from_env() -> anyhow::Result<Self> {
-        Ok(Self {
+        let config = Self {
             app_name: env_or("APP_NAME", "TransactVault"),
             base_url: env_or("BASE_URL", "http://localhost:37420"),
             host: env_or("HOST", "0.0.0.0"),
@@ -203,6 +218,9 @@ impl Config {
             verification_expiry_hours: env_or("VERIFICATION_EXPIRY_HOURS", "24")
                 .parse()
                 .context("VERIFICATION_EXPIRY_HOURS must be an integer")?,
+            reset_expiry_hours: env_or("RESET_EXPIRY_HOURS", "1")
+                .parse()
+                .context("RESET_EXPIRY_HOURS must be an integer")?,
 
             pow_difficulty_bits: env_or("POW_DIFFICULTY_BITS", "18")
                 .parse()
@@ -219,6 +237,9 @@ impl Config {
             // the env var name itself starts with `DEV_` so production
             // configs are unlikely to accidentally include it.
             dev_reset_on_boot: env_or("DEV_RESET_ON_BOOT", "") == "yes-destroy-all-data",
+            trusted_proxy_hops: env_or("TRUSTED_PROXY_HOPS", "1")
+                .parse()
+                .context("TRUSTED_PROXY_HOPS must be a non-negative integer")?,
 
             rustfs: RustFsConfig {
                 endpoint: env_or("RUSTFS_ENDPOINT", "http://127.0.0.1:37421"),
@@ -243,7 +264,61 @@ impl Config {
                     .parse()
                     .context("STRIPE_TRIAL_DAYS must be a non-negative integer")?,
             },
-        })
+        };
+
+        config.assert_safe_for_deployment()?;
+        Ok(config)
+    }
+
+    /// Refuse to boot on a configuration that would be catastrophic in a
+    /// shared or production deployment. Called at the end of
+    /// [`Self::from_env`], so there is no way to construct a live
+    /// `Config` that skips it.
+    ///
+    /// # Errors
+    ///
+    /// - **Development JWT secret.** Every fallback below is a public
+    ///   string (this repository is published), and `JWT_SECRET` is the
+    ///   sole thing standing between an attacker and a forged session
+    ///   for any user — `sub` is just a record key. A missing or
+    ///   misspelled env var used to boot silently on the default, so
+    ///   this fails loudly instead. Also enforces 32 bytes minimum.
+    /// - **Destructive reset against an HTTPS deployment.**
+    ///   `DEV_RESET_ON_BOOT` drops every table and empties the document
+    ///   bucket. It has been observed set in a real production
+    ///   environment, where the next redeploy would have destroyed all
+    ///   customer data; an `https://` BASE_URL is a reliable "this is
+    ///   not a laptop" signal.
+    pub(crate) fn assert_safe_for_deployment(&self) -> anyhow::Result<()> {
+        const DEV_SECRETS: &[&str] = &[
+            "dev-only-secret-change-me-change-me-change-me-change-me",
+            "change-me-to-a-long-random-secret-please-please-please",
+            "test-secret-test-secret-test-secret-test-secret",
+        ];
+        if DEV_SECRETS.contains(&self.jwt_secret.as_str()) || self.jwt_secret.contains("change-me")
+        {
+            anyhow::bail!(
+                "JWT_SECRET is still set to a publicly-known development value. \
+                 Generate a unique secret (e.g. `openssl rand -base64 48`) and set \
+                 JWT_SECRET before starting."
+            );
+        }
+        if self.jwt_secret.len() < 32 {
+            anyhow::bail!(
+                "JWT_SECRET must be at least 32 characters (got {}). \
+                 Generate one with `openssl rand -base64 48`.",
+                self.jwt_secret.len()
+            );
+        }
+        if self.dev_reset_on_boot && self.base_url.starts_with("https://") {
+            anyhow::bail!(
+                "DEV_RESET_ON_BOOT is set on an https:// deployment ({}). That would \
+                 delete every user, brokerage, transaction, and document, and empty \
+                 the storage bucket. Remove DEV_RESET_ON_BOOT from this environment.",
+                self.base_url
+            );
+        }
+        Ok(())
     }
 }
 

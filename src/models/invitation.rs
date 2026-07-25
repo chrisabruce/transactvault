@@ -18,6 +18,10 @@ pub struct Invitation {
     /// Once declined, the token is consumed (no longer pending).
     pub declined: bool,
     pub created_at: DateTime<Utc>,
+    /// Hard expiry — [`crate::controllers::auth::load_invitation`]
+    /// refuses tokens past this instant, so a forwarded or leaked link
+    /// stops working.
+    pub expires_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, SurrealValue)]
