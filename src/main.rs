@@ -131,16 +131,28 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Install the global tracing subscriber. Pretty output during local dev,
-/// JSON in production so log aggregators can parse it cleanly.
+/// Install the global tracing subscriber. `PRETTY_LOGS=true` gives
+/// human-readable output; `false` gives JSON for log aggregators.
+/// ANSI colors are emitted only when stdout is a real terminal —
+/// containers and Dokploy's log viewer get clean plain text instead
+/// of escape-code garbage, which is what made pretty mode unusable in
+/// production before.
 fn init_logging(pretty: bool) {
+    use std::io::IsTerminal;
     use tracing_subscriber::{EnvFilter, fmt, prelude::*, registry};
 
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info,transactvault=debug"));
 
     if pretty {
-        registry().with(filter).with(fmt::layer().pretty()).init();
+        registry()
+            .with(filter)
+            .with(
+                fmt::layer()
+                    .pretty()
+                    .with_ansi(std::io::stdout().is_terminal()),
+            )
+            .init();
     } else {
         registry().with(filter).with(fmt::layer().json()).init();
     }

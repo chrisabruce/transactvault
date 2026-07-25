@@ -59,6 +59,11 @@ the bottom-right of every page.
   than yanking you back to the top. This works across roles — an
   agent's window follows changes a broker makes, scoped to what the
   agent is allowed to see.
+- **Readable production logs.** Human-readable log output
+  (`PRETTY_LOGS=true`) is now the compose default and no longer
+  spews ANSI color codes when running in a container — Dokploy's log
+  viewer shows clean text. JSON output remains available for log
+  aggregators via `PRETTY_LOGS=false`.
 - **Forms keep what you typed when something's wrong.** A validation
   error on the signup form used to wipe every field; now your name,
   email, brokerage, and city stay put and you only re-enter the

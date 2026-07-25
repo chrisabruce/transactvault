@@ -92,8 +92,13 @@ services:
       BASE_URL: ${BASE_URL:-http://localhost:37420}
       HOST: 0.0.0.0
       PORT: "37420"
-      PRETTY_LOGS: ${PRETTY_LOGS:-false}
-      RUST_LOG: ${RUST_LOG:-info,transactvault=info}
+      # Human-readable logs by default — Dokploy's viewer shows raw
+      # container output, and hunting one ERROR line inside JSON blobs
+      # is miserable. Set PRETTY_LOGS=false if logs ever feed an
+      # aggregator that wants JSON. Keep RUST_LOG scoped: a bare
+      # `debug` drowns real errors under rustls/h2 TLS chatter.
+      PRETTY_LOGS: ${PRETTY_LOGS:-true}
+      RUST_LOG: ${RUST_LOG:-info,transactvault=debug}
 
       # SurrealDB — URL is fixed to the compose service DNS; credentials
       # come from the same env that the surrealdb container was started with.
