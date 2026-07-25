@@ -81,6 +81,7 @@ pub async fn signup_form(
         signed_in: false,
         pow_challenge: challenge.challenge,
         pow_difficulty: challenge.difficulty,
+        prefill: Default::default(),
     };
     Ok(render(&page)?.into_response())
 }
@@ -157,7 +158,12 @@ pub async fn signup(
             None,
         )
         .await;
-        return render_signup_error(&state, "Please reload the page and try again.").await;
+        return render_signup_error(
+            &state,
+            "Please reload the page and try again.",
+            signup_prefill(&input),
+        )
+        .await;
     }
 
     // (4) Field validation
@@ -166,13 +172,28 @@ pub async fn signup(
     let brokerage_name = input.brokerage_name.trim().to_string();
 
     if name.is_empty() || email.is_empty() || brokerage_name.is_empty() {
-        return render_signup_error(&state, "Please fill in every field.").await;
+        return render_signup_error(
+            &state,
+            "Please fill in every field.",
+            signup_prefill(&input),
+        )
+        .await;
     }
     if input.password.len() < 8 {
-        return render_signup_error(&state, "Password must be at least 8 characters.").await;
+        return render_signup_error(
+            &state,
+            "Password must be at least 8 characters.",
+            signup_prefill(&input),
+        )
+        .await;
     }
     if !email.contains('@') {
-        return render_signup_error(&state, "Please enter a valid email address.").await;
+        return render_signup_error(
+            &state,
+            "Please enter a valid email address.",
+            signup_prefill(&input),
+        )
+        .await;
     }
 
     // (5) Disposable-email blacklist — silent reject (don't reveal which
@@ -445,6 +466,7 @@ pub async fn login_form(
         base_url: &state.config.base_url,
         error: None,
         signed_in: false,
+        email: String::new(),
     };
     Ok(render(&page)?.into_response())
 }
@@ -479,6 +501,7 @@ pub async fn login(
         return render_login_error(
             &state,
             "Too many attempts. Wait a few minutes and try again.",
+            input.email.trim().to_string(),
         )
         .await;
     }
@@ -501,7 +524,12 @@ pub async fn login(
             Some("unknown email".into()),
         )
         .await;
-        return render_login_error(&state, "No account with those credentials.").await;
+        return render_login_error(
+            &state,
+            "No account with those credentials.",
+            input.email.trim().to_string(),
+        )
+        .await;
     };
 
     let ok = verify_password(&input.password, &user.password_hash).await?;
@@ -516,7 +544,12 @@ pub async fn login(
             Some("bad password".into()),
         )
         .await;
-        return render_login_error(&state, "No account with those credentials.").await;
+        return render_login_error(
+            &state,
+            "No account with those credentials.",
+            input.email.trim().to_string(),
+        )
+        .await;
     }
 
     if !user.email_verified {
@@ -533,6 +566,7 @@ pub async fn login(
         return render_login_error(
             &state,
             "Please verify your email before signing in. Check your inbox for the link we sent.",
+            input.email.trim().to_string(),
         )
         .await;
     }
@@ -639,6 +673,7 @@ pub async fn invite_form(
         inviter_name: &inviter_name,
         error: None,
         prompt_login,
+        name_prefill: String::new(),
     };
     render(&page)
 }
@@ -653,12 +688,37 @@ pub async fn accept_invite(
 ) -> Result<Response, AppError> {
     let (invitation, brokerage, inviter_name) = load_invitation(&state, &token).await?;
 
-    if input.password.len() < 8 {
-        return Err(AppError::invalid("Password must be at least 8 characters."));
-    }
+    // Validation errors re-render the invite page with the typed name
+    // kept — bouncing to a bare 400 error page (the previous behavior)
+    // threw away everything the invitee had filled in.
     let name = input.name.trim().to_string();
+    if input.password.len() < 8 {
+        let html = render(&InvitePage {
+            app_name: &state.config.app_name,
+            base_url: &state.config.base_url,
+            signed_in: false,
+            invitation: &invitation,
+            brokerage_name: &brokerage.name,
+            inviter_name: &inviter_name,
+            error: Some("Password must be at least 8 characters."),
+            prompt_login: false,
+            name_prefill: name,
+        })?;
+        return Ok(html.into_response());
+    }
     if name.is_empty() {
-        return Err(AppError::invalid("Name is required."));
+        let html = render(&InvitePage {
+            app_name: &state.config.app_name,
+            base_url: &state.config.base_url,
+            signed_in: false,
+            invitation: &invitation,
+            brokerage_name: &brokerage.name,
+            inviter_name: &inviter_name,
+            error: Some("Name is required."),
+            prompt_login: false,
+            name_prefill: name,
+        })?;
+        return Ok(html.into_response());
     }
 
     // Defense in depth: if a user with this email already exists (e.g.
@@ -686,6 +746,7 @@ pub async fn accept_invite(
                  Sign in below to accept the invitation from your existing account.",
             ),
             prompt_login: true,
+            name_prefill: String::new(),
         })?;
         return Ok(html.into_response());
     }
@@ -820,7 +881,27 @@ fn set_session_cookie(
     Ok(())
 }
 
-async fn render_signup_error(state: &AppState, message: &str) -> Result<Response, AppError> {
+/// Everything worth re-populating from a failed signup submission —
+/// the password is deliberately dropped (never echoed back into HTML).
+fn signup_prefill(input: &SignupInput) -> crate::templates::SignupPrefill {
+    crate::templates::SignupPrefill {
+        name: input.name.trim().to_string(),
+        email: input.email.trim().to_string(),
+        brokerage_name: input.brokerage_name.trim().to_string(),
+        city: input
+            .city
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string(),
+    }
+}
+
+async fn render_signup_error(
+    state: &AppState,
+    message: &str,
+    prefill: crate::templates::SignupPrefill,
+) -> Result<Response, AppError> {
     let challenge =
         security::issue_challenge(&state.config.jwt_secret, state.config.pow_difficulty_bits)?;
     let page = SignupPage {
@@ -830,16 +911,22 @@ async fn render_signup_error(state: &AppState, message: &str) -> Result<Response
         signed_in: false,
         pow_challenge: challenge.challenge,
         pow_difficulty: challenge.difficulty,
+        prefill,
     };
     Ok(render(&page)?.into_response())
 }
 
-async fn render_login_error(state: &AppState, message: &str) -> Result<Response, AppError> {
+async fn render_login_error(
+    state: &AppState,
+    message: &str,
+    email: String,
+) -> Result<Response, AppError> {
     let page = LoginPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
         error: Some(message),
         signed_in: false,
+        email,
     };
     Ok(render(&page)?.into_response())
 }

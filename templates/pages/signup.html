@@ -20,13 +20,16 @@
         <form method="post" action="/signup" id="signup-form" novalidate>
             <fieldset>
                 <legend class="visually-hidden">Your details</legend>
+                {# Every non-password field re-populates from `prefill`
+                   after a validation error — one mistake must not wipe
+                   the form. Passwords are never echoed back. #}
                 <label>
                     <span>Your name</span>
-                    <input type="text" name="name" required autocomplete="name" placeholder="Renee Okafor">
+                    <input type="text" name="name" required autocomplete="name" placeholder="Renee Okafor" value="{{ prefill.name }}">
                 </label>
                 <label>
                     <span>Work email</span>
-                    <input type="email" name="email" required autocomplete="email" placeholder="you@brokerage.com">
+                    <input type="email" name="email" required autocomplete="email" placeholder="you@brokerage.com" value="{{ prefill.email }}">
                 </label>
                 <label>
                     <span>Password</span>
@@ -37,11 +40,11 @@
                 <legend class="visually-hidden">Brokerage</legend>
                 <label>
                     <span>Brokerage name</span>
-                    <input type="text" name="brokerage_name" required placeholder="Lancaster Realty Group">
+                    <input type="text" name="brokerage_name" required placeholder="Lancaster Realty Group" value="{{ prefill.brokerage_name }}">
                 </label>
                 <label>
                     <span>City <small>(optional)</small></span>
-                    <input type="text" name="city" placeholder="Lancaster">
+                    <input type="text" name="city" placeholder="Lancaster" value="{{ prefill.city }}">
                 </label>
             </fieldset>
 

@@ -3330,3 +3330,86 @@ async fn error_responses_are_captured_for_the_admin_screen() {
     let (status, _) = authed_get(&app, &broker, "/admin/errors").await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
+
+/// Validation errors on the auth forms keep what the user typed —
+/// signup and invite-accept re-render with every non-password field
+/// filled in, login keeps the email. Passwords are never echoed back.
+#[tokio::test]
+async fn auth_forms_keep_typed_values_after_validation_errors() {
+    let app = make_app().await;
+
+    // Signup: password too short → error page with everything else kept.
+    let req = Request::builder()
+        .method("POST")
+        .uri("/signup")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from(
+            "name=Renee+Okafor&email=renee%40brokerage.com&password=short\
+             &brokerage_name=Lancaster+Realty&city=Lancaster",
+        ))
+        .unwrap();
+    let (status, body) = send(&app, req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Password must be at least 8 characters."));
+    assert!(body.contains(r#"value="Renee Okafor""#), "name kept");
+    assert!(
+        body.contains(r#"value="renee@brokerage.com""#),
+        "email kept"
+    );
+    assert!(
+        body.contains(r#"value="Lancaster Realty""#),
+        "brokerage kept"
+    );
+    assert!(body.contains(r#"value="Lancaster""#), "city kept");
+    assert!(
+        !body.contains(r#"value="short""#),
+        "the password must never be echoed back"
+    );
+
+    // Login: bad credentials → email kept.
+    let req = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from("email=renee%40brokerage.com&password=nope1234"))
+        .unwrap();
+    let (status, body) = send(&app, req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("No account with those credentials."));
+    assert!(
+        body.contains(r#"value="renee@brokerage.com""#),
+        "email kept"
+    );
+
+    // Invite accept: short password → invite page re-renders (not a
+    // bare 400) with the typed name kept.
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    join(&app.state, &broker, &b, "broker").await;
+    authed_post(
+        &app,
+        &broker,
+        "/app/team/invite",
+        "email=fresh@x&role=agent",
+    )
+    .await;
+    let mut q = app
+        .state
+        .db
+        .query("SELECT VALUE token FROM invitation WHERE email = 'fresh@x' LIMIT 1")
+        .await
+        .expect("query token");
+    let tokens: Vec<String> = q.take(0).unwrap_or_default();
+    let token = tokens.into_iter().next().expect("invite token");
+
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/invite/{token}"))
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from("name=Fresh+Agent&password=tiny"))
+        .unwrap();
+    let (status, body) = send(&app, req).await;
+    assert_eq!(status, StatusCode::OK, "should re-render, not 400");
+    assert!(body.contains("Password must be at least 8 characters."));
+    assert!(body.contains(r#"value="Fresh Agent""#), "name kept");
+}

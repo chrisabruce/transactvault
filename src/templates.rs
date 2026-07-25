@@ -112,6 +112,20 @@ pub struct LoginPage<'a> {
     pub base_url: &'a str,
     pub error: Option<&'a str>,
     pub signed_in: bool,
+    /// Re-populated after a failed attempt so the user only retypes
+    /// their password.
+    pub email: String,
+}
+
+/// Values to re-populate the signup form with after a validation error
+/// — one mistake must not wipe the whole form. The password is
+/// deliberately absent: passwords are never echoed back into HTML.
+#[derive(Debug, Clone, Default)]
+pub struct SignupPrefill {
+    pub name: String,
+    pub email: String,
+    pub brokerage_name: String,
+    pub city: String,
 }
 
 #[derive(Template)]
@@ -125,6 +139,9 @@ pub struct SignupPage<'a> {
     pub pow_challenge: String,
     /// Number of leading zero bits required in the SHA-256 solution.
     pub pow_difficulty: u32,
+    /// What the user had typed when a validation error re-rendered the
+    /// page. Empty on a fresh GET.
+    pub prefill: SignupPrefill,
 }
 
 /// "Check your inbox" landing rendered after every signup outcome — keeps
@@ -188,6 +205,9 @@ pub struct InvitePage<'a> {
     /// accept" CTA instead — the recipient already has an account so
     /// they should authenticate and accept from `/app/no-brokerage`.
     pub prompt_login: bool,
+    /// Re-populated after a validation error so the invitee only
+    /// retypes their password.
+    pub name_prefill: String,
 }
 
 // ---------------------------------------------------------------------------

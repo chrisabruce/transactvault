@@ -59,6 +59,13 @@ the bottom-right of every page.
   than yanking you back to the top. This works across roles — an
   agent's window follows changes a broker makes, scoped to what the
   agent is allowed to see.
+- **Forms keep what you typed when something's wrong.** A validation
+  error on the signup form used to wipe every field; now your name,
+  email, brokerage, and city stay put and you only re-enter the
+  password. Same treatment for the login form (email stays) and the
+  invitation-accept form (name stays — and its errors now show on the
+  invite page itself instead of a bare error screen). Passwords are
+  never carried back into the page.
 - **New Admin → Errors screen.** Server errors (5xx) and meaningful
   request errors (400/409/422) are now captured to the database with
   their full internal error detail, the request, the signed-in user,
