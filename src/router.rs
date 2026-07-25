@@ -421,6 +421,14 @@ async fn reject_cross_site_writes(
 /// rendered the cropper unstyled. Both CDN assets carry SRI hashes, so
 /// a compromised CDN cannot substitute different bytes.
 ///
+/// `img-src` must list `blob:`. The avatar cropper shows the picked file
+/// with `URL.createObjectURL(file)` and previews the crop the same way;
+/// with only `data:` allowed, the `<img>` never loaded, its `onload`
+/// never fired, and the handler that calls `dialog.showModal()` hung off
+/// that event — so choosing a photo appeared to do nothing at all.
+/// `blob:` is same-origin-only and cannot be forged by injected markup
+/// into a cross-origin fetch, so this costs nothing defensively.
+///
 /// The script policy is honest about what this app needs: Datastar
 /// compiles its `data-*` expressions with the `Function` constructor
 /// (`'unsafe-eval'`), the templates carry inline `<script>` blocks
@@ -446,7 +454,7 @@ async fn security_headers(
             "default-src 'self'; \
              script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; \
              style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; \
-             img-src 'self' data:; \
+             img-src 'self' data: blob:; \
              connect-src 'self'; \
              font-src 'self'; \
              object-src 'none'; \

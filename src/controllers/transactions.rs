@@ -37,8 +37,9 @@ use crate::models::{
 use crate::state::AppState;
 use crate::templates::{
     ChecklistGroup, ChecklistRow, CommentView, CompliancePanel, SearchDocument, SearchPage,
-    StatGridFragment, TransactionEditPage, TransactionNewPage, TransactionRowsFragment,
-    TransactionShowPage, TransactionsListPage, UnassignedAssignee, UnassignedPage,
+    StatGridFragment, TransactionEditPage, TransactionFormPrefill, TransactionNewPage,
+    TransactionRowsFragment, TransactionShowPage, TransactionsListPage, UnassignedAssignee,
+    UnassignedPage,
 };
 
 /// Default page size for the transactions list. Tuned for first-paint
@@ -856,6 +857,7 @@ pub async fn new_form(
         signed_in: true,
         header,
         error: None,
+        prefill: TransactionFormPrefill::default(),
         statuses: TransactionStatus::all().to_vec(),
         types: TransactionType::all().to_vec(),
         conditions: SpecialSalesCondition::all().to_vec(),
@@ -890,11 +892,86 @@ pub struct CreateInput {
     pub sales_type: Option<String>,
 }
 
+/// Echo a submitted transaction form back for re-display.
+///
+/// Trims the text fields (so the redisplayed form matches what would be
+/// stored) but otherwise preserves the submission verbatim, including a
+/// dropdown value that failed to parse.
+fn transaction_prefill(input: &CreateInput) -> TransactionFormPrefill {
+    let field = |v: &Option<String>| v.as_deref().unwrap_or_default().trim().to_string();
+    let default = TransactionFormPrefill::default();
+    let choice = |v: &Option<String>, fallback: String| match v.as_deref().map(str::trim) {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => fallback,
+    };
+
+    TransactionFormPrefill {
+        property_address: input.property_address.trim().to_string(),
+        apn: field(&input.apn),
+        city: field(&input.city),
+        postal_code: field(&input.postal_code),
+        sales_price: field(&input.sales_price),
+        client_name: field(&input.client_name),
+        mls_number: field(&input.mls_number),
+        office_file_number: field(&input.office_file_number),
+        status: choice(&input.status, default.status),
+        transaction_type: choice(&input.transaction_type, default.transaction_type),
+        sales_type: choice(&input.sales_type, default.sales_type),
+        special_sales_condition: choice(
+            &input.special_sales_condition,
+            default.special_sales_condition,
+        ),
+    }
+}
+
+/// Seed the edit form from the stored record.
+fn prefill_from_transaction(tx: &Transaction) -> TransactionFormPrefill {
+    let opt = |v: &Option<String>| v.clone().unwrap_or_default();
+    TransactionFormPrefill {
+        property_address: tx.property_address.clone(),
+        apn: opt(&tx.apn),
+        city: tx.city.clone(),
+        postal_code: opt(&tx.postal_code),
+        sales_price: tx.price_display(),
+        client_name: opt(&tx.client_name),
+        mls_number: opt(&tx.mls_number),
+        office_file_number: opt(&tx.office_file_number),
+        status: tx.status.clone(),
+        transaction_type: tx.transaction_type.clone(),
+        sales_type: tx.sales_type.clone(),
+        special_sales_condition: tx.special_sales_condition.clone(),
+    }
+}
+
+/// Re-render the new-transaction form with an inline error and the
+/// user's own input still in the fields.
+async fn render_create_error(
+    state: &AppState,
+    user: &CurrentUser,
+    message: &str,
+    prefill: TransactionFormPrefill,
+) -> Result<Response, AppError> {
+    let header = crate::controllers::common::build_app_header(state, user, "transactions").await;
+    Ok(render(&TransactionNewPage {
+        app_name: &state.config.app_name,
+        base_url: &state.config.base_url,
+        signed_in: true,
+        header,
+        error: Some(message),
+        prefill,
+        statuses: TransactionStatus::all().to_vec(),
+        types: TransactionType::all().to_vec(),
+        conditions: SpecialSalesCondition::all().to_vec(),
+        sales_types: SalesType::all().to_vec(),
+    })?
+    .into_response())
+}
+
 pub async fn create(
     State(state): State<AppState>,
     user: CurrentUser,
     Form(input): Form<CreateInput>,
-) -> Result<Redirect, AppError> {
+) -> Result<Response, AppError> {
     // Land deals frequently have an APN but no street address (raw
     // parcels, off-grid lots). Accept either, but require at least
     // one. The schema still asserts `property_address` is non-empty,
@@ -917,18 +994,29 @@ pub async fn create(
             .as_deref()
             .is_some_and(crate::sanitize::has_unsafe_text)
     {
-        return Err(AppError::invalid(
+        return render_create_error(
+            &state,
+            &user,
             "Property address and APN can't contain control or invisible characters.",
-        ));
+            transaction_prefill(&input),
+        )
+        .await;
     }
 
     let property_address = match (address_input.is_empty(), &apn_input) {
         (false, _) => address_input,
         (true, Some(apn)) => format!("APN {apn}"),
         (true, None) => {
-            return Err(AppError::invalid(
+            // Inline, with everything they typed still in the form. This
+            // used to be a bare 400 error page, so one blank field threw
+            // away a dozen others.
+            return render_create_error(
+                &state,
+                &user,
                 "Enter a property address or an APN — at least one is required.",
-            ));
+                transaction_prefill(&input),
+            )
+            .await;
         }
     };
 
@@ -960,7 +1048,15 @@ pub async fn create(
     // Tier-based usage enforcement. Either allows the create, allows
     // with metered overage (Stripe usage POST is best-effort below),
     // or returns a 400 with a friendly "limit reached" message.
-    let decision = crate::billing::enforce_transaction_limit(&state, &user).await?;
+    // A tier limit is a validation failure like any other: show it on
+    // the form rather than as an error page that discards the entry.
+    let decision = match crate::billing::enforce_transaction_limit(&state, &user).await {
+        Ok(d) => d,
+        Err(AppError::Validation(message)) => {
+            return render_create_error(&state, &user, &message, transaction_prefill(&input)).await;
+        }
+        Err(e) => return Err(e),
+    };
 
     let new_tx = NewTransaction {
         property_address,
@@ -1033,7 +1129,7 @@ pub async fn create(
         .publish(BrokerEvent::BrokerageMutation(user.brokerage_id.clone()));
 
     let key = crate::db::record_key(&tx.id);
-    Ok(Redirect::to(&format!("/app/transactions/{key}")))
+    Ok(Redirect::to(&format!("/app/transactions/{key}")).into_response())
 }
 
 // ---------------------------------------------------------------------------
@@ -1214,6 +1310,7 @@ pub async fn edit_form(
 
     let header = crate::controllers::common::build_app_header(&state, &user, "transactions").await;
     let tx_key = crate::db::record_key(&tx.id);
+    let prefill = prefill_from_transaction(&tx);
     render(&TransactionEditPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
@@ -1227,7 +1324,38 @@ pub async fn edit_form(
         sales_types: SalesType::all().to_vec(),
         dropdowns_locked,
         error: None,
+        prefill,
     })
+}
+
+/// Re-render the edit form with an inline error, keeping the user's
+/// in-progress edits rather than discarding them to an error page.
+async fn render_update_error(
+    state: &AppState,
+    user: &CurrentUser,
+    tx: Transaction,
+    message: &str,
+    prefill: TransactionFormPrefill,
+) -> Result<Response, AppError> {
+    let dropdowns_locked = any_item_reviewed(state, &tx.id).await?;
+    let header = crate::controllers::common::build_app_header(state, user, "transactions").await;
+    let tx_key = crate::db::record_key(&tx.id);
+    Ok(render(&TransactionEditPage {
+        app_name: &state.config.app_name,
+        base_url: &state.config.base_url,
+        signed_in: true,
+        header,
+        transaction_key: tx_key,
+        transaction: tx,
+        statuses: TransactionStatus::all().to_vec(),
+        types: TransactionType::all().to_vec(),
+        conditions: SpecialSalesCondition::all().to_vec(),
+        sales_types: SalesType::all().to_vec(),
+        dropdowns_locked,
+        error: Some(message),
+        prefill,
+    })?
+    .into_response())
 }
 
 pub async fn update(
@@ -1235,7 +1363,7 @@ pub async fn update(
     user: CurrentUser,
     Path(id): Path<String>,
     Form(input): Form<CreateInput>,
-) -> Result<Redirect, AppError> {
+) -> Result<Response, AppError> {
     let tx_id = RecordId::new("transaction", id.as_str());
     let tx = authorize_transaction(&state, &user, &tx_id).await?;
 
@@ -1265,18 +1393,28 @@ pub async fn update(
             .as_deref()
             .is_some_and(crate::sanitize::has_unsafe_text)
     {
-        return Err(AppError::invalid(
+        return render_update_error(
+            &state,
+            &user,
+            tx,
             "Property address and APN can't contain control or invisible characters.",
-        ));
+            transaction_prefill(&input),
+        )
+        .await;
     }
 
     let property_address = match (address_input.is_empty(), &apn_input) {
         (false, _) => address_input,
         (true, Some(apn)) => format!("APN {apn}"),
         (true, None) => {
-            return Err(AppError::invalid(
+            return render_update_error(
+                &state,
+                &user,
+                tx,
                 "Enter a property address or an APN — at least one is required.",
-            ));
+                transaction_prefill(&input),
+            )
+            .await;
         }
     };
 
@@ -1387,7 +1525,7 @@ pub async fn update(
         .events
         .publish(BrokerEvent::BrokerageMutation(user.brokerage_id.clone()));
 
-    Ok(Redirect::to(&format!("/app/transactions/{id}")))
+    Ok(Redirect::to(&format!("/app/transactions/{id}")).into_response())
 }
 
 /// True when every checklist item on the transaction has been approved.

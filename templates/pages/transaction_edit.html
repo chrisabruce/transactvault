@@ -33,33 +33,33 @@
                 <div class="form-row">
                     <label>
                         <span>Property Address</span>
-                        <input type="text" name="property_address" value="{{ transaction.property_address }}">
+                        <input type="text" name="property_address" value="{{ prefill.property_address }}">
                     </label>
                     <label>
                         <span>Assessor's Parcel Number (APN)</span>
-                        <input type="text" name="apn" value="{% match transaction.apn %}{% when Some with (v) %}{{ v }}{% when None %}{% endmatch %}">
+                        <input type="text" name="apn" value="{{ prefill.apn }}">
                     </label>
                 </div>
                 <div class="form-row">
                     <label>
                         <span>City</span>
-                        <input type="text" name="city" value="{{ transaction.city }}">
+                        <input type="text" name="city" value="{{ prefill.city }}">
                     </label>
                     <label>
                         <span>Postal Code</span>
-                        <input type="text" name="postal_code" value="{% match transaction.postal_code %}{% when Some with (v) %}{{ v }}{% when None %}{% endmatch %}">
+                        <input type="text" name="postal_code" value="{{ prefill.postal_code }}">
                     </label>
                 </div>
                 <div class="form-row">
                     <label>
                         <span>Sales Price</span>
                         <input type="text" name="sales_price"
-                               value="{{ transaction.price_display() }}"
+                               value="{{ prefill.sales_price }}"
                                inputmode="decimal" data-format="money">
                     </label>
                     <label>
                         <span>Client Name</span>
-                        <input type="text" name="client_name" value="{% match transaction.client_name %}{% when Some with (v) %}{{ v }}{% when None %}{% endmatch %}">
+                        <input type="text" name="client_name" value="{{ prefill.client_name }}">
                     </label>
                 </div>
             </fieldset>
@@ -69,11 +69,11 @@
                 <div class="form-row">
                     <label>
                         <span>Primary MLS Number</span>
-                        <input type="text" name="mls_number" value="{% match transaction.mls_number %}{% when Some with (v) %}{{ v }}{% when None %}{% endmatch %}">
+                        <input type="text" name="mls_number" value="{{ prefill.mls_number }}">
                     </label>
                     <label>
                         <span>Office File Number</span>
-                        <input type="text" name="office_file_number" value="{% match transaction.office_file_number %}{% when Some with (v) %}{{ v }}{% when None %}{% endmatch %}">
+                        <input type="text" name="office_file_number" value="{{ prefill.office_file_number }}">
                     </label>
                 </div>
                 <div class="form-row">
@@ -81,7 +81,7 @@
                         <span>Transaction Status</span>
                         <select name="status">
                             {% for s in statuses %}
-                                <option value="{{ s.as_str() }}"{% if s.as_str() == transaction.status %} selected{% endif %}>{{ s.label() }}</option>
+                                <option value="{{ s.as_str() }}"{% if s.as_str() == prefill.status %} selected{% endif %}>{{ s.label() }}</option>
                             {% endfor %}
                         </select>
                     </label>
@@ -89,7 +89,7 @@
                         <span>Transaction Type{% if dropdowns_locked %} <small class="locked-hint">(locked)</small>{% endif %}</span>
                         <select name="transaction_type"{% if dropdowns_locked %} disabled{% endif %}>
                             {% for t in types %}
-                                <option value="{{ t.as_str() }}"{% if t.as_str() == transaction.transaction_type %} selected{% endif %}>{{ t.label() }}</option>
+                                <option value="{{ t.as_str() }}"{% if t.as_str() == prefill.transaction_type %} selected{% endif %}>{{ t.label() }}</option>
                             {% endfor %}
                         </select>
                     </label>
@@ -99,7 +99,7 @@
                         <span>Sales Type{% if dropdowns_locked %} <small class="locked-hint">(locked)</small>{% endif %}</span>
                         <select name="sales_type"{% if dropdowns_locked %} disabled{% endif %}>
                             {% for s in sales_types %}
-                                <option value="{{ s.as_str() }}"{% if s.as_str() == transaction.sales_type %} selected{% endif %}>{{ s.label() }}</option>
+                                <option value="{{ s.as_str() }}"{% if s.as_str() == prefill.sales_type %} selected{% endif %}>{{ s.label() }}</option>
                             {% endfor %}
                         </select>
                     </label>
@@ -107,7 +107,7 @@
                         <span>Special Sales Condition{% if dropdowns_locked %} <small class="locked-hint">(locked)</small>{% endif %}</span>
                         <select name="special_sales_condition"{% if dropdowns_locked %} disabled{% endif %}>
                             {% for c in conditions %}
-                                <option value="{{ c.as_str() }}"{% if c.as_str() == transaction.special_sales_condition %} selected{% endif %}>{{ c.label() }}</option>
+                                <option value="{{ c.as_str() }}"{% if c.as_str() == prefill.special_sales_condition %} selected{% endif %}>{{ c.label() }}</option>
                             {% endfor %}
                         </select>
                     </label>

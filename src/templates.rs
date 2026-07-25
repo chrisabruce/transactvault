@@ -455,10 +455,58 @@ pub struct TransactionNewPage<'a> {
     pub signed_in: bool,
     pub header: AppHeader,
     pub error: Option<&'a str>,
+    pub prefill: TransactionFormPrefill,
     pub statuses: Vec<TransactionStatus>,
     pub types: Vec<TransactionType>,
     pub conditions: Vec<SpecialSalesCondition>,
     pub sales_types: Vec<SalesType>,
+}
+
+/// Every value the transaction form renders, as submitted strings.
+///
+/// Both the new and edit forms render from this rather than from a
+/// `Transaction`, so that a validation failure can re-display exactly
+/// what the user typed. Previously a rejected create returned a bare 400
+/// error page and the entire form was lost — the user had to retype a
+/// dozen fields because they left the address blank on a land deal.
+///
+/// Strings rather than parsed enums on purpose: the point is to echo the
+/// submission back verbatim, including a dropdown value that failed to
+/// parse. [`Default`] supplies the same initial selections a blank form
+/// has always shown.
+#[derive(Debug, Clone)]
+pub struct TransactionFormPrefill {
+    pub property_address: String,
+    pub apn: String,
+    pub city: String,
+    pub postal_code: String,
+    pub sales_price: String,
+    pub client_name: String,
+    pub mls_number: String,
+    pub office_file_number: String,
+    pub status: String,
+    pub transaction_type: String,
+    pub sales_type: String,
+    pub special_sales_condition: String,
+}
+
+impl Default for TransactionFormPrefill {
+    fn default() -> Self {
+        Self {
+            property_address: String::new(),
+            apn: String::new(),
+            city: String::new(),
+            postal_code: String::new(),
+            sales_price: String::new(),
+            client_name: String::new(),
+            mls_number: String::new(),
+            office_file_number: String::new(),
+            status: TransactionStatus::Active.as_str().to_string(),
+            transaction_type: TransactionType::Residential.as_str().to_string(),
+            sales_type: SalesType::Listing.as_str().to_string(),
+            special_sales_condition: SpecialSalesCondition::None.as_str().to_string(),
+        }
+    }
 }
 
 #[derive(Template)]
@@ -485,6 +533,10 @@ pub struct TransactionEditPage<'a> {
     pub header: AppHeader,
     pub transaction: Transaction,
     pub transaction_key: String,
+    /// Form values. Seeded from `transaction` on load, and replaced with
+    /// the submitted values when an update fails validation so edits
+    /// survive the round trip.
+    pub prefill: TransactionFormPrefill,
     pub statuses: Vec<TransactionStatus>,
     pub types: Vec<TransactionType>,
     pub conditions: Vec<SpecialSalesCondition>,

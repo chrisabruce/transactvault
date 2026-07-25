@@ -1458,7 +1458,12 @@ async fn broker_create_transaction_seeds_owns_and_has_transaction() {
 
 #[tokio::test]
 async fn create_transaction_requires_address_or_apn() {
-    // Both blank → 400. APN alone or address alone → ok.
+    // Both blank → rejected. APN alone or address alone → ok.
+    //
+    // The rejection is now an inline re-render of the form (200 with the
+    // message in the body) rather than a 400 error page, so this asserts
+    // the *rule*, not the status code. See
+    // `transaction_validation_errors_render_inline_and_keep_input`.
     let app = make_app().await;
     let b = seed_brokerage(&app.state, "Acme").await;
     let broker = seed_user(&app.state, "b@a").await;
@@ -1466,10 +1471,14 @@ async fn create_transaction_requires_address_or_apn() {
 
     let blank = "property_address=&city=&apn=&price=&\
                  transaction_type=residential&special_sales_condition=none&sales_type=listing";
-    let (status, _) = authed_post(&app, &broker, "/app/transactions", blank).await;
+    let (status, body) = authed_post(&app, &broker, "/app/transactions", blank).await;
     assert!(
-        status.is_client_error(),
-        "blank address+apn should fail, got {status}"
+        !status.is_redirection(),
+        "blank address+apn must not create a transaction, got {status}"
+    );
+    assert!(
+        body.contains("Enter a property address or an APN"),
+        "the rejection must be shown on the form"
     );
 
     // APN only — should succeed.
@@ -3257,12 +3266,16 @@ async fn error_responses_are_captured_for_the_admin_screen() {
     join(&app.state, &broker, &b, "broker").await;
     join(&app.state, &admin, &b, "broker").await;
 
-    // Trigger a 400: creating a transaction with neither address nor APN.
+    // Trigger a 400. Transaction validation no longer produces one — it
+    // re-renders the form inline — so use a status change to a value the
+    // parser rejects, which is still a genuine `AppError::Validation`.
+    let tx = seed_tx(&app.state, &b, Some(&broker)).await;
+    let tx_key = crate::db::record_key(&tx);
     let (status, _) = authed_post(
         &app,
         &broker,
-        "/app/transactions",
-        "property_address=&transaction_type=residential&sales_type=listing",
+        &format!("/app/transactions/{tx_key}/status"),
+        "status=not-a-real-status",
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -3303,9 +3316,9 @@ async fn error_responses_are_captured_for_the_admin_screen() {
         "exactly the 400 should be captured (no scanner 404s)"
     );
     assert_eq!(rows[0].status, 400);
-    assert_eq!(rows[0].path, "/app/transactions");
+    assert_eq!(rows[0].path, format!("/app/transactions/{tx_key}/status"));
     assert!(
-        rows[0].detail.contains("property address"),
+        rows[0].detail.contains("Unknown status"),
         "detail should carry the validation message; got {:?}",
         rows[0].detail
     );
@@ -3318,13 +3331,13 @@ async fn error_responses_are_captured_for_the_admin_screen() {
     // Super-admin sees it on the screen…
     let (status, body) = authed_get(&app, &admin, "/admin/errors").await;
     assert_eq!(status, StatusCode::OK);
-    assert!(body.contains("property address"), "detail should render");
+    assert!(body.contains("Unknown status"), "detail should render");
     assert!(body.contains("b@a"), "actor should render");
 
     // …a 5xx-only filter hides the 400…
     let (status, body) = authed_get(&app, &admin, "/admin/errors?class=5xx").await;
     assert_eq!(status, StatusCode::OK);
-    assert!(!body.contains("property address"));
+    assert!(!body.contains("Unknown status"));
 
     // …and regular brokers can't reach the screen at all.
     let (status, _) = authed_get(&app, &broker, "/admin/errors").await;
@@ -3834,6 +3847,80 @@ fn key_flood_cannot_reset_an_exhausted_bucket() {
     assert!(
         !allow_per_hour(&rl, "login:victim@example.com", 5),
         "the flood reset an exhausted bucket — brute-force protection is bypassable"
+    );
+}
+
+/// A rejected transaction must come back as the form, not a 400 page.
+///
+/// Submitting with neither an address nor an APN returned a bare error
+/// page and discarded every other field, so the user retyped the whole
+/// form to fix one omission.
+#[tokio::test]
+async fn transaction_validation_errors_render_inline_and_keep_input() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let agent = seed_user(&app.state, "agent@x.test").await;
+    join(&app.state, &agent, &b, "agent").await;
+
+    // Everything filled in except the one required-either field.
+    let form = "property_address=&apn=\
+                &city=Lancaster&postal_code=93536\
+                &sales_price=%241%2C699%2C500.00&client_name=John+%26+Jane+Smith\
+                &mls_number=SR150573033&office_file_number=AV40829-27A\
+                &status=pending&transaction_type=vacant_lots_land&sales_type=purchase\
+                &special_sales_condition=probate";
+    let (status, body) = authed_post(&app, &agent, "/app/transactions", form).await;
+
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "validation failure must re-render the form, not return an error status"
+    );
+    assert!(
+        body.contains("Enter a property address or an APN"),
+        "the message must appear inline on the form"
+    );
+
+    // Every other field the user filled in survives the round trip.
+    for expected in [
+        r#"value="Lancaster""#,
+        r#"value="93536""#,
+        r#"value="SR150573033""#,
+        r#"value="AV40829-27A""#,
+    ] {
+        assert!(body.contains(expected), "lost input: {expected}");
+    }
+    assert!(
+        body.contains("John &#38; Jane Smith") || body.contains("John &amp; Jane Smith"),
+        "client name lost (or unescaped)"
+    );
+
+    // ...including the dropdown selections, which used to reset to their
+    // defaults even when the text fields were preserved.
+    for (value, label) in [
+        ("pending", "status"),
+        ("vacant_lots_land", "transaction type"),
+        ("purchase", "sales type"),
+        ("probate", "special sales condition"),
+    ] {
+        assert!(
+            body.contains(&format!(r#"value="{value}" selected"#)),
+            "{label} selection lost"
+        );
+    }
+
+    // And nothing was written.
+    let mut q = app
+        .state
+        .db
+        .query("SELECT VALUE count() FROM transaction GROUP ALL")
+        .await
+        .expect("count");
+    let counts: Vec<i64> = q.take(0).unwrap_or_default();
+    assert_eq!(
+        counts.first().copied().unwrap_or(0),
+        0,
+        "a rejected submission must not create a transaction"
     );
 }
 

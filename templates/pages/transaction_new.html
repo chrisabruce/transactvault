@@ -27,32 +27,32 @@
                 <div class="form-row">
                     <label>
                         <span>Property Address</span>
-                        <input type="text" name="property_address" placeholder="42235 Brittle Brush Drive, #AB706">
+                        <input type="text" name="property_address" placeholder="42235 Brittle Brush Drive, #AB706" value="{{ prefill.property_address }}">
                     </label>
                     <label>
                         <span>Assessor's Parcel Number (APN)</span>
-                        <input type="text" name="apn" placeholder="3205-005-002">
+                        <input type="text" name="apn" placeholder="3205-005-002" value="{{ prefill.apn }}">
                     </label>
                 </div>
                 <div class="form-row">
                     <label>
                         <span>City</span>
-                        <input type="text" name="city" placeholder="Lancaster">
+                        <input type="text" name="city" placeholder="Lancaster" value="{{ prefill.city }}">
                     </label>
                     <label>
                         <span>Postal Code</span>
-                        <input type="text" name="postal_code" placeholder="93536-1323">
+                        <input type="text" name="postal_code" placeholder="93536-1323" value="{{ prefill.postal_code }}">
                     </label>
                 </div>
                 <div class="form-row">
                     <label>
                         <span>Sales Price</span>
                         <input type="text" name="sales_price" placeholder="$1,699,500.00"
-                               inputmode="decimal" data-format="money">
+                               inputmode="decimal" data-format="money" value="{{ prefill.sales_price }}">
                     </label>
                     <label>
                         <span>Client Name</span>
-                        <input type="text" name="client_name" placeholder="John & Jane Smith">
+                        <input type="text" name="client_name" placeholder="John & Jane Smith" value="{{ prefill.client_name }}">
                     </label>
                 </div>
             </fieldset>
@@ -62,11 +62,11 @@
                 <div class="form-row">
                     <label>
                         <span>Primary MLS Number</span>
-                        <input type="text" name="mls_number" placeholder="SR150573033">
+                        <input type="text" name="mls_number" placeholder="SR150573033" value="{{ prefill.mls_number }}">
                     </label>
                     <label>
                         <span>Office File Number</span>
-                        <input type="text" name="office_file_number" placeholder="AV40829-27A">
+                        <input type="text" name="office_file_number" placeholder="AV40829-27A" value="{{ prefill.office_file_number }}">
                     </label>
                 </div>
                 <div class="form-row">
@@ -74,7 +74,7 @@
                         <span>Transaction Status</span>
                         <select name="status">
                             {% for s in statuses %}
-                                <option value="{{ s.as_str() }}"{% if s.as_str() == "active" %} selected{% endif %}>{{ s.label() }}</option>
+                                <option value="{{ s.as_str() }}"{% if s.as_str() == prefill.status %} selected{% endif %}>{{ s.label() }}</option>
                             {% endfor %}
                         </select>
                     </label>
@@ -82,7 +82,7 @@
                         <span>Transaction Type</span>
                         <select name="transaction_type">
                             {% for t in types %}
-                                <option value="{{ t.as_str() }}"{% if t.as_str() == "residential" %} selected{% endif %}>{{ t.label() }}</option>
+                                <option value="{{ t.as_str() }}"{% if t.as_str() == prefill.transaction_type %} selected{% endif %}>{{ t.label() }}</option>
                             {% endfor %}
                         </select>
                     </label>
@@ -92,7 +92,7 @@
                         <span>Sales Type</span>
                         <select name="sales_type">
                             {% for s in sales_types %}
-                                <option value="{{ s.as_str() }}"{% if s.as_str() == "listing" %} selected{% endif %}>{{ s.label() }}</option>
+                                <option value="{{ s.as_str() }}"{% if s.as_str() == prefill.sales_type %} selected{% endif %}>{{ s.label() }}</option>
                             {% endfor %}
                         </select>
                     </label>
@@ -100,7 +100,7 @@
                         <span>Special Sales Condition</span>
                         <select name="special_sales_condition">
                             {% for c in conditions %}
-                                <option value="{{ c.as_str() }}"{% if c.as_str() == "none" %} selected{% endif %}>{{ c.label() }}</option>
+                                <option value="{{ c.as_str() }}"{% if c.as_str() == prefill.special_sales_condition %} selected{% endif %}>{{ c.label() }}</option>
                             {% endfor %}
                         </select>
                     </label>
