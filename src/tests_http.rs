@@ -3243,3 +3243,90 @@ async fn signed_out_navigation_redirects_to_login_but_fetches_get_401() {
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("<html"));
 }
+
+/// Error responses are persisted for /admin/errors: a 400 lands as a
+/// row with the real detail and the acting user's email; scanner 404s
+/// (wp-admin probes) are deliberately NOT recorded; the admin screen
+/// renders the rows and stays super-admin-only.
+#[tokio::test]
+async fn error_responses_are_captured_for_the_admin_screen() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    let admin = seed_user(&app.state, "admin@test").await;
+    join(&app.state, &broker, &b, "broker").await;
+    join(&app.state, &admin, &b, "broker").await;
+
+    // Trigger a 400: creating a transaction with neither address nor APN.
+    let (status, _) = authed_post(
+        &app,
+        &broker,
+        "/app/transactions",
+        "property_address=&transaction_type=residential&sales_type=listing",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // A scanner probe 404s and must NOT create a row.
+    let req = Request::builder()
+        .uri("/wp-admin/setup-config.php")
+        .body(Body::empty())
+        .unwrap();
+    let (status, _) = send(&app, req).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // The write is a detached task — poll briefly for the row.
+    #[derive(serde::Deserialize, surrealdb::types::SurrealValue)]
+    struct Row {
+        status: i64,
+        path: String,
+        detail: String,
+        actor_email: Option<String>,
+    }
+    let mut rows: Vec<Row> = Vec::new();
+    for _ in 0..40 {
+        let mut q = app
+            .state
+            .db
+            .query("SELECT status, path, detail, actor_email FROM error_event")
+            .await
+            .expect("query error_event");
+        rows = q.take(0).unwrap_or_default();
+        if !rows.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        rows.len(),
+        1,
+        "exactly the 400 should be captured (no scanner 404s)"
+    );
+    assert_eq!(rows[0].status, 400);
+    assert_eq!(rows[0].path, "/app/transactions");
+    assert!(
+        rows[0].detail.contains("property address"),
+        "detail should carry the validation message; got {:?}",
+        rows[0].detail
+    );
+    assert_eq!(
+        rows[0].actor_email.as_deref(),
+        Some("b@a"),
+        "the error should be attributed to the signed-in user"
+    );
+
+    // Super-admin sees it on the screen…
+    let (status, body) = authed_get(&app, &admin, "/admin/errors").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("property address"), "detail should render");
+    assert!(body.contains("b@a"), "actor should render");
+
+    // …a 5xx-only filter hides the 400…
+    let (status, body) = authed_get(&app, &admin, "/admin/errors?class=5xx").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!body.contains("property address"));
+
+    // …and regular brokers can't reach the screen at all.
+    let (status, _) = authed_get(&app, &broker, "/admin/errors").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}

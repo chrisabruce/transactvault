@@ -841,6 +841,20 @@ pub struct AdminAuditPage<'a> {
     pub kinds: Vec<String>,
 }
 
+/// Captured error responses (`/admin/errors`) — the 5xx/4xx rows the
+/// error-capture middleware persists, newest first.
+#[derive(Template)]
+#[template(path = "pages/admin_errors.html")]
+pub struct AdminErrorsPage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+    pub signed_in: bool,
+    pub header: AppHeader,
+    pub events: Vec<crate::models::ErrorEvent>,
+    /// `all` | `5xx` | `4xx` — which status band is displayed.
+    pub class_filter: String,
+}
+
 #[derive(Template)]
 #[template(path = "pages/admin_tiers.html")]
 pub struct AdminTiersPage<'a> {

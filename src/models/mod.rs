@@ -13,7 +13,7 @@ pub mod tier;
 pub mod transaction;
 pub mod user;
 
-pub use audit::{AuditEvent, NewAuditEvent};
+pub use audit::{AuditEvent, ErrorEvent, NewAuditEvent, NewErrorEvent};
 pub use brokerage::{Brokerage, NewBrokerage};
 pub use checklist::{ApprovalStatus, ChecklistItem, NewChecklistItem};
 pub use comment::{Comment, NewComment};

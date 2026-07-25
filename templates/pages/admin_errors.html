@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+
+{% block title %}Errors — Admin — {{ app_name }}{% endblock %}
+{% block body_class %}page-app page-admin{% endblock %}
+
+{% block body %}
+{% include "components/app_header.html" %}
+
+<main class="app-main">
+    <header class="page-title">
+        <section>
+            <h1>Admin · Errors</h1>
+            <p class="subtitle">Captured 5xx and request-error responses (last 30 days; 404/401/403 scanner noise excluded).</p>
+        </section>
+        <nav class="admin-subnav" aria-label="Admin sections">
+            <a href="/admin">Users</a>
+            <a href="/admin/brokerages">Brokerages</a>
+            <a href="/admin/tiers">Tiers</a>
+            <a href="/admin/forms">Forms</a>
+            <a href="/admin/audit">Audit log</a>
+            <a href="/admin/errors" class="active" aria-current="page">Errors</a>
+            <a href="/admin/changelog">Changelog</a>
+        </nav>
+    </header>
+
+    <section class="filter-bar" aria-label="Filters">
+        <form method="get" action="/admin/errors">
+            <label class="visually-hidden" for="error-class">Status class</label>
+            <select id="error-class" name="class">
+                <option value="all"{% if class_filter == "all" %} selected{% endif %}>All statuses</option>
+                <option value="5xx"{% if class_filter == "5xx" %} selected{% endif %}>Server errors (5xx)</option>
+                <option value="4xx"{% if class_filter == "4xx" %} selected{% endif %}>Request errors (4xx)</option>
+            </select>
+            <button class="btn small secondary" type="submit">Apply</button>
+        </form>
+    </section>
+
+    <section class="panel admin-table-wrap">
+        <table class="admin-table">
+            <thead>
+                <tr>
+                    <th scope="col">When</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Request</th>
+                    <th scope="col">Who</th>
+                    <th scope="col">IP</th>
+                    <th scope="col">Detail</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for e in events %}
+                    <tr>
+                        <td><time datetime="{{ e.at }}">{{ e.at.format("%b %-d %H:%M:%S") }}</time></td>
+                        <td><span class="audit-pill {{ e.status_class() }}">{{ e.status }}</span></td>
+                        <td><code>{{ e.method }} {{ e.path }}</code></td>
+                        <td>{% match e.actor_email %}{% when Some with (em) %}<code>{{ em }}</code>{% when None %}—{% endmatch %}</td>
+                        <td><code>{% match e.ip %}{% when Some with (ip) %}{{ ip }}{% when None %}—{% endmatch %}</code></td>
+                        <td class="ua-cell">
+                            {# Chains can run long — fold anything past a
+                               glance behind a native <details>. #}
+                            {% if e.detail.len() > 90 %}
+                                <details>
+                                    <summary>{{ e.detail.chars().take(90).collect::<String>() }}…</summary>
+                                    <small>{{ e.detail }}</small>
+                                </details>
+                            {% else %}
+                                {{ e.detail }}
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% endfor %}
+                {% if events.is_empty() %}
+                    <tr><td colspan="6" class="empty-row">No errors captured. Quiet is good.</td></tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </section>
+</main>
+{% endblock %}

@@ -37,6 +37,46 @@ pub struct NewAuditEvent {
     pub detail: Option<String>,
 }
 
+/// One captured error response (5xx or meaningful 4xx). Written
+/// fire-and-forget by [`crate::audit::capture_errors`]; rendered on
+/// the super-admin `/admin/errors` page. `detail` carries the full
+/// server-side error chain — never shown to end users, only admins.
+#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
+pub struct ErrorEvent {
+    pub id: RecordId,
+    pub status: i64,
+    pub method: String,
+    pub path: String,
+    pub detail: String,
+    pub actor_email: Option<String>,
+    pub ip: Option<String>,
+    pub user_agent: Option<String>,
+    pub at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, SurrealValue)]
+pub struct NewErrorEvent {
+    pub status: i64,
+    pub method: String,
+    pub path: String,
+    pub detail: String,
+    pub actor_email: Option<String>,
+    pub ip: Option<String>,
+    pub user_agent: Option<String>,
+}
+
+impl ErrorEvent {
+    /// CSS hook for the status pill — red for server errors, amber for
+    /// client errors.
+    pub fn status_class(&self) -> &'static str {
+        if self.status >= 500 {
+            "fail"
+        } else {
+            "blocked"
+        }
+    }
+}
+
 impl AuditEvent {
     /// Stable, human-friendly label used by the admin UI.
     pub fn kind_label(&self) -> &'static str {

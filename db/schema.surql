@@ -173,6 +173,22 @@ DEFINE FIELD OVERWRITE code       ON seeded_form TYPE string ASSERT string::len(
 DEFINE FIELD OVERWRITE created_at ON seeded_form TYPE datetime DEFAULT time::now();
 DEFINE INDEX OVERWRITE idx_seeded_form_code ON seeded_form FIELDS code UNIQUE;
 
+-- Error telemetry: one row per 5xx (and meaningful 4xx) response so
+-- super-admins can inspect production failures from /admin/errors
+-- without shelling into the host. 404/401/403 are deliberately NOT
+-- recorded — vulnerability scanners and expired sessions would flood
+-- the table. Rows are pruned after 30 days by the writer.
+DEFINE TABLE OVERWRITE error_event SCHEMAFULL;
+DEFINE FIELD OVERWRITE status      ON error_event TYPE int;
+DEFINE FIELD OVERWRITE method      ON error_event TYPE string;
+DEFINE FIELD OVERWRITE path        ON error_event TYPE string;
+DEFINE FIELD OVERWRITE detail      ON error_event TYPE string DEFAULT "";
+DEFINE FIELD OVERWRITE actor_email ON error_event TYPE option<string>;
+DEFINE FIELD OVERWRITE ip          ON error_event TYPE option<string>;
+DEFINE FIELD OVERWRITE user_agent  ON error_event TYPE option<string>;
+DEFINE FIELD OVERWRITE at          ON error_event TYPE datetime DEFAULT time::now();
+DEFINE INDEX OVERWRITE idx_error_event_at ON error_event FIELDS at;
+
 -- Seeding bookkeeping (e.g. `engine_criteria_version` — bumped when the
 -- compiled checklist engine changes shape and existing DBs must re-sync
 -- the engine-owned form criteria).

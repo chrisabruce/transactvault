@@ -37,20 +37,35 @@ impl AppError {
     }
 }
 
+/// Server-side error detail attached to every [`AppError`] response as
+/// a response extension — the full `.source()` chain for internal
+/// errors, the message for validation/conflict. Read by the
+/// error-capture middleware ([`crate::audit::capture_errors`]) so the
+/// `/admin/errors` screen shows the real cause while the response body
+/// stays user-safe. Never rendered to end users.
+#[derive(Debug, Clone)]
+pub struct ErrorDetail(pub String);
+
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let (status, message) = match &self {
-            AppError::NotFound => (StatusCode::NOT_FOUND, "Page not found".to_string()),
+        let (status, message, detail) = match &self {
+            AppError::NotFound => (
+                StatusCode::NOT_FOUND,
+                "Page not found".to_string(),
+                "not found".to_string(),
+            ),
             AppError::Forbidden => (
                 StatusCode::FORBIDDEN,
                 "You don't have access to that.".to_string(),
+                "forbidden".to_string(),
             ),
             AppError::Unauthorized => (
                 StatusCode::UNAUTHORIZED,
                 "Please sign in to continue.".to_string(),
+                "unauthorized".to_string(),
             ),
-            AppError::Validation(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
-            AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
+            AppError::Validation(msg) => (StatusCode::BAD_REQUEST, msg.clone(), msg.clone()),
+            AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone(), msg.clone()),
             other => {
                 // Walk the full `.source()` chain into one string so the
                 // log shows what actually failed at the bottom (e.g. the
@@ -62,6 +77,7 @@ impl IntoResponse for AppError {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "Something went wrong. Please try again.".to_string(),
+                    chain,
                 )
             }
         };
@@ -72,7 +88,11 @@ impl IntoResponse for AppError {
             msg = html_escape(&message),
         ));
 
-        (status, body).into_response()
+        // The detail rides along as a response extension for the
+        // error-capture middleware; the body above stays user-safe.
+        let mut response = (status, body).into_response();
+        response.extensions_mut().insert(ErrorDetail(detail));
+        response
     }
 }
 

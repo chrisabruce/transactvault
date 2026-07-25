@@ -59,6 +59,15 @@ the bottom-right of every page.
   than yanking you back to the top. This works across roles — an
   agent's window follows changes a broker makes, scoped to what the
   agent is allowed to see.
+- **New Admin → Errors screen.** Server errors (5xx) and meaningful
+  request errors (400/409/422) are now captured to the database with
+  their full internal error detail, the request, the signed-in user,
+  and the IP — so production failures can be diagnosed from the admin
+  panel instead of shelling into the host for logs. Deliberately NOT
+  recorded: 404/401/403, so vulnerability-scanner noise (wp-admin
+  probes and friends) can't flood it. Rows are kept for 30 days, and
+  capturing is fully detached from request handling — a struggling
+  database can't make error handling itself fail.
 - **Signed-out visitors land on the login page, not an error.**
   Opening an app link without a session — incognito window, new
   device, expired login — used to show a bare "401 — Please sign in

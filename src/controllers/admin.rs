@@ -410,6 +410,57 @@ pub async fn audit_log(
     })
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ErrorFilter {
+    /// `all` (default) | `5xx` | `4xx`.
+    #[serde(default)]
+    pub class: Option<String>,
+}
+
+/// `GET /admin/errors` — the captured 5xx/4xx responses, newest first.
+/// Written by [`crate::audit::capture_errors`]; rows carry the full
+/// server-side error chain, which is exactly what "occasional 500s"
+/// triage needs without shelling into the host for logs.
+pub async fn error_log(
+    State(state): State<AppState>,
+    SuperAdmin(user): SuperAdmin,
+    Query(filter): Query<ErrorFilter>,
+) -> Result<Html<String>, AppError> {
+    audit::record(
+        &state.db,
+        "admin_view",
+        Some(user.user_id.clone()),
+        Some(user.email.clone()),
+        None,
+        None,
+        Some("errors".into()),
+    )
+    .await;
+
+    let mut q = state
+        .db
+        .query("SELECT * FROM error_event ORDER BY at DESC LIMIT 200")
+        .await?;
+    let mut rows: Vec<crate::models::ErrorEvent> = q.take(0).unwrap_or_default();
+
+    let class = filter.class.as_deref().unwrap_or("all");
+    match class {
+        "5xx" => rows.retain(|e| e.status >= 500),
+        "4xx" => rows.retain(|e| e.status < 500),
+        _ => {}
+    }
+
+    let header = crate::controllers::common::build_app_header(&state, &user, "admin").await;
+    render(&crate::templates::AdminErrorsPage {
+        app_name: &state.config.app_name,
+        base_url: &state.config.base_url,
+        signed_in: true,
+        header,
+        events: rows,
+        class_filter: class.to_string(),
+    })
+}
+
 const AUDIT_KIND_OPTIONS: &[&str] = &[
     "all",
     "signup_pending",

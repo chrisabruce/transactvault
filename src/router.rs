@@ -169,6 +169,7 @@ pub fn build(state: AppState) -> Router {
             get(forms::admin_edit_form).post(forms::admin_update_form),
         )
         .route("/admin/audit", get(admin::audit_log))
+        .route("/admin/errors", get(admin::error_log))
         .route("/admin/changelog", get(admin::changelog));
 
     Router::new()
@@ -210,6 +211,14 @@ pub fn build(state: AppState) -> Router {
         // game.
         .layer(tower_http::catch_panic::CatchPanicLayer::custom(
             handle_panic,
+        ))
+        // Error telemetry: persist 5xx + meaningful 4xx responses to
+        // the DB for /admin/errors (detached write; adds no request
+        // latency). Sits OUTSIDE the panic catcher so even synthesized
+        // panic-500s get a row.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::audit::capture_errors,
         ))
         .with_state(state)
         .layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024))
