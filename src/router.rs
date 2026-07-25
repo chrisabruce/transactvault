@@ -192,7 +192,9 @@ pub fn build(state: AppState) -> Router {
     // path actually returns through the real middleware stack. Compiled
     // out of every non-test build.
     #[cfg(test)]
-    let base = base.route("/__test/panic", get(always_panics));
+    let base = base
+        .route("/__test/panic", get(always_panics))
+        .route("/__test/own-headers", get(sets_own_headers));
 
     base.nest_service("/static", ServeDir::new("static"))
         .layer(CookieManagerLayer::new())
@@ -304,6 +306,26 @@ pub fn build(state: AppState) -> Router {
 #[cfg(test)]
 async fn always_panics() -> Response {
     panic!("deliberate test panic")
+}
+
+/// Handler behind the test-only `/__test/own-headers` route.
+///
+/// Mirrors what `documents::preview` does — sets its own CSP and
+/// `X-Frame-Options` — so the suite can assert `security_headers` treats
+/// those as authoritative rather than overwriting them.
+#[cfg(test)]
+async fn sets_own_headers() -> Response {
+    (
+        [
+            (
+                "content-security-policy",
+                "sandbox; frame-ancestors \'self\'",
+            ),
+            ("x-frame-options", "SAMEORIGIN"),
+        ],
+        "ok",
+    )
+        .into_response()
 }
 
 /// Reduce a URL to its bare `scheme://host[:port]`, lowercased.
@@ -448,22 +470,37 @@ async fn security_headers(
     let mut response = next.run(req).await;
     let headers = response.headers_mut();
 
-    headers.insert(
-        "content-security-policy",
-        HeaderValue::from_static(
-            "default-src 'self'; \
-             script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; \
-             style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; \
-             img-src 'self' data: blob:; \
-             connect-src 'self'; \
-             font-src 'self'; \
-             object-src 'none'; \
-             base-uri 'self'; \
-             form-action 'self'; \
-             frame-ancestors 'none'",
-        ),
-    );
-    headers.insert("x-frame-options", HeaderValue::from_static("DENY"));
+    // These two are DEFAULTS, not mandates: a handler that has already
+    // set its own is making a deliberate, better-informed choice, and
+    // overwriting it silently breaks things.
+    //
+    // `documents::preview` is the case in point. It serves attachment
+    // bytes to be framed by the same-origin preview lightbox and sets
+    // its own `sandbox` policy for the formats where that matters. The
+    // unconditional `insert` here replaced that with the page policy —
+    // whose `frame-ancestors 'none'` blocked the frame outright, so PDF
+    // preview showed nothing, while simultaneously *discarding* the
+    // sandbox that stops a malicious SVG running script in our origin.
+    if !headers.contains_key("content-security-policy") {
+        headers.insert(
+            "content-security-policy",
+            HeaderValue::from_static(
+                "default-src 'self'; \
+                 script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; \
+                 style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; \
+                 img-src 'self' data: blob:; \
+                 connect-src 'self'; \
+                 font-src 'self'; \
+                 object-src 'none'; \
+                 base-uri 'self'; \
+                 form-action 'self'; \
+                 frame-ancestors 'none'",
+            ),
+        );
+    }
+    if !headers.contains_key("x-frame-options") {
+        headers.insert("x-frame-options", HeaderValue::from_static("DENY"));
+    }
     headers.insert(
         "x-content-type-options",
         HeaderValue::from_static("nosniff"),

@@ -472,6 +472,34 @@ pub async fn download(
         .body(Body::from(bytes))
         .map_err(|e| AppError::Internal(anyhow::anyhow!("build response: {e}")))
 }
+/// Content-Security-Policy for an inline document preview.
+///
+/// These bytes are displayed inside the same-origin preview lightbox, so
+/// the response must permit being framed by us. The app-wide policy says
+/// `frame-ancestors 'none'`, which blocks that outright — which is why
+/// `security_headers` treats an already-set CSP as authoritative and
+/// leaves this one alone.
+///
+/// PDFs additionally must NOT be sandboxed. A sandboxed document has the
+/// sandboxed-plugins flag set, and the browser's built-in PDF viewer is
+/// a plugin: the frame loads and then renders nothing at all. Dropping
+/// `sandbox` for them is safe because `Content-Type: application/pdf`
+/// plus `nosniff` means the bytes can never be interpreted as a document
+/// in our origin, and PDF script runs inside the viewer rather than on
+/// the page.
+///
+/// Every other kind stays sandboxed, and that is load-bearing rather
+/// than decorative: [`Document::preview_kind`] admits any `image/*`, the
+/// *uploader* chooses the declared content type, and `image/svg+xml` is
+/// a scriptable format. Without the opaque origin `sandbox` imposes,
+/// navigating straight to this URL would run an attacker's SVG script as
+/// the signed-in user.
+fn preview_csp(kind: Option<&str>) -> &'static str {
+    match kind {
+        Some("pdf") => "frame-ancestors 'self'",
+        _ => "sandbox; frame-ancestors 'self'",
+    }
+}
 
 /// Stream a document's bytes inline so the browser renders it in place
 /// (PDF viewer, `<img>`, `<video>`, `<audio>`). Auth is identical to
@@ -497,6 +525,9 @@ pub async fn preview(
         return Err(AppError::NotFound);
     }
     let safe_name = doc.filename.replace('"', "_");
+
+    let csp = preview_csp(doc.preview_kind());
+
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, doc.content_type)
@@ -506,7 +537,11 @@ pub async fn preview(
         )
         .header(header::CACHE_CONTROL, "private, no-store")
         .header("X-Content-Type-Options", "nosniff")
-        .header("Content-Security-Policy", "sandbox")
+        .header("Content-Security-Policy", csp)
+        // Paired with `frame-ancestors 'self'` for browsers that still
+        // consult this; `DENY` (the app default) blocks even our own
+        // lightbox.
+        .header("X-Frame-Options", "SAMEORIGIN")
         .body(Body::from(bytes))
         .map_err(|e| AppError::Internal(anyhow::anyhow!("build response: {e}")))
 }
@@ -1391,7 +1426,45 @@ async fn create_versioned_document(
 
 #[cfg(test)]
 mod path_safety_tests {
-    use super::{manifest_field, sanitize_path_segment, split_filename, unique_entry_path};
+    use super::{
+        manifest_field, preview_csp, sanitize_path_segment, split_filename, unique_entry_path,
+    };
+
+    /// Preview responses must be framable by our own lightbox, and PDFs
+    /// must not be sandboxed.
+    ///
+    /// Both halves are regressions that shipped: the app-wide
+    /// `frame-ancestors 'none'` blocked the preview `<iframe>` entirely,
+    /// and a sandboxed document cannot instantiate the browser's PDF
+    /// viewer plugin, so the frame would render blank even once framing
+    /// was allowed.
+    #[test]
+    fn preview_policy_allows_framing_and_spares_the_pdf_viewer() {
+        let pdf = preview_csp(Some("pdf"));
+        assert!(pdf.contains("frame-ancestors 'self'"));
+        assert!(
+            !pdf.contains("sandbox"),
+            "sandboxing a PDF blocks the viewer plugin: {pdf}"
+        );
+
+        // Everything else keeps the sandbox. `preview_kind` admits any
+        // `image/*` and the uploader picks the declared type, so
+        // `image/svg+xml` reaches here — scriptable, and dangerous on a
+        // direct navigation without an opaque origin.
+        for kind in [Some("image"), Some("video"), Some("audio"), None] {
+            let csp = preview_csp(kind);
+            assert!(
+                csp.contains("sandbox"),
+                "{kind:?} must stay sandboxed: {csp}"
+            );
+            assert!(csp.contains("frame-ancestors 'self'"), "{kind:?}: {csp}");
+        }
+
+        // Nothing may carry the page policy's framing ban.
+        for kind in [Some("pdf"), Some("image"), None] {
+            assert!(!preview_csp(kind).contains("frame-ancestors 'none'"));
+        }
+    }
 
     /// A bidi override in a filename makes a listing show one extension
     /// while the bytes are another — the classic `\u{202E}` trick turns

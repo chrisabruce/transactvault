@@ -129,8 +129,26 @@ inject anything into a page, and these further issues:
 - **Third-party scripts and styles are locked to a known version.**
   The two files loaded from a public CDN are now checked against a
   fingerprint, so a change at the CDN can't alter what runs in your
-  browser. (This also restores the avatar cropper's styling, which the
-  new content policy had been blocking.)
+  browser.
+
+The browser-hardening rules above were initially too strict and broke
+three things. All are fixed:
+
+- **Choosing a profile photo does nothing.** The crop window never
+  appeared, because the rules blocked the browser from displaying the
+  file you had just picked — and the code only opens the cropper once
+  that image has loaded. (The cropper's styling was missing for the
+  same reason.)
+- **PDF previews show nothing.** Document previews open in a frame
+  inside the page, and the new rules told the browser to refuse being
+  framed — including by us. Previews are now allowed to be framed by
+  TransactVault itself and nowhere else.
+- **A safety measure on previews was being discarded.** The preview
+  endpoint sets its own, stricter rules for image files, and the
+  site-wide rules were overwriting them. Since a file's type is
+  declared by whoever uploads it, that protection matters: it is what
+  stops a booby-trapped image file from running code as you if opened
+  directly. Handler-specific rules now take precedence.
 
 ### v0.4.0 — Live search, real-time fixes, team exports, and the full CAR catalog
 

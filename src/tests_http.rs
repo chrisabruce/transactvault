@@ -3850,6 +3850,56 @@ fn key_flood_cannot_reset_an_exhausted_bucket() {
     );
 }
 
+/// A handler's own security headers must survive the middleware.
+///
+/// `security_headers` used to `insert` the page policy unconditionally,
+/// which silently overwrote whatever a handler had set. That broke
+/// `documents::preview`: its response is framed by the same-origin
+/// preview lightbox, but came back carrying the page's
+/// `frame-ancestors 'none'` and `X-Frame-Options: DENY`, so the PDF
+/// `<iframe>` was refused outright — and the handler's `sandbox`, which
+/// is what stops a malicious SVG running script in our origin, was
+/// thrown away at the same time.
+#[tokio::test]
+async fn handler_supplied_security_headers_are_not_overwritten() {
+    let app = make_app().await;
+
+    let req = Request::builder()
+        .uri("/__test/own-headers")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.router.clone().oneshot(req).await.expect("responds");
+
+    let csp = res
+        .headers()
+        .get("content-security-policy")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    let xfo = res
+        .headers()
+        .get("x-frame-options")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+
+    assert_eq!(
+        csp, "sandbox; frame-ancestors 'self'",
+        "the handler's own CSP must be left alone"
+    );
+    assert_eq!(
+        xfo, "SAMEORIGIN",
+        "the handler's own XFO must be left alone"
+    );
+
+    // The headers a handler did NOT set are still applied.
+    assert_eq!(
+        res.headers()
+            .get("x-content-type-options")
+            .and_then(|v| v.to_str().ok()),
+        Some("nosniff"),
+        "defaults must still be filled in"
+    );
+}
+
 /// A rejected transaction must come back as the form, not a 400 page.
 ///
 /// Submitting with neither an address nor an APN returned a bare error
