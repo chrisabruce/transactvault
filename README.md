@@ -41,6 +41,11 @@ docker compose up -d surrealdb rustfs   # backing services only
 cargo run                               # app on :37420
 ```
 
+`docker-compose.yml` is **development only**. Production builds the app
+from the root `Dockerfile` as a single container and points it at a
+SurrealDB and an object store you manage separately — see
+[DEPLOY.md](DEPLOY.md).
+
 ### Email delivery
 
 `POSTMARK_SERVER_TOKEN` is empty by default — outbound messages (welcome +

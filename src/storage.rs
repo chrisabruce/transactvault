@@ -69,10 +69,17 @@ impl Storage {
         bucket.set_request_timeout(Some(Duration::from_secs(30)));
 
         let storage = Self { bucket };
-        storage
-            .ensure_bucket(&cfg.bucket, region, credentials)
-            .await
-            .context("ensuring bucket exists")?;
+        if cfg.auto_create_bucket {
+            storage
+                .ensure_bucket(&cfg.bucket, region, credentials)
+                .await
+                .context("ensuring bucket exists")?;
+        } else {
+            tracing::info!(
+                bucket = %cfg.bucket,
+                "skipping bucket creation (S3_AUTO_CREATE_BUCKET=false)"
+            );
+        }
         Ok(storage)
     }
 

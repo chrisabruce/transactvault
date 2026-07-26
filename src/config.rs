@@ -81,6 +81,16 @@ pub struct RustFsConfig {
     pub access_key: String,
     pub secret_key: String,
     pub bucket: String,
+    /// Whether to issue `CreateBucket` at startup.
+    ///
+    /// True suits local RustFS, where the bucket is created on first
+    /// boot. Point this at a managed provider whose bucket you made in
+    /// their console and it becomes a liability: keys scoped to that one
+    /// bucket answer `CreateBucket` with `403 AccessDenied`, which is
+    /// not the "already exists" response the startup check forgives, so
+    /// the app retries and then refuses to boot against a bucket that
+    /// was fine all along. Set `S3_AUTO_CREATE_BUCKET=false` there.
+    pub auto_create_bucket: bool,
 }
 
 /// Postmark transactional email settings. An empty `server_token`
@@ -167,6 +177,7 @@ impl Config {
                 access_key: "test".into(),
                 secret_key: "test".into(),
                 bucket: "test".into(),
+                auto_create_bucket: false,
             },
             email: EmailConfig {
                 server_token: String::new(),
@@ -242,11 +253,12 @@ impl Config {
                 .context("TRUSTED_PROXY_HOPS must be a non-negative integer")?,
 
             rustfs: RustFsConfig {
-                endpoint: env_or("RUSTFS_ENDPOINT", "http://127.0.0.1:37421"),
-                region: env_or("RUSTFS_REGION", "us-east-1"),
-                access_key: env_or("RUSTFS_ACCESS_KEY", "rustfsadmin"),
-                secret_key: env_or("RUSTFS_SECRET_KEY", "rustfsadmin"),
-                bucket: env_or("RUSTFS_BUCKET", "transactvault"),
+                endpoint: env_either("S3_ENDPOINT", "RUSTFS_ENDPOINT", "http://127.0.0.1:37421"),
+                region: env_either("S3_REGION", "RUSTFS_REGION", "us-east-1"),
+                access_key: env_either("S3_ACCESS_KEY", "RUSTFS_ACCESS_KEY", "rustfsadmin"),
+                secret_key: env_either("S3_SECRET_KEY", "RUSTFS_SECRET_KEY", "rustfsadmin"),
+                bucket: env_either("S3_BUCKET", "RUSTFS_BUCKET", "transactvault"),
+                auto_create_bucket: env_flag("S3_AUTO_CREATE_BUCKET", true),
             },
             email: EmailConfig {
                 server_token: env_or("POSTMARK_SERVER_TOKEN", ""),
@@ -321,6 +333,28 @@ impl Config {
         Ok(())
     }
 }
+/// Read `preferred`, falling back to `legacy`, then to `default`.
+///
+/// Lets the storage settings use provider-neutral `S3_*` names without
+/// breaking deployments still setting the original `RUSTFS_*` ones —
+/// the object store is any S3-compatible service, not specifically
+/// RustFS.
+fn env_either(preferred: &str, legacy: &str, default: &str) -> String {
+    pick_env(env::var(preferred).ok(), env::var(legacy).ok(), default)
+}
+
+/// The precedence rule behind [`env_either`], split out so it can be
+/// tested without mutating the process environment (which this crate
+/// forbids, and which would race the multi-threaded test binary anyway).
+///
+/// An empty string counts as unset: a Dokploy field left blank should
+/// fall through rather than blank out a value the legacy name supplies.
+fn pick_env(preferred: Option<String>, legacy: Option<String>, default: &str) -> String {
+    preferred
+        .filter(|v| !v.is_empty())
+        .or_else(|| legacy.filter(|v| !v.is_empty()))
+        .unwrap_or_else(|| default.to_string())
+}
 
 fn env_or(key: &str, default: &str) -> String {
     env::var(key).unwrap_or_else(|_| default.to_string())
@@ -331,4 +365,48 @@ fn env_flag(key: &str, default: bool) -> bool {
         .ok()
         .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
         .unwrap_or(default)
+}
+
+#[cfg(test)]
+mod env_naming_tests {
+    use super::pick_env;
+
+    fn v(s: &str) -> Option<String> {
+        Some(s.to_string())
+    }
+
+    /// The storage settings moved to provider-neutral `S3_*` names, but
+    /// the dev `docker-compose.yml` still passes the original `RUSTFS_*`
+    /// ones. If the fallback broke, `docker compose up` would quietly
+    /// ignore the rustfs container and use the built-in localhost
+    /// defaults instead.
+    #[test]
+    fn legacy_storage_env_names_still_win_over_the_default() {
+        // Neither set → default.
+        assert_eq!(pick_env(None, None, "fallback"), "fallback");
+
+        // Only the legacy name → legacy value. This is the dev-compose case.
+        assert_eq!(
+            pick_env(None, v("http://rustfs:9000"), "fallback"),
+            "http://rustfs:9000",
+            "docker-compose.yml sets only RUSTFS_* and must keep working"
+        );
+
+        // Both set → the new name wins.
+        assert_eq!(
+            pick_env(
+                v("https://eu2.contabostorage.com"),
+                v("http://rustfs:9000"),
+                "fallback"
+            ),
+            "https://eu2.contabostorage.com"
+        );
+
+        // Empty counts as unset on either side.
+        assert_eq!(
+            pick_env(v(""), v("http://rustfs:9000"), "fallback"),
+            "http://rustfs:9000"
+        );
+        assert_eq!(pick_env(v(""), v(""), "fallback"), "fallback");
+    }
 }

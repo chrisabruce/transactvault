@@ -1,11 +1,18 @@
+# Local development stack — app + SurrealDB + RustFS, all on one machine.
+#
+# This file is DEV ONLY. Production runs the app from the root `Dockerfile`
+# as a single container and points it at a SurrealDB and an S3-compatible
+# store that are managed independently (see DEPLOY.md). Nothing here is
+# expected to be deployed anywhere.
+#
+#   docker compose up --build              # whole stack
+#   docker compose up -d surrealdb rustfs  # backing services, then `cargo run`
+#
+# Host ports are deliberately unusual (3742x) so the stack coexists with
+# other local dockers. They bind 127.0.0.1 rather than 0.0.0.0 so a laptop
+# on a café network isn't serving a root-credentialled database to the
+# room; override APP_BIND to reach the app from a phone on your LAN.
 services:
-  # Every host port and bind address is driven by env vars so prod can rebind
-  # or hide them without forking the compose file.
-  #
-  #   Dev (defaults):   app on 0.0.0.0:37420, services on 127.0.0.1:37421-37423
-  #   Prod (Dokploy):   set *_BIND to 127.0.0.1 and *_PORT to unused ports,
-  #                     or set them to ports you've reserved.
-
   surrealdb:
     # Pinned exactly — a database on a floating tag silently jumps
     # versions on every pull. Bump deliberately (in-major v3.x upgrades
@@ -13,14 +20,14 @@ services:
     image: surrealdb/surrealdb:v3.2.3
     restart: unless-stopped
     # Run as root in the container. The `surrealdb` image's non-root default
-    # collides with named-volume ownership on some Docker hosts (Dokploy
-    # included) — root always has write permission on /data. The container
-    # is the isolation boundary, not the in-container UID, so this is safe.
+    # collides with named-volume ownership on some Docker hosts — root always
+    # has write permission on /data. The container is the isolation boundary,
+    # not the in-container UID, so this is safe for a dev stack.
     user: "0:0"
     # SurrealDB reads SURREAL_USER / SURREAL_PASS from its own container env
     # as fallbacks for the --user / --pass flags. Putting them in
-    # `environment:` means they travel with the container image regardless of
-    # how the compose orchestrator handles ${...} substitution at up-time.
+    # `environment:` means they travel with the container regardless of how
+    # the compose orchestrator handles ${...} substitution at up-time.
     environment:
       SURREAL_USER: ${SURREAL_USER:-root}
       SURREAL_PASS: ${SURREAL_PASS:-root}
@@ -28,11 +35,10 @@ services:
       - start
       - --bind=0.0.0.0:8000
       - rocksdb:///data/tv.db
-    # No host port mapping. The app reaches SurrealDB at `ws://surrealdb:8000`
-    # on the internal compose network. Other SurrealDB instances on the same
-    # Dokploy host are invisible — they live in their own compose networks.
-    expose:
-      - "8000"
+    # Published so a native `cargo run` reaches it at the address `.env`
+    # already points at (ws://127.0.0.1:37422).
+    ports:
+      - "127.0.0.1:${SURREAL_HOST_PORT:-37422}:8000"
     volumes:
       - surreal-data:/data
 
@@ -55,11 +61,9 @@ services:
       RUSTFS_ADDRESS: 0.0.0.0:9000
       RUSTFS_CONSOLE_ENABLE: "true"
       RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
-    # No host port mappings either — only the app (on the internal network)
-    # talks to rustfs, and only via `http://rustfs:9000`.
-    expose:
-      - "9000"
-      - "9001"
+    ports:
+      - "127.0.0.1:${RUSTFS_HOST_PORT:-37421}:9000"
+      - "127.0.0.1:${RUSTFS_CONSOLE_PORT:-37423}:9001"
     volumes:
       - rustfs-data:/data
     # No healthcheck — the rustfs image is minimal (no curl/wget) so probes
@@ -68,10 +72,6 @@ services:
     # IAM subsystem isn't quite ready" race.
 
   transactvault:
-    # Local dev builds from source. Prod (Dokploy Stack mode) needs a
-    # pre-built image that Swarm can pull — set `IMAGE=<registry-tag>` in
-    # the env and the image reference below will take precedence over build.
-    image: ${IMAGE:-transactvault-local:latest}
     build:
       context: .
       dockerfile: Dockerfile
@@ -79,76 +79,55 @@ services:
       - surrealdb
       - rustfs
     restart: unless-stopped
-    # `expose` (vs `ports`) means the container is only reachable on the
-    # internal docker network. Traefik reaches it via the dokploy-network
-    # and does the TLS termination; there's no need to publish a host port.
-    # This also keeps Dokploy from auto-generating a Traefik label pointing
-    # at the wrong host-side port.
-    expose:
-      - "37420"
+    ports:
+      - "${APP_BIND:-127.0.0.1}:${APP_HOST_PORT:-37420}:37420"
     environment:
       # Server
       APP_NAME: ${APP_NAME:-TransactVault}
       BASE_URL: ${BASE_URL:-http://localhost:37420}
       HOST: 0.0.0.0
       PORT: "37420"
-      # Human-readable logs by default — Dokploy's viewer shows raw
-      # container output, and hunting one ERROR line inside JSON blobs
-      # is miserable. Set PRETTY_LOGS=false if logs ever feed an
-      # aggregator that wants JSON. Keep RUST_LOG scoped: a bare
-      # `debug` drowns real errors under rustls/h2 TLS chatter.
+      # Human-readable logs by default; hunting one ERROR line inside JSON
+      # blobs is miserable. Keep RUST_LOG scoped — a bare `debug` drowns
+      # real errors under rustls/h2 TLS chatter.
       PRETTY_LOGS: ${PRETTY_LOGS:-true}
       RUST_LOG: ${RUST_LOG:-info,transactvault=debug}
 
-      # SurrealDB — URL is fixed to the compose service DNS; credentials
-      # come from the same env that the surrealdb container was started with.
+      # Service DNS on the compose network, NOT the published host ports —
+      # container-to-container traffic never leaves Docker.
       SURREAL_URL: ws://surrealdb:8000
       SURREAL_USER: ${SURREAL_USER:-root}
       SURREAL_PASS: ${SURREAL_PASS:-root}
       SURREAL_NS: ${SURREAL_NS:-transactvault}
       SURREAL_DB: ${SURREAL_DB:-app}
 
-      # RustFS — endpoint is fixed; credentials must match what rustfs
-      # was initialized with.
-      RUSTFS_ENDPOINT: http://rustfs:9000
-      RUSTFS_REGION: ${RUSTFS_REGION:-us-east-1}
-      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
-      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
-      RUSTFS_BUCKET: ${RUSTFS_BUCKET:-transactvault}
+      # Object storage. Production sets these same S3_* names against a
+      # managed provider; here they point at the local rustfs container.
+      S3_ENDPOINT: http://rustfs:9000
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
+      S3_SECRET_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
+      S3_BUCKET: ${S3_BUCKET:-transactvault}
+      # rustfs starts with no bucket at all, so dev must create it.
+      S3_AUTO_CREATE_BUCKET: "true"
 
       # Auth
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set}
       JWT_EXPIRY_HOURS: ${JWT_EXPIRY_HOURS:-168}
       # Password-reset links are bearer credentials — keep the window short.
       RESET_EXPIRY_HOURS: ${RESET_EXPIRY_HOURS:-1}
-      # Reverse-proxy hops in front of the app. Decides which
-      # X-Forwarded-For entry is trusted as the client IP for rate
-      # limiting; a spoofed header must not win. 1 = Traefik only.
-      TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-1}
+      # No reverse proxy in front of the dev stack, so the socket peer IS
+      # the client. Any higher value would trust a spoofable header.
+      TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-0}
 
-      # Postmark. These names must match what `src/config.rs` reads —
-      # they said RESEND_* until v0.4.0, left over from the v0.3.1
-      # provider switch, so a stack started from this file silently ran
-      # with email disabled (the mailer logs instead of sending, which
-      # breaks signup verification, invitations, and password reset).
-      # Production supplies these through the Dokploy Application's own
-      # environment; these defaults only cover local/stack runs.
+      # Postmark. An empty token means messages are logged rather than
+      # delivered — signup verification, invitations and password-reset
+      # links all print to the log, which is the intended dev behaviour.
       POSTMARK_SERVER_TOKEN: ${POSTMARK_SERVER_TOKEN:-}
       POSTMARK_FROM: ${POSTMARK_FROM:-TransactVault <no-reply@transactvault.example>}
       POSTMARK_REPLY_TO: ${POSTMARK_REPLY_TO:-}
       POSTMARK_MESSAGE_STREAM: ${POSTMARK_MESSAGE_STREAM:-outbound}
-    # Dokploy's Traefik lives on the shared `dokploy-network`. The app must
-    # join it to be reachable from the public domain; the `default` network
-    # keeps the app, surrealdb and rustfs on an isolated internal network.
-    networks:
-      - dokploy-network
-      - default
 
 volumes:
   surreal-data:
   rustfs-data:
-
-networks:
-  dokploy-network:
-    external: true
-  default: {}
