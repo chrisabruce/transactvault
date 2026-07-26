@@ -15,6 +15,7 @@
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Duration, TimeZone, Utc};
 
 use crate::models::Brokerage;
@@ -24,25 +25,49 @@ use crate::state::AppState;
 /// flagged for admin-driven purge. Matches the product spec.
 const WIND_DOWN_DAYS: i64 = 60;
 
-pub async fn stripe(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> StatusCode {
+/// Reject a webhook with a 400 that carries its reason to `/admin/errors`.
+///
+/// The handler used to return a bare `StatusCode`, which the error-capture
+/// middleware records as "(no detail — panic or framework-generated
+/// response)" because there is no [`ErrorDetail`] extension to read. That
+/// makes the single most common billing failure — a `STRIPE_WEBHOOK_SECRET`
+/// that doesn't match the endpoint, which is exactly what happens when you
+/// switch Stripe from test keys to live — invisible in the admin screen and
+/// diagnosable only by reading container logs.
+///
+/// The reason is recorded, never returned in the body: Stripe ignores the
+/// body, and the `error_event` table is super-admin only.
+fn reject(reason: String) -> Response {
+    tracing::warn!(reason = %reason, "Stripe webhook rejected");
+    let mut response = StatusCode::BAD_REQUEST.into_response();
+    response
+        .extensions_mut()
+        .insert(crate::error::ErrorDetail(reason));
+    response
+}
+
+pub async fn stripe(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
     let Some(sig) = headers
         .get("Stripe-Signature")
         .and_then(|v| v.to_str().ok())
     else {
-        tracing::warn!("Stripe webhook missing Stripe-Signature header");
-        return StatusCode::BAD_REQUEST;
+        return reject("missing Stripe-Signature header — not a genuine Stripe delivery".into());
     };
 
     let Ok(payload) = std::str::from_utf8(&body) else {
-        tracing::warn!("Stripe webhook body not valid UTF-8");
-        return StatusCode::BAD_REQUEST;
+        return reject("request body was not valid UTF-8".into());
     };
 
     let event = match state.stripe.parse_webhook(payload, sig) {
         Ok(e) => e,
         Err(e) => {
-            tracing::warn!(error = %e, "Stripe webhook signature rejected");
-            return StatusCode::BAD_REQUEST;
+            // Overwhelmingly this is a secret mismatch. Say so, rather
+            // than leaving whoever reads /admin/errors to guess.
+            return reject(format!(
+                "signature verification failed ({e}) — check STRIPE_WEBHOOK_SECRET matches \
+                 the signing secret of THIS endpoint in the Stripe dashboard, and that it \
+                 is the live secret if the app is using live keys"
+            ));
         }
     };
 
@@ -63,12 +88,12 @@ pub async fn stripe(State(state): State<AppState>, headers: HeaderMap, body: Byt
             // (price.created when we sync a new tier, etc.). 200 OK so
             // Stripe stops retrying.
             tracing::debug!(event_type = %event.type_, "Stripe webhook ignored");
-            return StatusCode::OK;
+            return StatusCode::OK.into_response();
         }
     };
 
     match result {
-        Ok(()) => StatusCode::OK,
+        Ok(()) => StatusCode::OK.into_response(),
         Err(e) => {
             // Returning 500 makes Stripe retry — appropriate for a
             // transient DB failure but not a programming bug. We log
@@ -77,7 +102,16 @@ pub async fn stripe(State(state): State<AppState>, headers: HeaderMap, body: Byt
                 error_chain = %crate::error::error_chain(e.as_ref()),
                 "Stripe webhook handler failed"
             );
-            StatusCode::INTERNAL_SERVER_ERROR
+            // 5xx makes Stripe retry, which is what we want for a
+            // transient failure; the detail rides along so the retry
+            // storm is diagnosable from /admin/errors too.
+            let mut response = StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            response
+                .extensions_mut()
+                .insert(crate::error::ErrorDetail(crate::error::error_chain(
+                    e.as_ref(),
+                )));
+            response
         }
     }
 }

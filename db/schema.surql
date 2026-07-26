@@ -444,7 +444,8 @@ DEFINE FIELD OVERWRITE kind ON audit_event TYPE string
         "transaction_reassigned",
         "member_removed",
         "tier_created", "tier_updated",
-        "brokerage_comp_granted", "brokerage_comp_revoked"
+        "brokerage_comp_granted", "brokerage_comp_revoked",
+        "error_log_cleared"
     ];
 DEFINE FIELD OVERWRITE actor_email ON audit_event TYPE option<string>;
 DEFINE FIELD OVERWRITE actor       ON audit_event TYPE option<record<user>>;

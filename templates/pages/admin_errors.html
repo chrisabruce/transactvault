@@ -23,6 +23,10 @@
         </nav>
     </header>
 
+    {% match cleared %}{% when Some with (msg) %}
+        <p class="alert success" role="status">{{ msg }}</p>
+    {% when None %}{% endmatch %}
+
     <section class="filter-bar" aria-label="Filters">
         <form method="get" action="/admin/errors">
             <label class="visually-hidden" for="error-class">Status class</label>
@@ -33,6 +37,15 @@
             </select>
             <button class="btn small secondary" type="submit">Apply</button>
         </form>
+        {# Diagnostic scratch space, so clearing it loses nothing of record —
+           but it is irreversible, hence the confirm. The clear itself is
+           written to the audit log so it can't be used to hide a trail. #}
+        {% if !events.is_empty() %}
+        <form method="post" action="/admin/errors/clear" class="inline-form"
+              data-confirm="Permanently delete ALL captured error events? This cannot be undone, and clears every status class regardless of the filter above.">
+            <button class="btn small ghost danger" type="submit">Clear all errors</button>
+        </form>
+        {% endif %}
     </section>
 
     <section class="panel admin-table-wrap">

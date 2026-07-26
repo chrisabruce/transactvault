@@ -8,11 +8,11 @@
 //! authorization is privileged.
 
 use axum::extract::{Path, Query, State};
-use axum::response::{Html, Redirect};
+use axum::response::{Html, IntoResponse, Redirect, Response};
 use humansize::{DECIMAL, format_size};
 use num_format::{Locale, ToFormattedString};
 use serde::Deserialize;
-use surrealdb::types::RecordId;
+use surrealdb::types::{RecordId, SurrealValue};
 
 use crate::audit;
 use crate::auth::middleware::SuperAdmin;
@@ -415,6 +415,9 @@ pub struct ErrorFilter {
     /// `all` (default) | `5xx` | `4xx`.
     #[serde(default)]
     pub class: Option<String>,
+    /// Set by the redirect after a clear, carrying how many rows went.
+    #[serde(default)]
+    pub cleared: Option<i64>,
 }
 
 /// `GET /admin/errors` — the captured 5xx/4xx responses, newest first.
@@ -458,6 +461,9 @@ pub async fn error_log(
         header,
         events: rows,
         class_filter: class.to_string(),
+        cleared: filter
+            .cleared
+            .map(|n| format!("Cleared {n} error event{}.", if n == 1 { "" } else { "s" })),
     })
 }
 
@@ -490,7 +496,57 @@ const AUDIT_KIND_OPTIONS: &[&str] = &[
     "tier_updated",
     "brokerage_comp_granted",
     "brokerage_comp_revoked",
+    "error_log_cleared",
 ];
+
+/// `POST /admin/errors/clear` — permanently delete every captured error.
+///
+/// The table is diagnostic scratch space, not a record of anything, and it
+/// otherwise only shrinks via the 30-day retention sweep. After chasing a
+/// noisy bug — a webhook retrying every few minutes, say — a super-admin
+/// wants a clean slate so the *next* failure is obvious instead of buried.
+///
+/// Deliberately unrecoverable, and deliberately audited: the rows go, but
+/// an `error_log_cleared` entry records who cleared how many and when, so
+/// the clearing itself can't be used to quietly hide a trail.
+pub async fn clear_error_log(
+    State(state): State<AppState>,
+    SuperAdmin(user): SuperAdmin,
+) -> Result<Response, AppError> {
+    // Count first — `DELETE` returns nothing useful to report back, and
+    // "cleared 0" is worth distinguishing from "cleared 200".
+    let mut count_q = state
+        .db
+        .query("SELECT count() FROM error_event GROUP ALL")
+        .await?;
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct CountRow {
+        count: i64,
+    }
+    let cleared = count_q
+        .take::<Option<CountRow>>(0)
+        .ok()
+        .flatten()
+        .map(|c| c.count)
+        .unwrap_or(0);
+
+    state.db.query("DELETE error_event").await?;
+
+    audit::record(
+        &state.db,
+        "error_log_cleared",
+        Some(user.user_id.clone()),
+        Some(user.email.clone()),
+        None,
+        None,
+        Some(format!("{cleared} error event(s) deleted")),
+    )
+    .await;
+
+    tracing::info!(cleared, actor = %user.email, "error log cleared");
+
+    Ok(Redirect::to(&format!("/admin/errors?cleared={cleared}")).into_response())
+}
 
 /// Toggle the `is_complimentary` flag on a brokerage. Super-admin only.
 /// Grants (or revokes) free unlimited access — bypasses Stripe and the

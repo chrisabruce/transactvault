@@ -183,6 +183,7 @@ pub fn build(state: AppState) -> Router {
         )
         .route("/admin/audit", get(admin::audit_log))
         .route("/admin/errors", get(admin::error_log))
+        .route("/admin/errors/clear", post(admin::clear_error_log))
         .route("/admin/changelog", get(admin::changelog));
 
     let base = Router::new()

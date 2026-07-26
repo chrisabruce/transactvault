@@ -3955,6 +3955,142 @@ fn walk_rust_sources(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     out
 }
 
+/// Clearing the error log is super-admin only, total, and audited.
+///
+/// It is deliberately irreversible, so the two things worth pinning are
+/// that a non-super-admin can't trigger it, and that the clear itself
+/// leaves an audit entry — otherwise wiping the error table would be a
+/// way to quietly erase a trail.
+#[tokio::test]
+async fn clearing_the_error_log_is_restricted_and_audited() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let admin = seed_user(&app.state, "admin@test").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    join(&app.state, &admin, &b, "broker").await;
+    join(&app.state, &broker, &b, "broker").await;
+
+    // Two captured errors of different classes — "clear all" must take
+    // both, regardless of the status filter the admin was looking at.
+    for (status, path) in [(500, "/app/boom"), (400, "/webhooks/stripe")] {
+        app.state
+            .db
+            .query("CREATE error_event SET status = $s, method = 'POST', path = $p, detail = 'x'")
+            .bind(("s", status))
+            .bind(("p", path.to_string()))
+            .await
+            .expect("seed error_event");
+    }
+
+    // A plain broker must not be able to erase diagnostics.
+    let (status, _) = authed_post(&app, &broker, "/admin/errors/clear", "").await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "must be super-admin only");
+
+    let mut q = app
+        .state
+        .db
+        .query("SELECT count() FROM error_event GROUP ALL")
+        .await
+        .expect("count");
+    #[derive(serde::Deserialize, surrealdb::types::SurrealValue)]
+    struct C {
+        count: i64,
+    }
+    let before: Option<C> = q.take(0).expect("take");
+    assert_eq!(
+        before.map(|c| c.count).unwrap_or(0),
+        2,
+        "a rejected clear must not delete anything"
+    );
+
+    // Super-admin clears everything.
+    let (status, _) = authed_post(&app, &admin, "/admin/errors/clear", "").await;
+    assert!(status.is_redirection(), "clear redirects back: {status}");
+
+    let mut q = app
+        .state
+        .db
+        .query("SELECT count() FROM error_event GROUP ALL")
+        .await
+        .expect("count");
+    let after: Option<C> = q.take(0).expect("take");
+    assert_eq!(
+        after.map(|c| c.count).unwrap_or(0),
+        0,
+        "every class must be removed, not just the filtered one"
+    );
+
+    // The erasure itself is on the record.
+    let mut q = app
+        .state
+        .db
+        .query("SELECT VALUE detail FROM audit_event WHERE kind = 'error_log_cleared'")
+        .await
+        .expect("read audit");
+    let details: Vec<Option<String>> = q.take(0).expect("take audit");
+    assert_eq!(
+        details.len(),
+        1,
+        "clearing must leave exactly one audit entry"
+    );
+    assert!(
+        details[0].as_deref().unwrap_or_default().contains('2'),
+        "audit detail should record how many went; got {:?}",
+        details[0]
+    );
+}
+
+/// A rejected Stripe webhook must say WHY on the admin error screen.
+///
+/// The handler returned a bare `StatusCode`, and the error-capture
+/// middleware reads its detail from an `ErrorDetail` response extension —
+/// so every rejection landed in `/admin/errors` as "(no detail — panic or
+/// framework-generated response)". That hides the most common billing
+/// failure there is: a `STRIPE_WEBHOOK_SECRET` that doesn't match the
+/// endpoint, which is exactly what happens when Stripe is switched from
+/// test keys to live.
+#[tokio::test]
+async fn rejected_stripe_webhooks_record_the_reason() {
+    let app = make_app().await;
+
+    // No signature header at all.
+    let req = Request::builder()
+        .method("POST")
+        .uri("/webhooks/stripe")
+        .body(Body::from("{}"))
+        .unwrap();
+    let res = app.router.clone().oneshot(req).await.expect("responds");
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let detail = res
+        .extensions()
+        .get::<crate::error::ErrorDetail>()
+        .map(|d| d.0.clone())
+        .unwrap_or_default();
+    assert!(
+        detail.contains("Stripe-Signature"),
+        "missing-header rejection must be self-explanatory; got {detail:?}"
+    );
+
+    // Present but bogus signature — the secret-mismatch case.
+    let req = Request::builder()
+        .method("POST")
+        .uri("/webhooks/stripe")
+        .header("Stripe-Signature", "t=1,v1=deadbeef")
+        .body(Body::from("{}"))
+        .unwrap();
+    let res = app.router.clone().oneshot(req).await.expect("responds");
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let detail = res
+        .extensions()
+        .get::<crate::error::ErrorDetail>()
+        .map(|d| d.0.clone())
+        .unwrap_or_default();
+    assert!(
+        detail.contains("STRIPE_WEBHOOK_SECRET"),
+        "signature rejection must name the setting to check; got {detail:?}"
+    );
+}
+
 /// `/app/subscribe/return` must be its own route, not a tier slug.
 ///
 /// Stripe Checkout now sends the broker back to this path so the

@@ -21,6 +21,21 @@ the bottom-right of every page.
   trial the bar stays, showing the countdown and days remaining — that's
   deliberate.)
 
+- **"Clear all errors" in Admin → Errors.** The error screen is a
+  diagnostic scratchpad that otherwise only empties itself after 30 days,
+  so a noisy spell — a webhook retrying every few minutes, say — buries
+  whatever fails next. Super-admins can now wipe it in one click. It asks
+  first, removes every entry regardless of the status filter on screen,
+  and cannot be undone. The clearing is itself written to the audit log
+  (who, when, how many), so it can't be used to quietly erase a trail.
+
+- **Rejected Stripe messages now explain themselves.** When Stripe sent
+  us a billing update we refused, the admin error screen only showed "no
+  detail", so the most common cause — the signing secret not matching the
+  endpoint, which is exactly what happens when you switch Stripe from test
+  to live — was invisible unless you read the server logs. Rejections now
+  record the reason, and name the setting to check.
+
 - **New "Re-link to Stripe" button in Admin → Tiers.** Stripe keeps test
   and live data completely separate, so switching from test keys to live
   leaves every plan pointing at products that the live account cannot

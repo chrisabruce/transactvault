@@ -964,6 +964,10 @@ pub struct AdminErrorsPage<'a> {
     pub events: Vec<crate::models::ErrorEvent>,
     /// `all` | `5xx` | `4xx` — which status band is displayed.
     pub class_filter: String,
+    /// Pre-rendered confirmation after a just-completed "clear", e.g.
+    /// "Cleared 12 error events." Built in the controller so the
+    /// template carries no pluralisation logic.
+    pub cleared: Option<String>,
 }
 
 #[derive(Template)]
