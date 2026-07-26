@@ -3850,6 +3850,111 @@ fn key_flood_cannot_reset_an_exhausted_bucket() {
     );
 }
 
+/// Every `include_str!` target must be COPYed into the Docker build.
+///
+/// These files are compile-time inputs baked into the binary, but they are
+/// invisible to anyone reading the Dockerfile's COPY list — which is how
+/// `CHANGELOG.md` (pulled in by `/admin/changelog`) got left out. `cargo
+/// build` on a dev machine succeeds because the file is simply there, so
+/// the gap only appears in a container build, ~20 minutes in, as a bare
+/// rustc "couldn't read ../../CHANGELOG.md" that looks nothing like a
+/// missing COPY.
+#[test]
+fn dockerfile_copies_every_compile_time_include() {
+    use std::path::{Component, Path, PathBuf};
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dockerfile = std::fs::read_to_string(root.join("Dockerfile")).expect("read Dockerfile");
+
+    // Sources copied into the builder stage, i.e. everything before the
+    // `COPY --from=builder` lines of the runtime stage.
+    let copied: Vec<String> = dockerfile
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with("COPY ") && !l.contains("--from="))
+        .flat_map(|l| {
+            let args: Vec<&str> = l["COPY ".len()..].split_whitespace().collect();
+            // Last arg is the destination; the rest are sources.
+            args[..args.len().saturating_sub(1)]
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert!(!copied.is_empty(), "parsed no COPY sources from Dockerfile");
+
+    // Resolve `a/b/../../c` textually — the referenced file need not exist
+    // on this machine for the path arithmetic to be meaningful.
+    fn normalize(p: PathBuf) -> PathBuf {
+        let mut out = PathBuf::new();
+        for part in p.components() {
+            match part {
+                Component::ParentDir => {
+                    out.pop();
+                }
+                Component::CurDir => {}
+                other => out.push(other),
+            }
+        }
+        out
+    }
+
+    let mut checked = 0;
+    for entry in walk_rust_sources(&root.join("src")) {
+        let text = std::fs::read_to_string(&entry).expect("read source");
+        for line in text.lines() {
+            let Some(rest) = line.split_once("include_str!(\"") else {
+                continue;
+            };
+            let Some((rel, _)) = rest.1.split_once('"') else {
+                continue;
+            };
+            // `include_str!` resolves relative to the including file.
+            let dir = entry.parent().expect("source has a parent");
+            let target = normalize(dir.join(rel));
+            let rel_to_root = target
+                .strip_prefix(root)
+                .unwrap_or(&target)
+                .to_string_lossy()
+                .replace('\\', "/");
+
+            let covered = copied.iter().any(|src| {
+                let src = src.trim_start_matches("./");
+                rel_to_root == src || rel_to_root.starts_with(&format!("{src}/"))
+            });
+            assert!(
+                covered,
+                "{} includes `{rel}` at compile time, but the Dockerfile never COPYs \
+                 `{rel_to_root}` into the builder — the container build will fail",
+                entry.display()
+            );
+            checked += 1;
+        }
+    }
+    assert!(
+        checked >= 2,
+        "expected to find the known includes, saw {checked}"
+    );
+}
+
+/// Recursively collect `.rs` files under `dir`.
+#[cfg(test)]
+fn walk_rust_sources(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            out.extend(walk_rust_sources(&path));
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            out.push(path);
+        }
+    }
+    out
+}
+
 /// Replacing your profile photo must actually show the new one.
 ///
 /// The avatar URL is the same string forever

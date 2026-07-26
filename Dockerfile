@@ -17,6 +17,12 @@ COPY src ./src
 COPY templates ./templates
 COPY static ./static
 COPY db ./db
+# Baked into the binary by `include_str!`, so it is a BUILD input, not a
+# runtime file — `/admin/changelog` renders it from the compiled constant.
+# Leaving it out fails the build with a bare "couldn't read
+# ../../CHANGELOG.md" from rustc, which looks nothing like a missing COPY.
+# `dockerfile_copies_every_compile_time_include` guards this.
+COPY CHANGELOG.md ./
 RUN cargo build --release --locked --bin transactvault \
  && strip /app/target/release/transactvault \
  && ls -la /app/target/release/transactvault
