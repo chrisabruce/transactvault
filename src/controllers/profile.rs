@@ -25,6 +25,25 @@ use crate::templates::ProfilePage;
 /// without giving abusers free disk to fill the bucket.
 const AVATAR_MAX_BYTES: usize = 8 * 1024 * 1024;
 
+/// Strong ETag for a set of avatar bytes.
+///
+/// The avatar URL is the same string for a user forever
+/// (`/app/users/{key}/avatar`), so the only way a browser can tell one
+/// photo from the next is a validator. Content-hashing means an
+/// identical re-upload keeps its ETag and stays cached.
+fn avatar_etag(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(bytes);
+    let mut out = String::with_capacity(34);
+    out.push('"');
+    for byte in &digest[..16] {
+        use std::fmt::Write as _;
+        let _ = write!(out, "{byte:02x}");
+    }
+    out.push('"');
+    out
+}
+
 /// Storage key layout for avatars: `avatars/<user-key>.png`. One file
 /// per user, overwritten on re-upload — no version chain.
 fn avatar_key(user_id_key: &str) -> String {
@@ -235,6 +254,9 @@ pub async fn upload_avatar(
     }
 
     let key = avatar_key(&crate::db::record_key(&user.user_id));
+    // Hash before the move into storage — this becomes the ETag, so a
+    // replaced photo is immediately distinguishable from the old one.
+    let etag = avatar_etag(&bytes);
     state
         .storage
         .put_bytes(&key, bytes.to_vec(), "image/png")
@@ -243,9 +265,10 @@ pub async fn upload_avatar(
 
     state
         .db
-        .query("UPDATE $u SET avatar_storage_key = $k")
+        .query("UPDATE $u SET avatar_storage_key = $k, avatar_etag = $e")
         .bind(("u", user.user_id.clone()))
         .bind(("k", key))
+        .bind(("e", etag))
         .await?;
 
     audit::record(
@@ -270,7 +293,10 @@ pub async fn delete_avatar(
 
     state
         .db
-        .query("UPDATE $u SET avatar_storage_key = NONE")
+        // Clear the ETag alongside the key: leaving a stale validator
+        // behind would let a browser revalidate its way back to a photo
+        // the user just deleted.
+        .query("UPDATE $u SET avatar_storage_key = NONE, avatar_etag = NONE")
         .bind(("u", user.user_id.clone()))
         .await?;
 
@@ -304,6 +330,7 @@ pub async fn delete_avatar(
 pub async fn serve_avatar(
     State(state): State<AppState>,
     user: CurrentUser,
+    headers: axum::http::HeaderMap,
     Path(target_key): Path<String>,
 ) -> Result<Response, AppError> {
     use surrealdb::types::{RecordId, SurrealValue};
@@ -315,12 +342,14 @@ pub async fn serve_avatar(
     #[derive(serde::Deserialize, SurrealValue)]
     struct Row {
         storage_key: Option<String>,
+        etag: Option<String>,
     }
     let mut q = state
         .db
         .query(
             "SELECT
-                (SELECT VALUE avatar_storage_key FROM ONLY $t) AS storage_key
+                (SELECT VALUE avatar_storage_key FROM ONLY $t) AS storage_key,
+                (SELECT VALUE avatar_etag FROM ONLY $t) AS etag
              FROM ONLY $t
              WHERE
                 (SELECT VALUE out FROM works_at WHERE in = $t LIMIT 1)[0]
@@ -330,7 +359,26 @@ pub async fn serve_avatar(
         .bind(("u", user.user_id.clone()))
         .await?;
     let row: Option<Row> = q.take(0).ok().flatten();
-    let storage_key = row.and_then(|r| r.storage_key).ok_or(AppError::NotFound)?;
+    let row = row.ok_or(AppError::NotFound)?;
+    let storage_key = row.storage_key.ok_or(AppError::NotFound)?;
+    let etag = row.etag;
+
+    // Conditional request: if the caller already holds these exact bytes
+    // say so and stop, without reading from object storage. The ETag
+    // lives on the user row precisely so this path stays cheap.
+    if let Some(ref etag) = etag
+        && headers
+            .get(header::IF_NONE_MATCH)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.split(',').any(|c| c.trim() == etag))
+    {
+        return Response::builder()
+            .status(StatusCode::NOT_MODIFIED)
+            .header(header::ETAG, etag)
+            .header(header::CACHE_CONTROL, "private, no-cache")
+            .body(Body::empty())
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("build response: {e}")));
+    }
 
     let bytes = state
         .storage
@@ -339,11 +387,22 @@ pub async fn serve_avatar(
         .map_err(|e| AppError::Internal(anyhow::anyhow!("fetch avatar: {e}")))?
         .ok_or(AppError::NotFound)?;
 
-    Response::builder()
+    // `no-cache` means "reuse only after revalidating", NOT "don't
+    // store" — the browser keeps the bytes and we answer 304 above.
+    //
+    // It replaced `max-age=60`, under which a stable URL meant the
+    // browser would not re-request at all: after replacing your photo
+    // the post-save reload re-displayed the *previous* one, so changing
+    // your picture looked like it silently reverted.
+    let mut builder = Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "image/png")
-        .header(header::CACHE_CONTROL, "private, max-age=60")
-        .header("X-Content-Type-Options", "nosniff")
+        .header(header::CACHE_CONTROL, "private, no-cache")
+        .header("X-Content-Type-Options", "nosniff");
+    if let Some(etag) = etag.or_else(|| Some(avatar_etag(&bytes))) {
+        builder = builder.header(header::ETAG, etag);
+    }
+    builder
         .body(Body::from(bytes))
         .map_err(|e| AppError::Internal(anyhow::anyhow!("build response: {e}")))
 }

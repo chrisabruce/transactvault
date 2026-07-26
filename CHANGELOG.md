@@ -8,6 +8,45 @@ the bottom-right of every page.
 
 ## July 2026
 
+### v0.5.1 — Fixes for the v0.5.0 hardening
+
+The browser-hardening rules added in v0.5.0 turned out to be too strict
+in three places, each of which quietly broke something. Those are fixed,
+along with two older bugs found while chasing them:
+
+- **Choosing a profile photo did nothing.** The crop window never
+  opened, because the new rules stopped the browser displaying the file
+  you had just picked — and the cropper only opens once that image has
+  loaded. (The cropper's styling was missing for the same reason.)
+- **PDF previews showed nothing.** Document previews open in a frame
+  inside the page, and the new rules told browsers to refuse being
+  framed — including by us. Previews may now be framed by TransactVault
+  itself and nowhere else.
+- **A safety measure on previews was being discarded.** The preview
+  screen sets its own, stricter rules for image files, and the
+  site-wide rules were overwriting them. Since a file's type is
+  declared by whoever uploads it, that protection matters: it is what
+  stops a booby-trapped image running code as you if opened directly.
+  Page-specific rules now take precedence over the site-wide default.
+- **Changing your profile photo appeared to revert to the old one.**
+  Your photo lives at a web address that never changes, and browsers
+  were told they could reuse it for a minute without checking, so the
+  refresh right after saving re-displayed the picture you had just
+  replaced — and trying again looked like it kept snapping back to the
+  first one. Your new photo was uploading correctly the whole time; you
+  were looking at a cached copy. Browsers now check for a newer version
+  each time, and that check is answered without re-sending the image
+  when nothing has changed, so pages full of avatars stay fast. (Also
+  fixed: after cropping a second photo, the small preview beside the
+  button stopped updating.) This one predates v0.5.0.
+- **A validation error on the transaction form no longer wipes it.**
+  Saving a new transaction with neither a property address nor an APN
+  returned a plain error page and threw away everything else you had
+  entered, so one blank field meant retyping a dozen. The message now
+  appears on the form itself with your entries — including the
+  dropdown selections — still in place. The same applies when editing
+  an existing transaction, and when a plan limit blocks the save.
+
 ### v0.5.0 — Security hardening, password reset, and the 500s fix
 
 - **Fixed the intermittent "something went wrong" errors (500s).**
@@ -130,25 +169,6 @@ inject anything into a page, and these further issues:
   The two files loaded from a public CDN are now checked against a
   fingerprint, so a change at the CDN can't alter what runs in your
   browser.
-
-The browser-hardening rules above were initially too strict and broke
-three things. All are fixed:
-
-- **Choosing a profile photo does nothing.** The crop window never
-  appeared, because the rules blocked the browser from displaying the
-  file you had just picked — and the code only opens the cropper once
-  that image has loaded. (The cropper's styling was missing for the
-  same reason.)
-- **PDF previews show nothing.** Document previews open in a frame
-  inside the page, and the new rules told the browser to refuse being
-  framed — including by us. Previews are now allowed to be framed by
-  TransactVault itself and nowhere else.
-- **A safety measure on previews was being discarded.** The preview
-  endpoint sets its own, stricter rules for image files, and the
-  site-wide rules were overwriting them. Since a file's type is
-  declared by whoever uploads it, that protection matters: it is what
-  stops a booby-trapped image file from running code as you if opened
-  directly. Handler-specific rules now take precedence.
 
 ### v0.4.0 — Live search, real-time fixes, team exports, and the full CAR catalog
 

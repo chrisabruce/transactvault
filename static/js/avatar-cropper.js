@@ -22,12 +22,15 @@
     var applyBtn = document.getElementById("avatar-crop-apply");
     var form = document.getElementById("avatar-form");
     var saveBtn = document.getElementById("avatar-save");
+    // Reassigned by attachToForm when the initials placeholder gets
+    // swapped for a real <img> — it must keep pointing at the live node.
     var preview = document.getElementById("avatar-current");
 
     if (!dialog || !img || !picker || !cancelBtn || !applyBtn || !form || !saveBtn) return;
 
     var cropper = null;
     var pickedObjectUrl = null;
+    var previewUrl = null;
     var croppedBlob = null;
 
     picker.addEventListener("change", function () {
@@ -94,20 +97,27 @@
     });
 
     function attachToForm(blob) {
+        // Always the LATEST crop: pick a photo, crop it, then pick a
+        // different one and this is what gets posted.
         croppedBlob = blob;
-        // Wipe the old preview src and point at the cropped blob.
-        var blobUrl = URL.createObjectURL(blob);
+        if (previewUrl) URL.revokeObjectURL(previewUrl);
+        previewUrl = URL.createObjectURL(blob);
         if (preview) {
             if (preview.tagName === "IMG") {
-                preview.src = blobUrl;
+                preview.src = previewUrl;
             } else {
                 // It's the initials fallback div — swap for an <img>.
                 var newImg = document.createElement("img");
                 newImg.id = "avatar-current";
                 newImg.className = "avatar-preview";
                 newImg.alt = "Your selected avatar";
-                newImg.src = blobUrl;
+                newImg.src = previewUrl;
                 preview.replaceWith(newImg);
+                // Re-point at the live node. `preview` still referenced
+                // the detached div, so a second crop called
+                // `replaceWith` on an element no longer in the document
+                // and the thumbnail silently stopped updating.
+                preview = newImg;
             }
         }
         saveBtn.disabled = false;

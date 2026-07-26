@@ -217,6 +217,12 @@ DEFINE FIELD OVERWRITE password_hash ON user TYPE string;
 -- Object-storage key for the user's avatar PNG. Served from
 -- /app/users/{key}/avatar; absent means "no avatar uploaded yet".
 DEFINE FIELD OVERWRITE avatar_storage_key ON user TYPE option<string>;
+-- Content hash of the current avatar bytes, used as the HTTP ETag.
+-- The avatar URL is stable (/app/users/{key}/avatar), so without a
+-- validator the browser kept showing a cached copy after the user
+-- replaced their photo. Storing the hash lets a conditional request be
+-- answered 304 straight from this row, with no object-storage read.
+DEFINE FIELD OVERWRITE avatar_etag ON user TYPE option<string>;
 
 -- Email verification — accounts start unverified; the welcome email is only
 -- sent AFTER the user clicks the verification link, proving they own the

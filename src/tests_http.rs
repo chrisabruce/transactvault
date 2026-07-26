@@ -3850,6 +3850,75 @@ fn key_flood_cannot_reset_an_exhausted_bucket() {
     );
 }
 
+/// Replacing your profile photo must actually show the new one.
+///
+/// The avatar URL is the same string forever
+/// (`/app/users/{key}/avatar`), and it was served `max-age=60`. With no
+/// validator the browser simply did not re-request it, so the reload
+/// after saving re-displayed the *previous* photo — changing your
+/// picture looked like it silently reverted to the first one.
+///
+/// Only the conditional branch is exercised here: it answers from the
+/// user row and returns before any object-storage read, which is both
+/// the point of storing the ETag and what makes it testable in a
+/// harness with no storage backend.
+#[tokio::test]
+async fn avatar_responses_revalidate_instead_of_going_stale() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let user = seed_user(&app.state, "me@x.test").await;
+    join(&app.state, &user, &b, "agent").await;
+
+    let etag = "\"0123456789abcdef0123456789abcdef\"";
+    app.state
+        .db
+        .query("UPDATE $u SET avatar_storage_key = 'avatars/x.png', avatar_etag = $e")
+        .bind(("u", user.clone()))
+        .bind(("e", etag.to_string()))
+        .await
+        .expect("set avatar fields");
+
+    let user_key = crate::db::record_key(&user);
+    let fetch = |inm: Option<&str>| {
+        let cookie = session_cookie(&app, &user);
+        let uri = format!("/app/users/{user_key}/avatar");
+        let mut builder = Request::builder().uri(uri).header("cookie", cookie);
+        if let Some(v) = inm {
+            builder = builder.header("if-none-match", v);
+        }
+        let req = builder.body(Body::empty()).unwrap();
+        app.router.clone().oneshot(req)
+    };
+
+    // Holding the current bytes → 304, cheaply, with no storage read.
+    let res = fetch(Some(etag)).await.expect("conditional request");
+    assert_eq!(
+        res.status(),
+        StatusCode::NOT_MODIFIED,
+        "a matching ETag must short-circuit"
+    );
+    assert_eq!(
+        res.headers()
+            .get("cache-control")
+            .and_then(|v| v.to_str().ok()),
+        Some("private, no-cache"),
+        "must revalidate rather than be reused blind"
+    );
+
+    // Holding a DIFFERENT photo's ETag — as the browser does right after
+    // the user replaces their picture — must NOT be told 304. (It falls
+    // through to a storage read, which this harness has no backend for,
+    // so anything other than 304 proves the short-circuit was skipped.)
+    let res = fetch(Some("\"stale-etag-from-the-previous-photo\""))
+        .await
+        .expect("stale conditional request");
+    assert_ne!(
+        res.status(),
+        StatusCode::NOT_MODIFIED,
+        "a stale ETag must not be served 304 — that is the stale-photo bug"
+    );
+}
+
 /// A handler's own security headers must survive the middleware.
 ///
 /// `security_headers` used to `insert` the page policy unconditionally,
