@@ -8,6 +8,30 @@ the bottom-right of every page.
 
 ## July 2026
 
+### v0.5.3 — Subscription banner and a Stripe re-link button
+
+- **The "pick a plan" bar no longer lingers after you subscribe.**
+  Entering a card sent you straight back to the dashboard, but the app
+  only learned about the new subscription from a separate message Stripe
+  sends behind the scenes — which usually arrives a moment *after* your
+  browser does. So the first page you saw still invited you to pick a
+  plan, which reads as the payment not having worked. Stripe now returns
+  you through a step that checks your subscription first, so the bar is
+  already correct on the page you land on. (While you're in the free
+  trial the bar stays, showing the countdown and days remaining — that's
+  deliberate.)
+
+- **New "Re-link to Stripe" button in Admin → Tiers.** Stripe keeps test
+  and live data completely separate, so switching from test keys to live
+  leaves every plan pointing at products that the live account cannot
+  see, and Subscribe fails with "No such price" for all of them. Nothing
+  fixed that automatically: the startup setup skips whenever plans
+  already exist, and re-saving a plan only talks to Stripe if you changed
+  something, using the old reference. The button creates fresh products
+  and prices in whichever Stripe account the current keys belong to and
+  repoints every plan at them. Super-admins only, it asks for
+  confirmation first, and existing subscriptions are unaffected.
+
 ### v0.5.2 — Signup fixes and a deploy fix
 
 - **Creating an account is no longer a waiting game.** The signup form

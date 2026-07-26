@@ -86,9 +86,24 @@ async fn handle_subscription(state: &AppState, event: &stripe::Event) -> anyhow:
     let stripe::EventObject::Subscription(ref sub) = event.data.object else {
         return Ok(());
     };
-
-    let customer_id = sub.customer.id().to_string();
     let deleted = matches!(event.type_, stripe::EventType::CustomerSubscriptionDeleted);
+    apply_subscription(state, sub, deleted, &event.type_.to_string()).await
+}
+
+/// Write a Stripe subscription's state onto the owning brokerage row.
+///
+/// Shared by the webhook and by the post-checkout return
+/// (`subscribe::checkout_return`), which reconciles immediately rather
+/// than waiting for the webhook to land — otherwise the page Stripe
+/// redirects to still renders the "pick a plan" banner, because the
+/// event usually arrives a moment *after* the browser does.
+pub(crate) async fn apply_subscription(
+    state: &AppState,
+    sub: &stripe::Subscription,
+    deleted: bool,
+    source: &str,
+) -> anyhow::Result<()> {
+    let customer_id = sub.customer.id().to_string();
 
     // Decide on the local state. Order matters: a `deleted` event
     // ALWAYS wins (Stripe fires it when the paid window finally ends),
@@ -122,8 +137,8 @@ async fn handle_subscription(state: &AppState, event: &stripe::Event) -> anyhow:
     let Some(brokerage) = find_brokerage_by_customer(state, &customer_id).await? else {
         tracing::warn!(
             customer = %customer_id,
-            event = %event.type_,
-            "Stripe webhook matched no brokerage row"
+            source = %source,
+            "Stripe subscription matched no brokerage row"
         );
         return Ok(());
     };
@@ -148,7 +163,7 @@ async fn handle_subscription(state: &AppState, event: &stripe::Event) -> anyhow:
 
     tracing::info!(
         customer = %customer_id,
-        event = %event.type_,
+        source = %source,
         status = %status,
         "Brokerage subscription state updated from Stripe"
     );

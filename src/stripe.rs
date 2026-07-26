@@ -15,8 +15,8 @@ use stripe::{
     CreateCheckoutSession, CreateCheckoutSessionLineItems, CreateCheckoutSessionSubscriptionData,
     CreateCustomer, CreatePrice, CreatePriceRecurring, CreatePriceRecurringInterval,
     CreatePriceRecurringUsageType, CreateProduct, CreateUsageRecord, Currency, Customer,
-    CustomerId, IdOrCreate, Price, Product, ProductId, Subscription, SubscriptionId, UpdateProduct,
-    UsageRecord, UsageRecordAction,
+    CustomerId, IdOrCreate, ListSubscriptions, Price, Product, ProductId, Subscription,
+    SubscriptionId, UpdateProduct, UsageRecord, UsageRecordAction,
 };
 
 use crate::config::StripeConfig;
@@ -351,6 +351,43 @@ impl Stripe {
             .await
             .context("Stripe UsageRecord::create")?;
         Ok(())
+    }
+
+    /// The customer's most recent subscription, if they have one.
+    ///
+    /// Used to reconcile local state straight after Stripe Checkout
+    /// instead of waiting on `customer.subscription.created`. The webhook
+    /// remains the authority for everything afterwards (renewals,
+    /// cancellations, payment failures); this only closes the window
+    /// between the browser being redirected back and the event arriving,
+    /// during which the app would otherwise still believe the brokerage
+    /// had never subscribed.
+    ///
+    /// Returns `Ok(None)` when Stripe is disabled or the customer has no
+    /// subscriptions — neither is an error.
+    pub async fn latest_subscription(
+        &self,
+        customer_id: &str,
+    ) -> anyhow::Result<Option<Subscription>> {
+        let Some(client) = self.client.as_ref() else {
+            return Ok(None);
+        };
+        let id: CustomerId = customer_id
+            .parse()
+            .with_context(|| format!("invalid customer id: {customer_id}"))?;
+
+        let mut params = ListSubscriptions::new();
+        params.customer = Some(id);
+        // `status: all` so a subscription that is trialing, past_due or
+        // incomplete is still found — the default omits several of these,
+        // and those are exactly the states worth reflecting in the UI.
+        params.status = Some(stripe::SubscriptionStatusFilter::All);
+        params.limit = Some(1);
+
+        let list = Subscription::list(client, &params)
+            .await
+            .context("Stripe Subscription::list")?;
+        Ok(list.data.into_iter().next())
     }
 
     /// Archive a Product in Stripe (sets `active=false`). Existing

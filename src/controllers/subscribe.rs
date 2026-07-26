@@ -5,9 +5,11 @@
 //! broker, ensures the brokerage has a Stripe Customer, and creates a
 //! Stripe Checkout Session for the tier's recurring Price (plus the
 //! metered overage Price when configured). The response is a 303
-//! redirect to Checkout — Stripe collects payment details and fires
-//! `customer.subscription.created` on our webhook, which is what
-//! actually flips the brokerage into `trialing`/`active`.
+//! redirect to Checkout. Stripe collects payment details and fires
+//! `customer.subscription.created` on our webhook, which is the
+//! authority for subscription state from then on — but the browser
+//! comes back before that event lands, so [`checkout_return`] reconciles
+//! once, up front, and the webhook takes over afterwards.
 
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Redirect, Response};
@@ -106,7 +108,10 @@ pub async fn subscribe(
     }
 
     let base = &state.config.base_url;
-    let success_url = format!("{base}/app?flash=subscribed");
+    // Land on our own reconcile route rather than straight on /app: it
+    // syncs the new subscription before rendering, so the banner is
+    // already correct on the first page the broker sees.
+    let success_url = format!("{base}/app/subscribe/return");
     let cancel_url = format!("{base}/pricing?canceled=1");
 
     let url = state
@@ -124,6 +129,56 @@ pub async fn subscribe(
         .map_err(|e| AppError::Internal(e.context("create_subscription_checkout")))?;
 
     Ok(Redirect::to(&url))
+}
+
+/// `GET /app/subscribe/return` — where Stripe Checkout sends the broker
+/// after they enter a card.
+///
+/// Reconciles the subscription immediately instead of trusting the
+/// webhook to have arrived first. Without this the redirect lands on
+/// `/app` while `subscription_status` is still unset, so the "Pick a
+/// plan to start your 14-day free trial" banner is still on screen for
+/// someone who has just paid — which reads as the payment not having
+/// worked.
+///
+/// Best-effort by design: if Stripe is unreachable, or the subscription
+/// genuinely isn't visible yet, we log and carry on to the dashboard.
+/// The webhook still fixes the state moments later, so a transient
+/// failure here costs a stale banner until the next page load, never a
+/// lost subscription.
+pub async fn checkout_return(
+    State(state): State<AppState>,
+    user: CurrentUser,
+) -> Result<Redirect, AppError> {
+    let brokerage: Option<Brokerage> = state.db.select(user.brokerage_id.clone()).await?;
+
+    if let Some(customer_id) = brokerage.and_then(|b| b.stripe_customer_id) {
+        match state.stripe.latest_subscription(&customer_id).await {
+            Ok(Some(sub)) => {
+                if let Err(e) = crate::controllers::webhooks::apply_subscription(
+                    &state,
+                    &sub,
+                    false,
+                    "checkout-return",
+                )
+                .await
+                {
+                    tracing::warn!(error = %e, "could not apply subscription on checkout return");
+                }
+            }
+            Ok(None) => {
+                tracing::info!(
+                    customer = %customer_id,
+                    "no subscription visible yet on checkout return — leaving it to the webhook"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Stripe lookup failed on checkout return");
+            }
+        }
+    }
+
+    Ok(Redirect::to("/app?flash=subscribed"))
 }
 
 /// Open the Stripe Customer Portal so the broker can update card

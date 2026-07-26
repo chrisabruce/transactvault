@@ -35,6 +35,17 @@
 
     <section class="page-actions">
         <a class="btn" href="/admin/tiers/new">+ New tier</a>
+        {# Re-creates each tier's Stripe Product + Price against whichever
+           Stripe account the current key belongs to. The case this is for
+           is switching test keys to live: the stored IDs belong to the old
+           mode, so every Subscribe button fails with "No such price" until
+           they are replaced. #}
+        {% if stripe_enabled %}
+        <form method="post" action="/admin/tiers/relink" class="inline-form"
+              data-confirm="Create fresh Stripe Product and Price objects for all {{ tiers.len() }} tier(s) in the currently-configured Stripe account, and point the tiers at them? Existing subscriptions are unaffected.">
+            <button type="submit" class="btn secondary">Re-link to Stripe</button>
+        </form>
+        {% endif %}
     </section>
 
     {% if tiers.is_empty() %}

@@ -118,6 +118,9 @@ pub fn build(state: AppState) -> Router {
         )
         .route("/app/profile/avatar/delete", post(profile::delete_avatar))
         .route("/app/users/{key}/avatar", get(profile::serve_avatar))
+        // Registered BEFORE the `{slug}` route so "return" is matched
+        // literally rather than being read as a tier slug.
+        .route("/app/subscribe/return", get(subscribe::checkout_return))
         .route("/app/subscribe/{slug}", get(subscribe::subscribe))
         .route("/app/billing/portal", get(subscribe::portal))
         .route("/app/no-brokerage", get(orphan::landing))
@@ -137,6 +140,7 @@ pub fn build(state: AppState) -> Router {
             post(admin::toggle_brokerage_comp),
         )
         .route("/admin/tiers", get(tiers::list))
+        .route("/admin/tiers/relink", post(tiers::relink_stripe))
         .route("/admin/tiers/new", get(tiers::new_form).post(tiers::create))
         .route(
             "/admin/tiers/{key}/edit",

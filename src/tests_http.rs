@@ -3955,6 +3955,101 @@ fn walk_rust_sources(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     out
 }
 
+/// `/app/subscribe/return` must be its own route, not a tier slug.
+///
+/// Stripe Checkout now sends the broker back to this path so the
+/// subscription is reconciled before the dashboard renders — otherwise
+/// the "pick a plan" banner is still on screen for someone who has just
+/// paid, because only the webhook updated the status and it arrives
+/// after the browser does. Axum matches literal segments ahead of
+/// `{slug}` captures, but that ordering is easy to break by moving a
+/// line, and the failure would be silent: "return" would be looked up as
+/// a tier and 404.
+#[tokio::test]
+async fn checkout_return_is_not_swallowed_by_the_tier_slug_route() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    join(&app.state, &broker, &b, "broker").await;
+
+    // Stripe is disabled in tests, so the reconcile is a no-op and the
+    // handler should still redirect rather than error.
+    let (status, _) = authed_get(&app, &broker, "/app/subscribe/return").await;
+    assert!(
+        status.is_redirection(),
+        "checkout return must redirect, got {status} — the tier-slug route probably captured it"
+    );
+
+    // A real slug still reaches the subscribe handler. `no-such-tier`
+    // doesn't exist, so anything other than a 404-shaped answer would
+    // mean the routes are crossed.
+    let (status, _) = authed_get(&app, &broker, "/app/subscribe/no-such-tier").await;
+    assert_ne!(
+        status,
+        StatusCode::OK,
+        "an unknown tier slug must not render a page"
+    );
+}
+
+/// Re-linking must replace stale Stripe IDs, not preserve them.
+///
+/// After switching Stripe from test keys to live, every tier still holds
+/// test-mode Product/Price IDs that the live API cannot see, so Subscribe
+/// fails for every plan. Neither the startup seed (skips when tiers
+/// exist) nor the tier editor (only syncs on a material change, and
+/// passes the stale product id) fixes that.
+#[tokio::test]
+async fn relinking_tiers_is_superadmin_only() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let admin = seed_user(&app.state, "admin@test").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    join(&app.state, &admin, &b, "broker").await;
+    join(&app.state, &broker, &b, "broker").await;
+
+    // A plain broker must not be able to rewrite billing wiring.
+    let (status, _) = authed_post(&app, &broker, "/admin/tiers/relink", "").await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "re-linking must be super-admin only"
+    );
+
+    // The super-admin reaches it. Stripe is disabled in tests, so the
+    // handler should say so rather than blanking the stored IDs — a
+    // relink that wiped the wiring without replacing it would leave
+    // Subscribe broken with no way back.
+    app.state
+        .db
+        .query(
+            "CREATE tier SET slug = 'solo', name = 'Solo', description = 'd', \
+             price_cents = 1000, stripe_product_id = 'prod_test123', \
+             stripe_price_id = 'price_test123', sort_order = 0",
+        )
+        .await
+        .expect("seed tier");
+
+    let (status, body) = authed_post(&app, &admin, "/admin/tiers/relink", "").await;
+    assert_eq!(status, StatusCode::OK, "super-admin reaches the handler");
+    assert!(
+        body.contains("Stripe is disabled"),
+        "must explain why nothing happened"
+    );
+
+    let mut q = app
+        .state
+        .db
+        .query("SELECT VALUE stripe_price_id FROM tier WHERE slug = 'solo'")
+        .await
+        .expect("read tier");
+    let ids: Vec<Option<String>> = q.take(0).expect("take ids");
+    assert_eq!(
+        ids.first().cloned().flatten().as_deref(),
+        Some("price_test123"),
+        "a no-op relink must leave the existing wiring intact"
+    );
+}
+
 /// Replacing your profile photo must actually show the new one.
 ///
 /// The avatar URL is the same string forever

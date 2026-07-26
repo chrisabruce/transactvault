@@ -18,6 +18,7 @@ use serde::Deserialize;
 use surrealdb::types::RecordId;
 
 use crate::audit;
+use crate::auth::CurrentUser;
 use crate::auth::middleware::SuperAdmin;
 use crate::controllers::render;
 use crate::error::AppError;
@@ -29,13 +30,110 @@ pub async fn list(
     State(state): State<AppState>,
     SuperAdmin(user): SuperAdmin,
 ) -> Result<Html<String>, AppError> {
+    render_list(&state, &user, None).await
+}
+
+/// `POST /admin/tiers/relink` — recreate every tier's Stripe objects
+/// against the currently-configured Stripe account.
+///
+/// The case this exists for is switching Stripe from test to live keys.
+/// Product and Price IDs are scoped to the mode that created them, so
+/// after the switch every tier row still points at test-mode objects
+/// that the live API cannot see — and the Subscribe button fails with
+/// "No such price" for every plan.
+///
+/// The startup seed can't help: it returns early whenever any tier row
+/// exists. Editing a tier can't either, because it only calls Stripe
+/// when a *material* field changed, and it passes the stored (test-mode)
+/// product id, which live-mode `Product::update` rejects.
+///
+/// So this deliberately syncs with `existing_product_id = None`, which
+/// forces creation of brand-new Product + Price objects in whichever
+/// account the current key belongs to, then repoints the tiers at them.
+///
+/// The previous objects are left alone rather than archived — they
+/// belong to a different Stripe account and cannot be touched with the
+/// current key. Re-running this against the *same* account therefore
+/// leaves the old Product behind in Stripe, which is why it is a
+/// deliberate button rather than something automatic.
+pub async fn relink_stripe(
+    State(state): State<AppState>,
+    SuperAdmin(user): SuperAdmin,
+) -> Result<Response, AppError> {
+    if !state.stripe.is_enabled() {
+        return Ok(render_list(
+            &state,
+            &user,
+            Some("Stripe is disabled — set STRIPE_SECRET_KEY before re-linking."),
+        )
+        .await?
+        .into_response());
+    }
+
     let mut q = state
         .db
         .query("SELECT * FROM tier ORDER BY sort_order ASC, name ASC")
         .await?;
     let tiers: Vec<Tier> = q.take(0).unwrap_or_default();
 
-    let header = crate::controllers::common::build_app_header(&state, &user, "admin").await;
+    let mut relinked = 0usize;
+    for tier in &tiers {
+        let sync = state
+            .stripe
+            .sync_tier(
+                // `None` on purpose — see the doc comment. Passing the
+                // stored id would try to update a product this key
+                // cannot see.
+                None,
+                &tier.name,
+                &tier.description,
+                tier.price_cents,
+                tier.overage_fee_cents_per_tx,
+            )
+            .await
+            .map_err(|e| {
+                AppError::Internal(e.context(format!("relinking tier {:?} to Stripe", tier.slug)))
+            })?;
+
+        state
+            .db
+            .query(
+                "UPDATE $id SET
+                    stripe_product_id       = $product,
+                    stripe_price_id         = $price,
+                    stripe_overage_price_id = $overage",
+            )
+            .bind(("id", tier.id.clone()))
+            .bind(("product", sync.product_id))
+            .bind(("price", sync.price_id))
+            .bind(("overage", sync.overage_price_id))
+            .await?;
+        relinked += 1;
+    }
+
+    tracing::info!(count = relinked, actor = %user.email, "tiers relinked to Stripe");
+
+    let message = format!(
+        "Re-linked {relinked} tier{} to Stripe. Subscribe now uses the newly created Prices.",
+        if relinked == 1 { "" } else { "s" }
+    );
+    Ok(render_list(&state, &user, Some(&message))
+        .await?
+        .into_response())
+}
+
+/// Render the tier list with an optional flash message.
+async fn render_list(
+    state: &AppState,
+    user: &CurrentUser,
+    flash: Option<&str>,
+) -> Result<Html<String>, AppError> {
+    let mut q = state
+        .db
+        .query("SELECT * FROM tier ORDER BY sort_order ASC, name ASC")
+        .await?;
+    let tiers: Vec<Tier> = q.take(0).unwrap_or_default();
+    let header = crate::controllers::common::build_app_header(state, user, "admin").await;
 
     render(&AdminTiersPage {
         app_name: &state.config.app_name,
@@ -44,7 +142,7 @@ pub async fn list(
         header,
         tiers,
         stripe_enabled: state.stripe.is_enabled(),
-        flash: None,
+        flash,
     })
 }
 
