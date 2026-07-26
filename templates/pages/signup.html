@@ -38,13 +38,20 @@
             </fieldset>
             <fieldset>
                 <legend class="visually-hidden">Brokerage</legend>
+                {# Explicit `autocomplete` tokens on EVERY field, including
+                   these two. Without them the browser's autofill classifier
+                   has to guess what "brokerage_name" and "city" are, and it
+                   does that guessing inside a form that also contains a
+                   `new-password` field — which is what makes a password
+                   manager jump focus back to the password box as soon as you
+                   start typing here. Naming the fields removes the guesswork. #}
                 <label>
                     <span>Brokerage name</span>
-                    <input type="text" name="brokerage_name" required placeholder="Lancaster Realty Group" value="{{ prefill.brokerage_name }}">
+                    <input type="text" name="brokerage_name" required autocomplete="organization" placeholder="Lancaster Realty Group" value="{{ prefill.brokerage_name }}">
                 </label>
                 <label>
                     <span>City <small>(optional)</small></span>
-                    <input type="text" name="city" placeholder="Lancaster" value="{{ prefill.city }}">
+                    <input type="text" name="city" autocomplete="address-level2" placeholder="Lancaster" value="{{ prefill.city }}">
                 </label>
             </fieldset>
 
@@ -108,37 +115,58 @@
         return bits;
     }
 
-    var nonce = 0;
     var encoder = new TextEncoder();
-    var chunkSize = 200;
 
-    function step() {
-        var i = 0;
-        function tick() {
-            var endTarget = nonce + chunkSize;
-            (function loop() {
-                if (nonce >= endTarget) {
-                    setTimeout(tick, 0);
-                    return;
+    // Digests issued concurrently per round. `crypto.subtle.digest` runs
+    // off the main thread, so firing a batch and awaiting them together
+    // both amortizes the per-promise overhead and keeps the crypto pool
+    // busy — where the previous version paid a full round trip per single
+    // nonce.
+    var BATCH = 256;
+
+    // The old solver hashed 200 nonces and then yielded with
+    // `setTimeout(tick, 0)`. That made throughput a function of the timer
+    // clamp rather than of hashing speed: browsers floor `setTimeout(0)`
+    // at ~4ms, and far higher when the tab is throttled — measured at
+    // 56ms here, which capped the whole thing at ~3.5k hashes/sec and
+    // stretched an 18-bit challenge to over a minute with the submit
+    // button disabled the entire time.
+    //
+    // Awaiting the batch is enough of a yield on its own: these promises
+    // settle from another thread, so control genuinely returns to the
+    // event loop between rounds and typing stays responsive. No timer
+    // needed, and no clamp to be throttled by.
+    async function solve() {
+        for (var base = 0; ; base += BATCH) {
+            var jobs = new Array(BATCH);
+            for (var i = 0; i < BATCH; i++) {
+                jobs[i] = crypto.subtle.digest(
+                    'SHA-256',
+                    encoder.encode(challenge + ':' + (base + i))
+                );
+            }
+            var digests = await Promise.all(jobs);
+            for (var j = 0; j < BATCH; j++) {
+                if (leadingZeroBits(new Uint8Array(digests[j])) >= difficulty) {
+                    return base + j;
                 }
-                var attempt = challenge + ':' + nonce;
-                crypto.subtle.digest('SHA-256', encoder.encode(attempt)).then(function (hashBuf) {
-                    var hash = new Uint8Array(hashBuf);
-                    if (leadingZeroBits(hash) >= difficulty) {
-                        solInput.value = String(nonce);
-                        status.classList.add('done');
-                        status.querySelector('.label').textContent = 'Ready';
-                        submit.disabled = false;
-                        return;
-                    }
-                    nonce++;
-                    loop();
-                });
-            })();
+            }
         }
-        tick();
     }
-    step();
+
+    solve().then(function (nonce) {
+        solInput.value = String(nonce);
+        status.classList.add('done');
+        status.querySelector('.label').textContent = 'Ready';
+        submit.disabled = false;
+    }).catch(function (err) {
+        // Leaving the button disabled forever would be a dead end with no
+        // explanation, so surface it. `crypto.subtle` is only available in
+        // a secure context, which is the realistic way this fails.
+        console.warn('proof-of-work failed', err);
+        status.querySelector('.label').textContent =
+            'Could not verify automatically — reload to try again.';
+    });
 })();
 </script>
 

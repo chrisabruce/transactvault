@@ -8,6 +8,42 @@ the bottom-right of every page.
 
 ## July 2026
 
+### v0.5.2 — Signup fixes and a deploy fix
+
+- **Creating an account is no longer a waiting game.** The signup form
+  runs a small puzzle in your browser to prove you're not a bot, and the
+  "Create account" button stays disabled until it finishes. That puzzle
+  was pausing for a timer after every 200 attempts, so its speed was set
+  by how often the browser felt like waking it up rather than by how fast
+  your computer can work — on a slow or backgrounded tab it could take
+  minutes, with no way to tell whether it was stuck. It now works in
+  batches without the pauses: measured at over a minute before the change
+  and about half a second after, on the same machine. If it ever does
+  fail, the page now says so instead of leaving the button dead forever.
+
+- **The cursor no longer jumps out of "Brokerage name".** Typing the
+  first character could throw you back to the password box. Those last
+  two fields didn't tell the browser what they were, so its autofill had
+  to guess — inside a form that also contains a new-password field, which
+  is what prompts a password manager to grab the cursor. Both fields now
+  identify themselves.
+
+- **Fixed a failing production build.** Deploying from the Dockerfile
+  stopped with "couldn't read CHANGELOG.md". This page is compiled into
+  the application (that's how the in-app version of it works), so it has
+  to be present when the app is built — and the build recipe wasn't
+  including it. It is now, with a check that fails immediately if any
+  similar file is ever left out again.
+
+- **Dev and production setups are now cleanly separated.** The Docker
+  Compose file is development-only and works again on a fresh machine
+  (it referenced a network that only exists on the server, and didn't
+  publish the ports its own instructions described). Production runs the
+  application alone and connects to a database and file storage you
+  manage separately, so either can be moved, clustered or swapped for a
+  hosted service without touching the app. Setup instructions live in
+  DEPLOY.md.
+
 ### v0.5.1 — Fixes for the v0.5.0 hardening
 
 The browser-hardening rules added in v0.5.0 turned out to be too strict
