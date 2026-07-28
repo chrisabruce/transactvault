@@ -8,6 +8,18 @@ the bottom-right of every page.
 
 ## July 2026
 
+### v0.5.5 — Trial banner is broker-only
+
+- **Invited teammates no longer see the green subscription bar.** The
+  "pick a plan" nudge and the free-trial countdown are about billing,
+  and only the broker can act on billing — but the bar was showing for
+  everyone in the brokerage, so agents and compliance officers were
+  greeted with a countdown they could do nothing about. The green bars
+  now appear only for the broker. Red and amber notices — a failed
+  payment, a scheduled cancellation, or an account in read-only
+  wind-down — still show for everyone, because they explain why saving
+  a change is being refused.
+
 ### v0.5.3 — Subscription banner and a Stripe re-link button
 
 - **The "pick a plan" bar no longer lingers after you subscribe.**

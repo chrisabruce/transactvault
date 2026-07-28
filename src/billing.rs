@@ -18,7 +18,7 @@
 
 use chrono::{Datelike, NaiveDate, TimeZone, Utc};
 
-use crate::auth::CurrentUser;
+use crate::auth::{CurrentUser, Role};
 use crate::error::AppError;
 use crate::models::{Brokerage, Tier};
 use crate::state::{AppState, Db};
@@ -76,7 +76,7 @@ pub async fn header_info_for_user(state: &AppState, user: &CurrentUser) -> Heade
     match brokerage {
         Some(b) => HeaderInfo {
             brokerage_name: b.name.clone(),
-            banner: banner_for(&b),
+            banner: banner_for(&b, user.role),
         },
         None => HeaderInfo::default(),
     }
@@ -85,9 +85,10 @@ pub async fn header_info_for_user(state: &AppState, user: &CurrentUser) -> Heade
 /// Compute the banner from an already-loaded brokerage row. Handlers
 /// that need the full [`Brokerage`] for their own logic can call this
 /// instead of paying for the second query inside
-/// [`header_info_for_user`].
-pub fn banner_for(b: &Brokerage) -> Option<SubscriptionBanner> {
-    build_banner(b)
+/// [`header_info_for_user`]. Takes the viewer's [`Role`] because the
+/// info-level banners are broker-only (see [`build_banner`]).
+pub fn banner_for(b: &Brokerage, role: Role) -> Option<SubscriptionBanner> {
+    build_banner(b, role)
 }
 
 /// Outcome of a monthly transaction-limit check. The caller can use
@@ -252,11 +253,11 @@ pub(crate) async fn assert_brokerage_writable_with(
     }
 }
 
-fn build_banner(b: &Brokerage) -> Option<SubscriptionBanner> {
+fn build_banner(b: &Brokerage, role: Role) -> Option<SubscriptionBanner> {
     if b.is_complimentary {
         return None;
     }
-    match b.subscription_status.as_deref() {
+    let banner = match b.subscription_status.as_deref() {
         // Never subscribed yet. Surface the subscribe CTA at the top
         // of every authenticated page — without this, the broker has
         // to remember `/pricing` exists and there's no in-app nudge.
@@ -348,7 +349,13 @@ fn build_banner(b: &Brokerage) -> Option<SubscriptionBanner> {
             })
         }
         _ => None,
-    }
+    };
+    // The green (info-level) banners are billing nudges — the
+    // subscribe CTA and the trial countdown. Only the broker can act
+    // on billing, so invited agents and compliance officers never see
+    // them. Warn/danger banners stay visible to every role because
+    // they explain why the account is read-only.
+    banner.filter(|bn| role.is_broker() || bn.level != BannerLevel::Info)
 }
 
 #[cfg(test)]
@@ -473,6 +480,53 @@ mod tests {
             assert_brokerage_writable_with(&db, &phantom).await,
             Err(AppError::Forbidden)
         ));
+    }
+
+    // ---- banner_for ----
+
+    /// Re-select the full row after `insert_brokerage` — the banner
+    /// helpers take a `&Brokerage`, not an id.
+    async fn fetch_brokerage(db: &Db, id: &RecordId) -> Brokerage {
+        db.select(id.clone())
+            .await
+            .expect("select brokerage")
+            .expect("brokerage row")
+    }
+
+    #[tokio::test]
+    async fn banner_trial_shown_only_to_broker() {
+        let db = make_db().await;
+        let id = insert_brokerage(&db, "starter", Some("trialing"), false).await;
+        let b = fetch_brokerage(&db, &id).await;
+        let broker_banner = banner_for(&b, Role::Broker).expect("broker sees trial banner");
+        assert_eq!(broker_banner.level, BannerLevel::Info);
+        assert!(banner_for(&b, Role::Agent).is_none());
+        assert!(banner_for(&b, Role::Coordinator).is_none());
+    }
+
+    #[tokio::test]
+    async fn banner_subscribe_cta_shown_only_to_broker() {
+        // Never-subscribed brokerage → "pick a plan" nudge for the
+        // broker, nothing for invited teammates.
+        let db = make_db().await;
+        let id = insert_brokerage(&db, "starter", None, false).await;
+        let b = fetch_brokerage(&db, &id).await;
+        assert!(banner_for(&b, Role::Broker).is_some());
+        assert!(banner_for(&b, Role::Agent).is_none());
+        assert!(banner_for(&b, Role::Coordinator).is_none());
+    }
+
+    #[tokio::test]
+    async fn banner_danger_shown_to_all_roles() {
+        // past_due explains why writes fail, so agents and compliance
+        // officers must still see it.
+        let db = make_db().await;
+        let id = insert_brokerage(&db, "starter", Some("past_due"), false).await;
+        let b = fetch_brokerage(&db, &id).await;
+        for role in [Role::Broker, Role::Agent, Role::Coordinator] {
+            let banner = banner_for(&b, role).expect("danger banner visible");
+            assert_eq!(banner.level, BannerLevel::Danger);
+        }
     }
 
     // ---- enforce_transaction_limit ----
