@@ -12,21 +12,89 @@
 // `controllers/transactions.rs`.
 #![allow(clippy::mutable_key_type)]
 
+use axum::Json;
 use axum::body::Body;
 use axum::extract::{Multipart, Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{Redirect, Response};
 use futures::TryStreamExt;
 use surrealdb::types::{RecordId, SurrealValue};
+use tokio::io::AsyncReadExt;
 use tokio_util::io::StreamReader;
 
 use crate::auth::CurrentUser;
 use crate::controllers::transactions::authorize_transaction;
 use crate::error::AppError;
 use crate::forms;
-use crate::models::{Document, Transaction};
+use crate::models::{Document, NewPendingUpload, PendingUpload, Transaction};
 use crate::state::AppState;
 use crate::storage::Storage;
+
+/// Hard per-file upload cap. The browser mirrors this in
+/// `transaction_show.html` so users hear about an oversize file before
+/// any bytes fly; this constant is the enforcement, and the router
+/// derives the upload route's request-body ceiling from it.
+pub const MAX_FILE_BYTES: u64 = 100 * 1024 * 1024;
+
+/// `(extension, canonical MIME)` for every file kind we accept — the
+/// formats a real-estate transaction actually produces: PDFs, Office
+/// documents, spreadsheets, plain text, and scans/photos in the
+/// formats phones and copiers emit. Deliberately absent: HTML and SVG
+/// (both can smuggle script into the inline preview), archives, and
+/// anything executable.
+///
+/// Keep in sync with `ALLOWED_EXTENSIONS` and the `accept=` attribute
+/// in `transaction_show.html`.
+const ALLOWED_TYPES: &[(&str, &str)] = &[
+    ("pdf", "application/pdf"),
+    ("doc", "application/msword"),
+    (
+        "docx",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ),
+    ("xls", "application/vnd.ms-excel"),
+    (
+        "xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ),
+    ("csv", "text/csv"),
+    ("txt", "text/plain"),
+    ("rtf", "application/rtf"),
+    ("jpg", "image/jpeg"),
+    ("jpeg", "image/jpeg"),
+    ("png", "image/png"),
+    ("gif", "image/gif"),
+    ("tif", "image/tiff"),
+    ("tiff", "image/tiff"),
+    ("webp", "image/webp"),
+    ("heic", "image/heic"),
+    ("heif", "image/heif"),
+];
+
+/// Rendered into the rejection message so the error always names what
+/// IS accepted.
+const ALLOWED_TYPES_LABEL: &str = "PDF, Word (DOC/DOCX), Excel (XLS/XLSX), CSV, TXT, RTF, \
+     and images (JPG, PNG, GIF, TIFF, WEBP, HEIC)";
+
+/// Shared refusal copy — the proxy path returns these through
+/// `AppError::invalid` (HTML error page / XHR alert), the presign and
+/// finalize endpoints as JSON `{error}` bodies. One string, both
+/// surfaces.
+const LOCKED_TX_MSG: &str = "This transaction is locked — every checklist item is approved. \
+     Have a coordinator deny an item to reopen it for changes.";
+const OVERSIZE_MSG: &str =
+    "This file is over the 100 MB upload limit. Compress it or split it and try again.";
+
+/// Canonical content type for a filename, or `None` when the extension
+/// is missing or not allowlisted.
+fn canonical_content_type(filename: &str) -> Option<&'static str> {
+    let (_, ext) = filename.rsplit_once('.')?;
+    let ext = ext.to_ascii_lowercase();
+    ALLOWED_TYPES
+        .iter()
+        .find(|(allowed, _)| *allowed == ext)
+        .map(|(_, mime)| *mime)
+}
 
 /// Multipart upload handler.
 ///
@@ -50,9 +118,7 @@ pub async fn upload(
     // specific item or not. (An empty checklist is *not* locked — that
     // would block any first upload on a brand-new transaction.)
     if all_items_approved(&state, &tx_id).await? {
-        return Err(AppError::invalid(
-            "This transaction is locked — every checklist item is approved. Have a coordinator deny an item to reopen it for changes.",
-        ));
+        return Err(AppError::invalid(LOCKED_TX_MSG));
     }
 
     let mut form_code = String::from("MISC");
@@ -91,45 +157,23 @@ pub async fn upload(
                     .file_name()
                     .map(|n| sanitize_filename(n.to_string()))
                     .unwrap_or_else(|| "upload.bin".into());
-                let content_type = field
-                    .content_type()
-                    .unwrap_or("application/octet-stream")
-                    .to_string();
+                // The extension allowlist decides both acceptance and
+                // the stored content type. The browser-declared
+                // Content-Type is spoofable and inconsistent across
+                // OSes, so it is deliberately ignored.
+                let Some(content_type) = canonical_content_type(&filename) else {
+                    return Err(AppError::invalid(format!(
+                        "\"{filename}\" isn't a file type we accept. Supported: {ALLOWED_TYPES_LABEL}."
+                    )));
+                };
 
                 // Resolve the canonical form_code from the linked item
                 // and reject uploads against an already-approved item —
                 // these checks run *before* a single byte hits storage,
                 // so the worst a probe can do is open a TCP connection.
                 if let Some(ref iid) = item_id {
-                    let item_ref = RecordId::new("checklist_item", iid.as_str());
-                    use surrealdb::types::SurrealValue;
-                    #[derive(serde::Deserialize, SurrealValue)]
-                    struct ItemRow {
-                        form_code: Option<String>,
-                        approval_status: String,
-                    }
-                    // Cross-tenant guard: the item id is supplied by the
-                    // client, so we can't trust it. Restrict the lookup
-                    // to items that actually hang off the *URL's*
-                    // transaction (already authorized above). A foreign
-                    // or fabricated item_id falls through as NotFound.
-                    let mut r = state
-                        .db
-                        .query(
-                            "SELECT form_code, approval_status FROM ONLY $i \
-                             WHERE id IN (SELECT VALUE out FROM has_item WHERE in = $t)",
-                        )
-                        .bind(("i", item_ref))
-                        .bind(("t", tx_id.clone()))
-                        .await?;
-                    let row: Option<ItemRow> = r.take(0).ok().flatten();
-                    let row = row.ok_or(AppError::NotFound)?;
-                    if row.approval_status == "approved" {
-                        return Err(AppError::invalid(
-                            "This item has been approved and is locked. Ask a coordinator to deny it before uploading a replacement.",
-                        ));
-                    }
-                    if let Some(code) = row.form_code {
+                    let item = validate_item_for_tx(&state, &tx_id, iid).await?;
+                    if let Some(code) = item.form_code {
                         form_code = code.to_ascii_uppercase();
                     }
                 }
@@ -141,12 +185,24 @@ pub async fn upload(
                 // O(part_size) in process memory regardless of total size.
                 let body_stream =
                     (&mut field).map_err(|e| std::io::Error::other(format!("multipart read: {e}")));
-                let mut reader = StreamReader::new(body_stream);
+                // `take` caps the read one byte past the limit —
+                // landing exactly there proves the file is oversize
+                // without streaming the rest of it through the server.
+                let mut reader = StreamReader::new(body_stream).take(MAX_FILE_BYTES + 1);
                 let size = state
                     .storage
-                    .put_stream(&storage_key, &mut reader, &content_type)
+                    .put_stream(&storage_key, &mut reader, content_type)
                     .await
                     .map_err(|e| AppError::Internal(anyhow::anyhow!("store upload: {e}")))?;
+                if size > MAX_FILE_BYTES {
+                    // The streamed prefix is already an object in the
+                    // bucket — remove it before rejecting, or oversize
+                    // retries would quietly fill storage with orphans.
+                    if let Err(e) = state.storage.delete(&storage_key).await {
+                        tracing::warn!(key = %storage_key, error = %e, "orphaned oversize upload");
+                    }
+                    return Err(AppError::invalid(OVERSIZE_MSG));
+                }
 
                 // Scrubbed, not raw: `%` formats through `Display`, which
                 // the pretty formatter (the production default) emits
@@ -161,7 +217,7 @@ pub async fn upload(
                     "document streamed"
                 );
 
-                let signed = looks_signed(&filename, &content_type);
+                let signed = looks_signed(&filename, content_type);
 
                 // Atomic version-lookup + create. Two concurrent uploads
                 // of the same filename / form_code used to both read
@@ -177,7 +233,7 @@ pub async fn upload(
                     &form_code,
                     &storage_key,
                     size as i64,
-                    &content_type,
+                    content_type,
                     signed,
                 )
                 .await?;
@@ -209,33 +265,28 @@ pub async fn upload(
     // (a legitimate transaction-level upload) but unlinked from any
     // checklist item — no orphan, no partial write.
     let validated_item: Option<RecordId> = match item_id.as_deref() {
-        Some(iid) => {
-            #[derive(serde::Deserialize, SurrealValue)]
-            struct ItemRow {
-                id: RecordId,
-                approval_status: String,
-            }
-            let mut r = state
-                .db
-                .query(
-                    "SELECT id, approval_status FROM ONLY $i \
-                     WHERE id IN (SELECT VALUE out FROM has_item WHERE in = $t)",
-                )
-                .bind(("i", RecordId::new("checklist_item", iid)))
-                .bind(("t", tx_id.clone()))
-                .await?;
-            let row: Option<ItemRow> = r.take(0).ok().flatten();
-            let row = row.ok_or(AppError::NotFound)?;
-            if row.approval_status == "approved" {
-                return Err(AppError::invalid(
-                    "This item has been approved and is locked. Ask a coordinator to deny it before uploading a replacement.",
-                ));
-            }
-            Some(row.id)
-        }
+        Some(iid) => Some(validate_item_for_tx(&state, &tx_id, iid).await?.id),
         None => None,
     };
 
+    link_document(&state, &user, &tx_id, &doc, previous, validated_item).await?;
+
+    Ok(Redirect::to(&format!("/app/transactions/{id}")))
+}
+
+/// Everything that turns a freshly created `document` row into a live
+/// part of the transaction: the ownership edges, the checklist-item
+/// link (plus the un-deny flip), the version chain + audit comment,
+/// and the live-update event. Shared by the proxy upload path and the
+/// presigned finalize path so the two can never drift.
+async fn link_document(
+    state: &AppState,
+    user: &CurrentUser,
+    tx_id: &RecordId,
+    doc: &Document,
+    previous: Option<Document>,
+    validated_item: Option<RecordId>,
+) -> Result<(), AppError> {
     state
         .db
         .query("RELATE $t->has_document->$d; RELATE $u->uploaded->$d;")
@@ -307,7 +358,283 @@ pub async fn upload(
             user.brokerage_id.clone(),
         ));
 
-    Ok(Redirect::to(&format!("/app/transactions/{id}")))
+    Ok(())
+}
+
+/// Request body for [`presign_upload`].
+#[derive(serde::Deserialize)]
+pub struct PresignRequest {
+    filename: String,
+    /// Client-declared byte size — fast-fail only; the authoritative
+    /// size check happens at finalize via HEAD against storage.
+    size: u64,
+    form_code: Option<String>,
+    item_id: Option<String>,
+}
+
+/// Response body for the two direct-upload endpoints. Expected
+/// refusals (locked transaction, approved item, type/size rejections)
+/// ride in `error` with HTTP 200 so the upload JS can show the
+/// message verbatim — non-2xx stays reserved for authz failures and
+/// infrastructure errors, which get the generic alert.
+#[derive(serde::Serialize)]
+#[serde(untagged)]
+pub enum DirectUploadResponse {
+    Ready {
+        url: String,
+        upload: String,
+        content_type: &'static str,
+    },
+    Done {
+        redirect: String,
+    },
+    Refused {
+        error: String,
+    },
+}
+
+fn refused(msg: impl Into<String>) -> Json<DirectUploadResponse> {
+    Json(DirectUploadResponse::Refused { error: msg.into() })
+}
+
+/// Step 1 of the presigned direct-upload flow: validate everything
+/// that CAN be validated before any bytes exist — auth, transaction +
+/// item locks, the type allowlist, the declared size — then mint a
+/// `pending_upload` ticket and a presigned PUT URL. The bytes go
+/// browser→storage without transiting the app; [`finalize_upload`]
+/// verifies and catalogs the result afterwards.
+pub async fn presign_upload(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<String>,
+    Json(req): Json<PresignRequest>,
+) -> Result<Json<DirectUploadResponse>, AppError> {
+    let tx_id = RecordId::new("transaction", id.as_str());
+    let tx = authorize_transaction(&state, &user, &tx_id).await?;
+
+    // Abandoned tickets accumulate only while nobody uploads, so
+    // sweeping on each presign amortizes cleanup without a cron.
+    tokio::spawn(sweep_expired_uploads(state.clone()));
+
+    if all_items_approved(&state, &tx_id).await? {
+        return Ok(refused(LOCKED_TX_MSG));
+    }
+
+    let filename = sanitize_filename(req.filename);
+    let Some(content_type) = canonical_content_type(&filename) else {
+        return Ok(refused(format!(
+            "\"{filename}\" isn't a file type we accept. Supported: {ALLOWED_TYPES_LABEL}."
+        )));
+    };
+    if req.size > MAX_FILE_BYTES {
+        return Ok(refused(OVERSIZE_MSG));
+    }
+
+    let mut form_code = String::from("MISC");
+    if let Some(code) = req.form_code.as_deref()
+        && forms::lookup(code).is_some()
+    {
+        form_code = code.to_ascii_uppercase();
+    }
+    let item_id = req.item_id.filter(|v| !v.is_empty());
+    if let Some(ref iid) = item_id {
+        match validate_item_for_tx(&state, &tx_id, iid).await {
+            Ok(item) => {
+                if let Some(code) = item.form_code {
+                    form_code = code.to_ascii_uppercase();
+                }
+            }
+            // Lock messages surface in the browser; authz misses (a
+            // foreign item id → NotFound) keep their status code.
+            Err(AppError::Validation(msg)) => return Ok(refused(msg)),
+            Err(e) => return Err(e),
+        }
+    }
+
+    let storage_key = make_storage_key(&user.brokerage_id, &tx, &form_code, &filename);
+    // The declared size rides into the signature: the store rejects a
+    // PUT whose real byte count differs, so the 100 MB cap holds even
+    // though the bytes never transit the app.
+    let url = state
+        .storage
+        .presign_put(&storage_key, content_type, req.size)
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("presign: {e}")))?;
+
+    let pending: Option<PendingUpload> = state
+        .db
+        .create("pending_upload")
+        .content(NewPendingUpload {
+            storage_key,
+            filename,
+            form_code,
+            content_type: content_type.to_string(),
+            declared_size: req.size as i64,
+            item_id,
+            tx: tx_id,
+            brokerage: user.brokerage_id.clone(),
+            user: user.user_id.clone(),
+        })
+        .await?;
+    let pending = pending.ok_or_else(|| {
+        AppError::Internal(anyhow::anyhow!("pending_upload create returned no row"))
+    })?;
+
+    Ok(Json(DirectUploadResponse::Ready {
+        url,
+        upload: crate::db::record_key(&pending.id),
+        content_type,
+    }))
+}
+
+/// Step 2: the browser reports its PUT finished. Verify the ticket is
+/// ours, re-check the locks that may have flipped while the file was
+/// in flight, ask storage how big the object REALLY is (the app never
+/// saw the bytes — "enforce afterwards"), then catalog it exactly
+/// like a proxied upload.
+pub async fn finalize_upload(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path((id, upload)): Path<(String, String)>,
+) -> Result<Json<DirectUploadResponse>, AppError> {
+    let tx_id = RecordId::new("transaction", id.as_str());
+    authorize_transaction(&state, &user, &tx_id).await?;
+
+    // Tenant + ownership guard: the ticket must name this exact user,
+    // transaction and brokerage. Anything else is NotFound —
+    // indistinguishable from a ticket that never existed.
+    let pending_ref = RecordId::new("pending_upload", upload.as_str());
+    let mut r = state
+        .db
+        .query("SELECT * FROM ONLY $p WHERE tx = $t AND brokerage = $b AND user = $u")
+        .bind(("p", pending_ref.clone()))
+        .bind(("t", tx_id.clone()))
+        .bind(("b", user.brokerage_id.clone()))
+        .bind(("u", user.user_id.clone()))
+        .await?;
+    let pending: Option<PendingUpload> = r.take(0).ok().flatten();
+    let pending = pending.ok_or(AppError::NotFound)?;
+
+    // Deleting the ticket is the atomic claim: of two concurrent
+    // finalize calls, exactly one gets the row back — the other sees
+    // NotFound instead of minting a duplicate document.
+    let claimed: Option<PendingUpload> = state.db.delete(pending_ref).await?;
+    if claimed.is_none() {
+        return Err(AppError::NotFound);
+    }
+
+    // Locks re-checked at finalize: approval state may have flipped
+    // while the file was in flight. The object is already in the
+    // bucket on these paths, so refusing also means discarding it.
+    if all_items_approved(&state, &tx_id).await? {
+        discard_object(&state, &pending.storage_key).await;
+        return Ok(refused(LOCKED_TX_MSG));
+    }
+    let validated_item = match pending.item_id.as_deref() {
+        Some(iid) => match validate_item_for_tx(&state, &tx_id, iid).await {
+            Ok(item) => Some(item.id),
+            Err(AppError::Validation(msg)) => {
+                discard_object(&state, &pending.storage_key).await;
+                return Ok(refused(msg));
+            }
+            Err(AppError::NotFound) => {
+                // The item was deleted while the upload ran.
+                discard_object(&state, &pending.storage_key).await;
+                return Ok(refused(
+                    "That checklist item no longer exists. Reload the page and try again.",
+                ));
+            }
+            Err(e) => return Err(e),
+        },
+        None => None,
+    };
+
+    // The authoritative size check — the declared size at presign was
+    // advisory, the store's answer is the enforcement.
+    let size = state
+        .storage
+        .head_size(&pending.storage_key)
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("verify upload: {e}")))?;
+    let Some(size) = size else {
+        return Ok(refused(
+            "We couldn't find the uploaded file in storage — the transfer may have failed. Please try again.",
+        ));
+    };
+    if size > MAX_FILE_BYTES {
+        discard_object(&state, &pending.storage_key).await;
+        return Ok(refused(OVERSIZE_MSG));
+    }
+
+    let signed = looks_signed(&pending.filename, &pending.content_type);
+    let (previous, doc) = create_versioned_document(
+        &state,
+        &tx_id,
+        &pending.filename,
+        &pending.form_code,
+        &pending.storage_key,
+        size as i64,
+        &pending.content_type,
+        signed,
+    )
+    .await?;
+
+    link_document(&state, &user, &tx_id, &doc, previous, validated_item).await?;
+
+    tracing::info!(
+        filename = %crate::sanitize::scrub(&pending.filename),
+        form_code = %crate::sanitize::scrub(&pending.form_code),
+        bytes = size,
+        key = %pending.storage_key,
+        "document uploaded direct-to-storage"
+    );
+
+    Ok(Json(DirectUploadResponse::Done {
+        redirect: format!("/app/transactions/{id}"),
+    }))
+}
+
+/// Best-effort removal of an object we're refusing to catalog.
+async fn discard_object(state: &AppState, key: &str) {
+    if let Err(e) = state.storage.delete(key).await {
+        tracing::warn!(key = %key, error = %e, "could not remove refused upload object");
+    }
+}
+
+/// Delete `pending_upload` tickets past `expires_at`, along with any
+/// object the browser managed to PUT before abandoning the flow.
+/// Detached from presign requests — amortized cleanup, no cron. The
+/// LIMIT bounds one sweep; the next presign picks up the rest.
+async fn sweep_expired_uploads(state: AppState) {
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct Stale {
+        id: RecordId,
+        storage_key: String,
+    }
+    let rows: Vec<Stale> = match state
+        .db
+        .query(
+            "SELECT id, storage_key FROM pending_upload \
+             WHERE expires_at < time::now() LIMIT 25",
+        )
+        .await
+        .and_then(|mut r| r.take(0))
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!(error = %e, "pending_upload sweep query failed");
+            return;
+        }
+    };
+    for stale in rows {
+        // Object first: if that delete fails, keeping the row lets a
+        // later sweep retry instead of orphaning the object forever.
+        if let Err(e) = state.storage.delete(&stale.storage_key).await {
+            tracing::warn!(key = %stale.storage_key, error = %e, "sweep: object delete failed");
+            continue;
+        }
+        let _: Result<Option<PendingUpload>, _> = state.db.delete(stale.id).await;
+    }
 }
 
 /// True when every checklist item on the transaction has been approved.
@@ -335,6 +662,57 @@ async fn all_items_approved(state: &AppState, tx_id: &RecordId) -> Result<bool, 
     Ok(match row {
         Some(r) => r.total > 0 && r.total == r.approved,
         None => false,
+    })
+}
+
+/// A client-supplied checklist-item key that survived the cross-tenant
+/// guard: the item verifiably hangs off the given (already authorized)
+/// transaction and is not approved-locked.
+struct ValidatedItem {
+    id: RecordId,
+    /// The item's canonical form code — overrides whatever the client
+    /// sent, so uploads always file under the code the checklist says.
+    form_code: Option<String>,
+}
+
+/// THE security gate for client-supplied `item_id`s — every path that
+/// links a document to a checklist item must route through it.
+///
+/// The item id can't be trusted: the lookup is restricted to items
+/// that actually hang off the URL's transaction (which the caller has
+/// already authorized), so a foreign or fabricated id falls out as
+/// `NotFound` instead of touching another brokerage's data. Approved
+/// items are locked against replacement uploads.
+async fn validate_item_for_tx(
+    state: &AppState,
+    tx_id: &RecordId,
+    iid: &str,
+) -> Result<ValidatedItem, AppError> {
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct ItemRow {
+        id: RecordId,
+        form_code: Option<String>,
+        approval_status: String,
+    }
+    let mut r = state
+        .db
+        .query(
+            "SELECT id, form_code, approval_status FROM ONLY $i \
+             WHERE id IN (SELECT VALUE out FROM has_item WHERE in = $t)",
+        )
+        .bind(("i", RecordId::new("checklist_item", iid)))
+        .bind(("t", tx_id.clone()))
+        .await?;
+    let row: Option<ItemRow> = r.take(0).ok().flatten();
+    let row = row.ok_or(AppError::NotFound)?;
+    if row.approval_status == "approved" {
+        return Err(AppError::invalid(
+            "This item has been approved and is locked. Ask a coordinator to deny it before uploading a replacement.",
+        ));
+    }
+    Ok(ValidatedItem {
+        id: row.id,
+        form_code: row.form_code,
     })
 }
 
@@ -1427,8 +1805,45 @@ async fn create_versioned_document(
 #[cfg(test)]
 mod path_safety_tests {
     use super::{
-        manifest_field, preview_csp, sanitize_path_segment, split_filename, unique_entry_path,
+        canonical_content_type, manifest_field, preview_csp, sanitize_path_segment,
+        split_filename, unique_entry_path,
     };
+
+    /// The upload allowlist is the only gate between arbitrary client
+    /// bytes and storage: it must admit every real-estate document
+    /// format (case-insensitively) and reject script-capable or
+    /// executable types outright.
+    #[test]
+    fn upload_allowlist_admits_documents_and_rejects_the_rest() {
+        assert_eq!(
+            canonical_content_type("Purchase Agreement.PDF"),
+            Some("application/pdf")
+        );
+        assert_eq!(canonical_content_type("scan.jpeg"), Some("image/jpeg"));
+        assert_eq!(canonical_content_type("photo.HEIC"), Some("image/heic"));
+        assert_eq!(
+            canonical_content_type("addendum.docx"),
+            Some(
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
+        );
+
+        for rejected in [
+            "archive.zip",
+            "page.html",
+            "logo.svg",
+            "tool.exe",
+            "upload.bin",
+            "no-extension",
+            "",
+        ] {
+            assert_eq!(
+                canonical_content_type(rejected),
+                None,
+                "{rejected:?} must be rejected"
+            );
+        }
+    }
 
     /// Preview responses must be framable by our own lightbox, and PDFs
     /// must not be sandboxed.
@@ -1447,10 +1862,12 @@ mod path_safety_tests {
             "sandboxing a PDF blocks the viewer plugin: {pdf}"
         );
 
-        // Everything else keeps the sandbox. `preview_kind` admits any
-        // `image/*` and the uploader picks the declared type, so
-        // `image/svg+xml` reaches here — scriptable, and dangerous on a
-        // direct navigation without an opaque origin.
+        // Everything else keeps the sandbox. The upload allowlist now
+        // blocks SVG at the door, but documents stored before that
+        // gate existed (or written through any future path) may still
+        // carry `image/svg+xml` — scriptable, and dangerous on a
+        // direct navigation without an opaque origin — so the sandbox
+        // stays as defense in depth.
         for kind in [Some("image"), Some("video"), Some("audio"), None] {
             let csp = preview_csp(kind);
             assert!(

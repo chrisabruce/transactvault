@@ -3543,6 +3543,237 @@ async fn upload_validates_item_id_regardless_of_multipart_field_order() {
     );
 }
 
+/// The upload allowlist rejects non-document types BEFORE a byte
+/// reaches storage: a .zip must come back as a clean 400 naming the
+/// supported formats — not a 500 from the storage backend, which is
+/// what any post-storage placement of the check would produce here
+/// (the test harness's null storage fails every write).
+#[tokio::test]
+async fn upload_rejects_disallowed_file_type_before_storage() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Ziptown").await;
+    let broker = seed_user(&app.state, "zip@z").await;
+    join(&app.state, &broker, &b, "broker").await;
+    let tx = seed_tx(&app.state, &b, Some(&broker)).await;
+    let tx_key = crate::db::record_key(&tx);
+
+    let boundary = "----tvtest";
+    let body = format!(
+        "--{b}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"escrow.zip\"\r\n\
+         Content-Type: application/zip\r\n\r\nZIPDATA\r\n\
+         --{b}--\r\n",
+        b = boundary,
+    );
+    let cookie = session_cookie(&app, &broker);
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("/app/transactions/{tx_key}/documents"))
+        .header("cookie", cookie)
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(body))
+        .unwrap();
+    let (status, body) = send(&app, req).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "disallowed extension must be a clean validation error, got {status}: {body}"
+    );
+    // Fragment chosen to dodge the apostrophe in "isn't", which the
+    // error page renders as `&#39;`.
+    assert!(
+        body.contains("file type we accept") && body.contains("PDF"),
+        "rejection must explain itself and name the allowed formats; body was: {body}"
+    );
+}
+
+/// Build a JSON POST the way the direct-upload script sends it.
+fn json_post(uri: String, cookie: String, body: String) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("cookie", cookie)
+        .header("content-type", "application/json")
+        .body(Body::from(body))
+        .unwrap()
+}
+
+/// The presign endpoint runs the whole validation battery before a URL
+/// is minted: type and size rejections come back as `{error}` JSON the
+/// upload script alerts verbatim, and a happy request yields a ticket
+/// backed by a `pending_upload` row that binds tenant, user and
+/// transaction server-side.
+#[tokio::test]
+async fn presign_validates_and_mints_a_tenant_bound_ticket() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Direct Co").await;
+    let broker = seed_user(&app.state, "direct@d").await;
+    join(&app.state, &broker, &b, "broker").await;
+    let tx = seed_tx(&app.state, &b, Some(&broker)).await;
+    let key = crate::db::record_key(&tx);
+    let cookie = session_cookie(&app, &broker);
+    let uri = format!("/app/transactions/{key}/uploads");
+
+    // Disallowed type → refusal, no ticket.
+    let (status, body) = send(
+        &app,
+        json_post(
+            uri.clone(),
+            cookie.clone(),
+            r#"{"filename":"evil.zip","size":100}"#.into(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "refusals are 200 + error JSON");
+    let v: serde_json::Value = serde_json::from_str(&body).expect("refusal json");
+    assert!(
+        v["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("file type we accept"),
+        "body: {body}"
+    );
+
+    // Oversize (by declared size) → refusal.
+    let (_, body) = send(
+        &app,
+        json_post(
+            uri.clone(),
+            cookie.clone(),
+            format!(
+                r#"{{"filename":"big.pdf","size":{}}}"#,
+                100 * 1024 * 1024 + 1u64
+            ),
+        ),
+    )
+    .await;
+    let v: serde_json::Value = serde_json::from_str(&body).expect("oversize json");
+    assert!(
+        v["error"].as_str().unwrap_or_default().contains("100 MB"),
+        "body: {body}"
+    );
+
+    // Happy path → presigned URL + canonical type + pending row.
+    let (status, body) = send(
+        &app,
+        json_post(
+            uri,
+            cookie,
+            r#"{"filename":"Purchase Contract.pdf","size":1234}"#.into(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "presign should succeed: {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).expect("ticket json");
+    assert_eq!(v["content_type"].as_str(), Some("application/pdf"));
+    let url = v["url"].as_str().expect("presigned url");
+    assert!(
+        url.contains("X-Amz-Signature"),
+        "URL must be presigned: {url}"
+    );
+    // Both the type and the exact byte count must be signature-bound:
+    // that's what lets the store itself refuse a swapped or oversize
+    // file instead of relying on finalize-time cleanup alone.
+    assert!(
+        url.contains("content-length") && url.contains("content-type"),
+        "signed headers must pin length and type: {url}"
+    );
+    let ticket = v["upload"].as_str().expect("ticket key");
+    let row: Option<crate::models::PendingUpload> = app
+        .state
+        .db
+        .select(RecordId::new("pending_upload", ticket))
+        .await
+        .expect("select pending row");
+    let row = row.expect("pending row must exist");
+    assert_eq!(row.brokerage, b, "ticket binds the tenant");
+    assert_eq!(row.user, broker, "ticket binds the uploader");
+    assert_eq!(row.declared_size, 1234);
+    assert_eq!(row.content_type, "application/pdf");
+}
+
+/// Direct-upload tickets are unusable outside their tenant: a foreign
+/// checklist item can't be smuggled into presign, someone else's
+/// ticket can't be finalized, and a fabricated ticket key is NotFound.
+#[tokio::test]
+async fn direct_upload_tickets_reject_cross_tenant_use() {
+    let app = make_app().await;
+    let victim_b = seed_brokerage(&app.state, "Victim Direct").await;
+    let victim = seed_user(&app.state, "vd@v").await;
+    join(&app.state, &victim, &victim_b, "broker").await;
+    let victim_tx = seed_tx(&app.state, &victim_b, Some(&victim)).await;
+    let victim_item = seed_item(&app.state, &victim_tx, "pending").await;
+    let victim_key = crate::db::record_key(&victim_tx);
+    let vcookie = session_cookie(&app, &victim);
+
+    // Mint a legitimate ticket as the victim.
+    let (status, body) = send(
+        &app,
+        json_post(
+            format!("/app/transactions/{victim_key}/uploads"),
+            vcookie.clone(),
+            r#"{"filename":"deed.pdf","size":10}"#.into(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "victim presign: {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).expect("ticket json");
+    let ticket = v["upload"].as_str().expect("ticket key").to_string();
+
+    let atk_b = seed_brokerage(&app.state, "Attacker Direct").await;
+    let atk = seed_user(&app.state, "ad@a").await;
+    join(&app.state, &atk, &atk_b, "broker").await;
+    let atk_tx = seed_tx(&app.state, &atk_b, Some(&atk)).await;
+    let atk_key = crate::db::record_key(&atk_tx);
+    let acookie = session_cookie(&app, &atk);
+
+    // Foreign item_id in presign → NotFound, no ticket minted.
+    let victim_item_key = crate::db::record_key(&victim_item);
+    let (status, _) = send(
+        &app,
+        json_post(
+            format!("/app/transactions/{atk_key}/uploads"),
+            acookie.clone(),
+            format!(r#"{{"filename":"a.pdf","size":5,"item_id":"{victim_item_key}"}}"#),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "foreign item must 404");
+
+    // Finalizing the victim's ticket through the attacker's own
+    // transaction → NotFound (ticket fields don't match).
+    let (status, _) = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/app/transactions/{atk_key}/uploads/{ticket}/complete"
+            ))
+            .header("cookie", acookie)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "foreign ticket must 404");
+
+    // A fabricated ticket key on the victim's own transaction → NotFound.
+    let (status, _) = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/app/transactions/{victim_key}/uploads/nonexistent/complete"
+            ))
+            .header("cookie", vcookie)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "unknown ticket must 404");
+}
+
 /// Path segments that are `.` or `..` must never survive into an S3 key
 /// or a ZIP entry name: S3 URLs resolve dot segments before signing (so
 /// the object escapes its brokerage prefix), and ZIP extractors resolve
@@ -3705,6 +3936,12 @@ async fn responses_carry_security_headers() {
     assert!(get("referrer-policy").contains("strict-origin"));
     let csp = get("content-security-policy");
     assert!(csp.contains("frame-ancestors 'none'"), "CSP: {csp}");
+    // The storage origin rides in connect-src so the direct-upload JS
+    // can PUT presigned uploads; the test config's endpoint stands in.
+    assert!(
+        csp.contains("connect-src 'self' http://127.0.0.1:1"),
+        "CSP must allow the storage origin: {csp}"
+    );
     assert!(csp.contains("form-action 'self'"), "CSP: {csp}");
     assert!(csp.contains("base-uri 'self'"), "CSP: {csp}");
     assert!(csp.contains("object-src 'none'"), "CSP: {csp}");

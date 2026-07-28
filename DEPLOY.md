@@ -221,6 +221,13 @@ S3_ACCESS_KEY=<key>
 S3_SECRET_KEY=<secret>
 S3_BUCKET=<bucket>
 S3_AUTO_CREATE_BUCKET=false
+# Optional: browser-facing endpoint for presigned direct uploads, when
+# it differs from S3_ENDPOINT (private networking, internal DNS). Most
+# managed providers need only S3_ENDPOINT. The app also tries to set
+# the bucket's CORS rule (PUT from BASE_URL) at boot; if your provider
+# rejects that API, add the rule once in their console — until then
+# uploads silently fall back to proxying through the app.
+# S3_PUBLIC_ENDPOINT=
 
 # --- email ------------------------------------------------------------
 POSTMARK_SERVER_TOKEN=<token>

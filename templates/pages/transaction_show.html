@@ -126,7 +126,8 @@
                                                           class="inline-upload">
                                                         <input type="hidden" name="item_id" value="{{ row.item.url_key() }}">
                                                         <input type="hidden" name="form_code" value="{% match row.code() %}{% when Some with (c) %}{{ c }}{% when None %}MISC{% endmatch %}">
-                                                        <input type="file" name="file" required>
+                                                        <input type="file" name="file" required
+                                                               accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.rtf,.jpg,.jpeg,.png,.gif,.tif,.tiff,.webp,.heic,.heif">
                                                         <button type="submit" class="btn small">Attach</button>
                                                     </form>
                                                 </details>
@@ -417,8 +418,34 @@
 // we can show upload progress for the 100 MB cap. On success we reload
 // the page; on failure we surface the error and clear the overlay.
 (function () {
+    // Client-side mirror of the server's upload rules (documents.rs:
+    // MAX_FILE_BYTES + ALLOWED_TYPES — keep all three in sync, along
+    // with the accept= attribute on the popover file input). The
+    // server still enforces both; these checks exist so the user hears
+    // "too big" or "wrong type" BEFORE the upload starts, not after
+    // watching a progress bar crawl for minutes.
+    const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+    const ALLOWED_EXTENSIONS = [
+        'pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv', 'txt', 'rtf',
+        'jpg', 'jpeg', 'png', 'gif', 'tif', 'tiff', 'webp', 'heic', 'heif'
+    ];
+
+    function uploadProblem(file) {
+        const dot = file.name.lastIndexOf('.');
+        const ext = dot === -1 ? '' : file.name.slice(dot + 1).toLowerCase();
+        if (!ALLOWED_EXTENSIONS.includes(ext)) {
+            return '"' + file.name + '" isn\'t a file type we accept.\n\n' +
+                'Supported: PDF, Word (DOC/DOCX), Excel (XLS/XLSX), CSV, TXT, RTF, ' +
+                'and images (JPG, PNG, GIF, TIFF, WEBP, HEIC).';
+        }
+        if (file.size > MAX_UPLOAD_BYTES) {
+            const mb = (file.size / (1024 * 1024)).toFixed(1);
+            return '"' + file.name + '" is ' + mb + ' MB — the upload limit is 100 MB.';
+        }
+        return null;
+    }
+
     const items = document.querySelectorAll('.checklist-item[data-upload-url]');
-    if (!items.length) return;
 
     function hasFiles(e) {
         return e.dataTransfer
@@ -440,64 +467,151 @@
     // raced through the versioning logic.
     const uploadingItems = new Set();
 
-    function startUpload(item, file) {
-        const url = item.dataset.uploadUrl;
-        const itemId = item.dataset.itemId;
-        const formCode = item.dataset.formCode;
-
-        if (uploadingItems.has(itemId)) {
-            const flash = document.createElement('p');
-            flash.className = 'upload-status';
-            flash.textContent = 'Already uploading — please wait.';
-            item.appendChild(flash);
-            setTimeout(() => flash.remove(), 1800);
-            return;
-        }
-        uploadingItems.add(itemId);
-
+    function makeOverlay(item, filename) {
         const overlay = document.createElement('div');
         overlay.className = 'upload-overlay';
         overlay.innerHTML =
-            '<p class="upload-status">Uploading ' + escapeHtml(file.name) +
+            '<p class="upload-status">Uploading ' + escapeHtml(filename) +
             ' <span class="upload-pct">0%</span></p>' +
             '<progress class="upload-progress" max="100" value="0"></progress>';
         item.appendChild(overlay);
+        return overlay;
+    }
 
+    function setProgress(overlay, pct) {
+        const bar = overlay.querySelector('.upload-progress');
+        const txt = overlay.querySelector('.upload-pct');
+        if (bar) bar.value = pct;
+        if (txt) txt.textContent = pct + '%';
+    }
+
+    // Bytes are on their way or done — but a server step (finalize, or
+    // the proxy path's DB writes) is still running. An indeterminate
+    // bar stops the user reading a full-but-frozen one as a hang and
+    // retrying (that retry is what used to mint duplicate v2 rows).
+    function setProcessing(overlay) {
+        const txt = overlay.querySelector('.upload-pct');
+        const bar = overlay.querySelector('.upload-progress');
+        const status = overlay.querySelector('.upload-status');
+        if (txt) txt.textContent = '';
+        if (status) status.textContent = 'Processing on server…';
+        if (bar) bar.removeAttribute('value'); // indeterminate
+    }
+
+    // PUT the file at a presigned storage URL. Resolves true on 2xx,
+    // false on a refusal (signature/expiry), rejects on network or
+    // CORS failure. Content-Type must be exactly what the server
+    // signed or the store rejects the signature.
+    function putFile(url, file, contentType, overlay) {
+        return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('PUT', url);
+            xhr.setRequestHeader('Content-Type', contentType);
+            xhr.upload.addEventListener('progress', e => {
+                if (!e.lengthComputable) return;
+                setProgress(overlay, Math.round((e.loaded / e.total) * 100));
+            });
+            xhr.addEventListener('load', () =>
+                resolve(xhr.status >= 200 && xhr.status < 300));
+            xhr.addEventListener('error', () => reject(new Error('network')));
+            xhr.addEventListener('abort', () => reject(new Error('abort')));
+            xhr.send(file);
+        });
+    }
+
+    // Direct-to-storage upload: ask the app to presign, PUT the bytes
+    // straight to the object store (the progress bar tracks the real
+    // transfer), then ask the app to verify + catalog the object.
+    // Returns 'done' | 'failed' | 'fallback' — fallback meaning "the
+    // bytes never made it to storage; the proxy path can still try".
+    async function directUpload(docsUrl, file, itemId, formCode, overlay) {
+        const base = docsUrl.replace(/\/documents$/, '/uploads');
+        let ticket;
+        try {
+            const res = await fetch(base, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    filename: file.name,
+                    size: file.size,
+                    form_code: formCode || null,
+                    item_id: itemId || null
+                })
+            });
+            if (!res.ok) return 'fallback';
+            ticket = await res.json();
+        } catch (err) {
+            return 'fallback';
+        }
+        // Expected refusals (locked item, type/size) arrive as {error}
+        // — show them verbatim; the proxy path would only repeat them.
+        if (ticket.error) {
+            alert(ticket.error);
+            return 'failed';
+        }
+
+        try {
+            const stored = await putFile(ticket.url, file, ticket.content_type, overlay);
+            if (!stored) return 'fallback';
+        } catch (err) {
+            // CORS not set up on the bucket, or a network drop — the
+            // app-proxied path is unaffected, so let it take over.
+            return 'fallback';
+        }
+
+        setProcessing(overlay);
+        try {
+            const res = await fetch(
+                base + '/' + encodeURIComponent(ticket.upload) + '/complete',
+                {method: 'POST'}
+            );
+            if (!res.ok) {
+                alert('Upload failed (' + res.status + '). Please try again.');
+                return 'failed';
+            }
+            const result = await res.json();
+            if (result.error) {
+                alert(result.error);
+                return 'failed';
+            }
+            return 'done';
+        } catch (err) {
+            alert('Upload failed: network error. Please try again.');
+            return 'failed';
+        }
+    }
+
+    // Classic path: multipart POST through the app, which streams the
+    // bytes to storage itself. Slower (the file transits twice) but
+    // has no CORS prerequisites — kept as the fallback and for
+    // browsers with JS disabled (the popover form posts here natively).
+    function proxyUpload(docsUrl, file, itemId, formCode, overlay) {
         const fd = new FormData();
         fd.append('item_id', itemId);
         fd.append('form_code', formCode);
         fd.append('file', file);
 
         const xhr = new XMLHttpRequest();
-        xhr.open('POST', url);
+        xhr.open('POST', docsUrl);
         xhr.upload.addEventListener('progress', e => {
             if (!e.lengthComputable) return;
-            const pct = Math.round((e.loaded / e.total) * 100);
-            const bar = overlay.querySelector('.upload-progress');
-            const txt = overlay.querySelector('.upload-pct');
-            if (bar) bar.value = pct;
-            if (txt) txt.textContent = pct + '%';
+            setProgress(overlay, Math.round((e.loaded / e.total) * 100));
         });
-        // Bytes finished arriving at the server — but the server is
-        // still running DB writes (version lookup, RELATE edges, audit
-        // comment). The previous "stuck at 100%" report came from this
-        // window. Swap to an indeterminate "Processing…" so the user
-        // doesn't assume the upload is frozen and retry.
-        xhr.upload.addEventListener('load', () => {
-            const txt = overlay.querySelector('.upload-pct');
-            const bar = overlay.querySelector('.upload-progress');
-            if (txt) txt.textContent = '';
-            const status = overlay.querySelector('.upload-status');
-            if (status) status.textContent = 'Processing on server…';
-            if (bar) bar.removeAttribute('value'); // indeterminate
-        });
+        xhr.upload.addEventListener('load', () => setProcessing(overlay));
         xhr.addEventListener('load', () => {
             uploadingItems.delete(itemId);
             if (xhr.status >= 200 && xhr.status < 400) {
                 window.location.reload();
             } else {
                 overlay.remove();
-                alert('Upload failed (' + xhr.status + '). Please try again.');
+                if (xhr.status === 413) {
+                    // Server-side backstop for the size cap — normally
+                    // unreachable because uploadProblem() rejects the
+                    // file before any bytes are sent.
+                    alert('This file is over the 100 MB upload limit.');
+                } else {
+                    alert('Upload failed (' + xhr.status + '). Please try again.');
+                }
             }
         });
         xhr.addEventListener('error', () => {
@@ -511,6 +625,68 @@
         });
         xhr.send(fd);
     }
+
+    function startUpload(item, file) {
+        const url = item.dataset.uploadUrl;
+        const itemId = item.dataset.itemId;
+        const formCode = item.dataset.formCode;
+
+        const problem = uploadProblem(file);
+        if (problem) {
+            alert(problem);
+            return;
+        }
+
+        if (uploadingItems.has(itemId)) {
+            const flash = document.createElement('p');
+            flash.className = 'upload-status';
+            flash.textContent = 'Already uploading — please wait.';
+            item.appendChild(flash);
+            setTimeout(() => flash.remove(), 1800);
+            return;
+        }
+        uploadingItems.add(itemId);
+
+        const overlay = makeOverlay(item, file.name);
+        directUpload(url, file, itemId, formCode, overlay).then(outcome => {
+            if (outcome === 'fallback') {
+                // Fresh overlay so the proxy attempt starts back at 0%
+                // instead of atop the direct attempt's leftovers.
+                overlay.remove();
+                proxyUpload(url, file, itemId, formCode, makeOverlay(item, file.name));
+                return;
+            }
+            uploadingItems.delete(itemId);
+            if (outcome === 'done') {
+                window.location.reload();
+            } else {
+                overlay.remove();
+            }
+        });
+    }
+
+    // The popover "Attach" forms: with JS on, route them through the
+    // same direct-to-storage flow as drag-and-drop; without JS they
+    // post natively to the proxy endpoint and everything still works.
+    document.addEventListener('submit', e => {
+        const form = e.target.closest && e.target.closest('form.inline-upload');
+        if (!form) return;
+        const input = form.querySelector('input[type="file"]');
+        const file = input && input.files && input.files[0];
+        if (!file) return; // the `required` attribute covers empty
+        const problem = uploadProblem(file);
+        if (problem) {
+            e.preventDefault();
+            alert(problem);
+            return;
+        }
+        const item = form.closest('.checklist-item');
+        if (!item || !item.dataset.uploadUrl) return; // native POST
+        e.preventDefault();
+        const details = form.closest('details');
+        if (details) details.open = false;
+        startUpload(item, file);
+    });
 
     items.forEach(item => {
         // Counter pattern dodges the classic dragleave-on-child bug:

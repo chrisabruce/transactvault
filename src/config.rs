@@ -77,6 +77,14 @@ pub struct Config {
 #[derive(Debug, Clone)]
 pub struct RustFsConfig {
     pub endpoint: String,
+    /// Browser-facing endpoint used ONLY for presigned direct-upload
+    /// URLs. `None` falls back to `endpoint`, which is right whenever
+    /// that address is publicly reachable (Contabo, any managed
+    /// provider). Set `S3_PUBLIC_ENDPOINT` when the app reaches
+    /// storage over an address the browser can't — the docker-compose
+    /// dev stack talks to RustFS at `http://rustfs:9000`, while the
+    /// browser needs the host-mapped `http://127.0.0.1:37421`.
+    pub public_endpoint: Option<String>,
     pub region: String,
     pub access_key: String,
     pub secret_key: String,
@@ -173,6 +181,7 @@ impl Config {
             trusted_proxy_hops: 0,
             rustfs: RustFsConfig {
                 endpoint: "http://127.0.0.1:1".into(),
+                public_endpoint: None,
                 region: "us-east-1".into(),
                 access_key: "test".into(),
                 secret_key: "test".into(),
@@ -254,6 +263,9 @@ impl Config {
 
             rustfs: RustFsConfig {
                 endpoint: env_either("S3_ENDPOINT", "RUSTFS_ENDPOINT", "http://127.0.0.1:37421"),
+                public_endpoint: std::env::var("S3_PUBLIC_ENDPOINT")
+                    .ok()
+                    .filter(|v| !v.trim().is_empty()),
                 region: env_either("S3_REGION", "RUSTFS_REGION", "us-east-1"),
                 access_key: env_either("S3_ACCESS_KEY", "RUSTFS_ACCESS_KEY", "rustfsadmin"),
                 secret_key: env_either("S3_SECRET_KEY", "RUSTFS_SECRET_KEY", "rustfsadmin"),

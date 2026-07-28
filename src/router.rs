@@ -80,7 +80,30 @@ pub fn build(state: AppState) -> Router {
             "/app/transactions/{id}/comments",
             post(comments::create_on_transaction),
         )
-        .route("/app/transactions/{id}/documents", post(documents::upload))
+        // Document uploads get their own body ceiling: a full 100 MB
+        // file plus multipart boundaries and the two metadata fields
+        // slightly exceeds 100 MB of raw body, so the envelope gets
+        // 1 MB of headroom over the per-FILE cap — which the handler
+        // enforces itself, with a clean error and oversize-object
+        // cleanup, instead of an opaque 413 at 99%.
+        .route(
+            "/app/transactions/{id}/documents",
+            post(documents::upload).layer(axum::extract::DefaultBodyLimit::max(
+                documents::MAX_FILE_BYTES as usize + 1024 * 1024,
+            )),
+        )
+        // Presigned direct-to-storage upload: mint a ticket + signed
+        // PUT URL, then verify + catalog after the browser uploads.
+        // The multipart route above stays as the no-JS / CORS-blocked
+        // fallback.
+        .route(
+            "/app/transactions/{id}/uploads",
+            post(documents::presign_upload),
+        )
+        .route(
+            "/app/transactions/{id}/uploads/{upload}/complete",
+            post(documents::finalize_upload),
+        )
         .route("/app/documents/{id}/download", get(documents::download))
         .route("/app/documents/{id}/preview", get(documents::preview))
         .route("/app/documents/{id}/delete", post(documents::delete))
@@ -261,10 +284,7 @@ pub fn build(state: AppState) -> Router {
         ))
         .with_state(state.clone())
         .layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024))
-        .layer(tower_http::timeout::TimeoutLayer::with_status_code(
-            axum::http::StatusCode::GATEWAY_TIMEOUT,
-            Duration::from_secs(60),
-        ))
+        .layer(from_fn(request_timeout))
         // Baseline security headers on every response (CSP,
         // frame-ancestors, nosniff, referrer policy, HSTS on https).
         //
@@ -338,7 +358,7 @@ async fn sets_own_headers() -> Response {
 /// `BASE_URL` may carry a trailing slash or a path; an `Origin` header
 /// never does, but normalizing both sides means the comparison can't be
 /// broken by a stray slash in configuration.
-fn origin_of(url: &str) -> Option<String> {
+pub(crate) fn origin_of(url: &str) -> Option<String> {
     let (scheme, rest) = url.split_once("://")?;
     let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
     if authority.is_empty() {
@@ -487,20 +507,31 @@ async fn security_headers(
     // preview showed nothing, while simultaneously *discarding* the
     // sandbox that stops a malicious SVG running script in our origin.
     if !headers.contains_key("content-security-policy") {
+        // `connect-src` names the object-store origin alongside 'self'
+        // because the direct-upload JS PUTs presigned uploads straight
+        // there from the page — without it the browser blocks the PUT
+        // before it starts and every upload falls back to proxying.
+        let storage_origin = {
+            let cfg = &state.config.rustfs;
+            let endpoint = cfg.public_endpoint.as_deref().unwrap_or(&cfg.endpoint);
+            origin_of(endpoint).unwrap_or_else(|| endpoint.trim_end_matches('/').to_string())
+        };
+        let policy = format!(
+            "default-src 'self'; \
+             script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; \
+             style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; \
+             img-src 'self' data: blob:; \
+             connect-src 'self' {storage_origin}; \
+             font-src 'self'; \
+             object-src 'none'; \
+             base-uri 'self'; \
+             form-action 'self'; \
+             frame-ancestors 'none'"
+        );
         headers.insert(
             "content-security-policy",
-            HeaderValue::from_static(
-                "default-src 'self'; \
-                 script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; \
-                 style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; \
-                 img-src 'self' data: blob:; \
-                 connect-src 'self'; \
-                 font-src 'self'; \
-                 object-src 'none'; \
-                 base-uri 'self'; \
-                 form-action 'self'; \
-                 frame-ancestors 'none'",
-            ),
+            HeaderValue::from_str(&policy)
+                .unwrap_or_else(|_| HeaderValue::from_static("default-src 'self'")),
         );
     }
     if !headers.contains_key("x-frame-options") {
@@ -594,6 +625,45 @@ async fn log_5xx(req: Request, next: Next) -> Response {
     response
 }
 
+/// Per-request time budget for everything except document uploads:
+/// generous for a page render or fragment swap, and the backstop that
+/// keeps a wedged handler from pinning a connection forever.
+const PAGE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Document uploads span the entire browser→app→object-store pipe in
+/// one request (the handler streams the body straight into S3), so the
+/// budget must cover a 100 MB file on a slow home uplink: ~15 minutes
+/// at 1 Mbit/s. This is a file storage app — cutting an honest upload
+/// off mid-transfer is worse than letting a slow one finish.
+const UPLOAD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+/// `POST /app/transactions/{id}/documents` — matched on the raw path
+/// because this middleware runs before routing, where `MatchedPath`
+/// doesn't exist yet.
+fn is_document_upload(req: &Request) -> bool {
+    req.method() == axum::http::Method::POST
+        && req
+            .uri()
+            .path()
+            .strip_prefix("/app/transactions/")
+            .and_then(|rest| rest.strip_suffix("/documents"))
+            .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+}
+
+/// Replacement for a flat `TimeoutLayer`: same 504 behaviour, but the
+/// budget depends on the route so uploads aren't killed at 60 s.
+async fn request_timeout(req: Request, next: Next) -> Response {
+    let budget = if is_document_upload(&req) {
+        UPLOAD_TIMEOUT
+    } else {
+        PAGE_TIMEOUT
+    };
+    match tokio::time::timeout(budget, next.run(req)).await {
+        Ok(response) => response,
+        Err(_elapsed) => axum::http::StatusCode::GATEWAY_TIMEOUT.into_response(),
+    }
+}
+
 /// Panic handler for `CatchPanicLayer`. Logs the panic payload + the
 /// backtrace if `RUST_BACKTRACE` is set, then returns a generic 500.
 fn handle_panic(err: Box<dyn std::any::Any + Send + 'static>) -> axum::response::Response {
@@ -613,4 +683,47 @@ fn handle_panic(err: Box<dyn std::any::Any + Send + 'static>) -> axum::response:
         .header(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")
         .body(body)
         .unwrap_or_else(|_| axum::response::Response::new(axum::body::Body::empty()))
+}
+
+#[cfg(test)]
+mod timeout_route_tests {
+    use super::is_document_upload;
+    use axum::extract::Request;
+    use axum::http::Method;
+
+    fn req(method: Method, path: &str) -> Request {
+        Request::builder()
+            .method(method)
+            .uri(path)
+            .body(axum::body::Body::empty())
+            .unwrap()
+    }
+
+    /// The generous upload budget must apply to exactly one route —
+    /// `POST /app/transactions/{id}/documents` — and nothing that
+    /// merely looks like it. Everything else keeps the tight page
+    /// timeout that protects the server from wedged connections.
+    #[test]
+    fn upload_timeout_applies_only_to_the_upload_route() {
+        assert!(is_document_upload(&req(
+            Method::POST,
+            "/app/transactions/abc123/documents"
+        )));
+
+        // Downloads, exports and reads keep the page budget.
+        assert!(!is_document_upload(&req(
+            Method::GET,
+            "/app/transactions/abc123/documents"
+        )));
+        assert!(!is_document_upload(&req(
+            Method::POST,
+            "/app/transactions/abc123/documents/extra"
+        )));
+        assert!(!is_document_upload(&req(
+            Method::POST,
+            "/app/transactions//documents"
+        )));
+        assert!(!is_document_upload(&req(Method::POST, "/app/transactions")));
+        assert!(!is_document_upload(&req(Method::POST, "/app/documents")));
+    }
 }

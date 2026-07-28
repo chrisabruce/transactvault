@@ -18,6 +18,7 @@ pub use brokerage::{Brokerage, NewBrokerage};
 pub use checklist::{ApprovalStatus, ChecklistItem, NewChecklistItem};
 pub use comment::{Comment, NewComment};
 pub use document::Document;
+pub use document::{NewPendingUpload, PendingUpload};
 #[allow(unused_imports)]
 pub use document::NewDocument;
 pub use invitation::{Invitation, NewInvitation};

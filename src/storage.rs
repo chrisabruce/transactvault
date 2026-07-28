@@ -17,11 +17,25 @@ use tokio::io::AsyncRead;
 
 use crate::config::RustFsConfig;
 
+/// How long a presigned upload URL stays valid. This bounds when the
+/// PUT may *start* — signatures are checked at request start, so a
+/// slow transfer that began in time may run as long as the provider
+/// allows. The upload JS PUTs immediately after presigning, so ten
+/// minutes is already generous; keeping it short shrinks the window
+/// in which a leaked URL is usable at all.
+pub const PRESIGN_EXPIRY_SECS: u32 = 10 * 60;
+
 /// Clonable handle to the object store. `Bucket` is `Send + Sync` and cheap
 /// to clone; it wraps a shared reqwest client internally.
 #[derive(Clone)]
 pub struct Storage {
     bucket: Box<Bucket>,
+    /// Handle used ONLY for presigning browser-facing URLs. Same
+    /// bucket + credentials, but pointed at `S3_PUBLIC_ENDPOINT` when
+    /// configured — the SigV4 signature covers the `Host` header, so a
+    /// URL signed for the app's internal endpoint would be rejected
+    /// the moment the browser sends it to the public one.
+    presign_bucket: Box<Bucket>,
 }
 
 impl Storage {
@@ -41,7 +55,10 @@ impl Storage {
         let bucket = Bucket::new("test", region, credentials)
             .expect("bucket handle for tests")
             .with_path_style();
-        Self { bucket }
+        Self {
+            presign_bucket: bucket.clone(),
+            bucket,
+        }
     }
 
     /// Build a bucket handle pointed at the configured endpoint + region.
@@ -66,9 +83,33 @@ impl Storage {
         let mut bucket = Bucket::new(&cfg.bucket, region.clone(), credentials.clone())
             .map_err(|e| anyhow::anyhow!("bucket handle: {e}"))?
             .with_path_style();
-        bucket.set_request_timeout(Some(Duration::from_secs(30)));
+        // Per-request ceiling to the object store, sized for the
+        // slowest single request we make rather than the average:
+        // streaming uploads go up as ~8 MiB parts (one request each),
+        // `get_bytes` pulls a whole ≤100 MB object in one GET, and
+        // CompleteMultipartUpload can take a while on Ceph-based
+        // providers (Contabo) while parts are assembled. The previous
+        // 30 s proved too tight against Contabo in production.
+        bucket.set_request_timeout(Some(Duration::from_secs(300)));
 
-        let storage = Self { bucket };
+        let presign_bucket = match &cfg.public_endpoint {
+            Some(public) => Bucket::new(
+                &cfg.bucket,
+                Region::Custom {
+                    region: cfg.region.clone(),
+                    endpoint: public.clone(),
+                },
+                credentials.clone(),
+            )
+            .map_err(|e| anyhow::anyhow!("presign bucket handle: {e}"))?
+            .with_path_style(),
+            None => bucket.clone(),
+        };
+
+        let storage = Self {
+            bucket,
+            presign_bucket,
+        };
         if cfg.auto_create_bucket {
             storage
                 .ensure_bucket(&cfg.bucket, region, credentials)
@@ -167,6 +208,82 @@ impl Storage {
             .await
             .context("put_object_stream")?;
         Ok(resp.uploaded_bytes() as u64)
+    }
+
+    /// Presigned browser PUT for `key`, valid for
+    /// [`PRESIGN_EXPIRY_SECS`]. The canonical `Content-Type` AND the
+    /// exact `Content-Length` are folded into the signature, so the
+    /// URL only works for the type the server chose and the byte count
+    /// it approved. The browser always sends the true length (page
+    /// script cannot override it), which makes the store itself reject
+    /// a swapped or oversize file with a signature mismatch — the
+    /// finalize-time HEAD check stays as belt-and-braces on top.
+    pub async fn presign_put(
+        &self,
+        key: &str,
+        content_type: &str,
+        content_length: u64,
+    ) -> anyhow::Result<String> {
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_str(content_type).context("content type as header")?,
+        );
+        headers.insert(
+            http::header::CONTENT_LENGTH,
+            http::HeaderValue::from_str(&content_length.to_string())
+                .context("content length as header")?,
+        );
+        self.presign_bucket
+            .presign_put(key, PRESIGN_EXPIRY_SECS, Some(headers), None)
+            .await
+            .map_err(|e| anyhow::anyhow!("presign_put: {e}"))
+    }
+
+    /// Size of the stored object, `Ok(None)` when the key doesn't
+    /// exist. This is the post-upload enforcement half of the presigned
+    /// flow: the server never saw the bytes, so the object's true size
+    /// must come from the store, never from the client.
+    pub async fn head_size(&self, key: &str) -> anyhow::Result<Option<u64>> {
+        match self.bucket.head_object(key).await {
+            Ok((head, code)) if (200..300).contains(&code) => {
+                Ok(Some(head.content_length.unwrap_or(0).max(0) as u64))
+            }
+            Ok((_, 404)) => Ok(None),
+            Ok((_, code)) => Err(anyhow::anyhow!("head_object: HTTP {code}")),
+            Err(e) if is_not_found(&e) => Ok(None),
+            Err(e) => Err(anyhow::anyhow!("head_object: {e}")),
+        }
+    }
+
+    /// Best-effort bucket CORS so browsers can send presigned PUTs
+    /// directly. Failure is a warning, not fatal: some providers
+    /// reject the CORS API or scope keys without that permission —
+    /// there the same rule must be created once in the provider
+    /// console, and until then the upload JS falls back to the proxy
+    /// path when the direct PUT is blocked.
+    pub async fn ensure_cors(&self, app_origin: &str) {
+        use s3::serde_types::{CorsConfiguration, CorsRule};
+        let rule = CorsRule::new(
+            Some(vec!["content-type".into()]),
+            vec!["PUT".into()],
+            vec![app_origin.to_string()],
+            Some(vec!["ETag".into()]),
+            None,
+            Some(3600),
+        );
+        let config = CorsConfiguration::new(vec![rule]);
+        match self.bucket.put_bucket_cors("", &config).await {
+            Ok(_) => {
+                tracing::info!(origin = %app_origin, "bucket CORS ready for direct uploads");
+            }
+            Err(e) => tracing::warn!(
+                error = %e,
+                origin = %app_origin,
+                "could not configure bucket CORS — if direct uploads fall back to \
+                 proxying, add a PUT rule for this origin in the storage provider's console"
+            ),
+        }
     }
 
     /// Delete a single object. Missing keys are treated as success —

@@ -95,6 +95,17 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("connecting to object storage")?;
 
+    // Bucket CORS for presigned direct uploads — detached so a hanging
+    // provider can't stall boot, and best-effort because the upload JS
+    // falls back to proxying through the app if the browser's PUT is
+    // blocked.
+    {
+        let storage = storage.clone();
+        let origin = router::origin_of(&config.base_url)
+            .unwrap_or_else(|| config.base_url.trim_end_matches('/').to_string());
+        tokio::spawn(async move { storage.ensure_cors(&origin).await });
+    }
+
     let mailer = email::Mailer::new(&config.email);
     let stripe_client = stripe::Stripe::new(&config.stripe);
 

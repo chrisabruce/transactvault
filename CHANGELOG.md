@@ -8,6 +8,39 @@ the bottom-right of every page.
 
 ## July 2026
 
+### v0.6.0 — A faster, clearer upload experience
+
+- **Large uploads no longer stall at a frozen percentage.** Two hidden
+  ceilings were killing them: every request had to finish within 60
+  seconds — not nearly enough to move a big file over an ordinary
+  connection — and anything past 100 MB hit a wall the browser never
+  explained, so the progress bar just stopped. Uploads now get the
+  time they actually need, and the limits below are told to you up
+  front instead of discovered mid-transfer.
+
+- **Files now travel straight from your browser to secure storage.**
+  Previously every document streamed through our server on its way to
+  storage — the same bytes moved twice, and the progress bar could
+  only guess at the second leg. The browser now asks the server for
+  permission, sends the file directly to the storage provider, and the
+  server verifies the result before adding it to your transaction. The
+  percentage you watch is the real transfer. If anything about the
+  direct route fails, the upload quietly falls back to the old path —
+  slower, but it always works.
+
+- **The 100 MB limit is now stated, not sprung on you.** Pick a file
+  that's too big and you're told immediately — with the file's actual
+  size — before any waiting. The limit is also enforced by the storage
+  system itself, not just our code: an upload that doesn't match what
+  was approved is refused outright.
+
+- **Only transaction-relevant file types are accepted.** PDF, Word,
+  Excel, CSV, TXT, RTF, and the image formats phones and scanners
+  produce (JPG, PNG, GIF, TIFF, WEBP, HEIC). Anything else — archives,
+  web pages, executables — is refused with a message naming what IS
+  allowed. Web-page formats are excluded deliberately: they can carry
+  scripts into the document preview.
+
 ### v0.5.5 — Trial banner is broker-only
 
 - **Invited teammates no longer see the green subscription bar.** The

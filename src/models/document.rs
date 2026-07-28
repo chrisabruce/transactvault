@@ -109,3 +109,40 @@ pub struct NewDocument {
     pub signed: bool,
     pub version: i64,
 }
+
+/// Server-side ticket for a presigned direct-to-storage upload — see
+/// the `pending_upload` table in `schema.surql`. Created by the
+/// presign handler, consumed by finalize; this row (never the client)
+/// is the source of truth for where the object lives, what it's
+/// called, and who may finalize it.
+#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
+pub struct PendingUpload {
+    pub id: RecordId,
+    pub storage_key: String,
+    pub filename: String,
+    pub form_code: String,
+    pub content_type: String,
+    pub declared_size: i64,
+    pub item_id: Option<String>,
+    pub tx: RecordId,
+    pub brokerage: RecordId,
+    pub user: RecordId,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+
+/// Insert shape for `pending_upload`. `created_at` / `expires_at` come
+/// from the schema's `DEFAULT` expressions so the app never writes
+/// timestamps for this table.
+#[derive(Debug, Clone, Serialize, SurrealValue)]
+pub struct NewPendingUpload {
+    pub storage_key: String,
+    pub filename: String,
+    pub form_code: String,
+    pub content_type: String,
+    pub declared_size: i64,
+    pub item_id: Option<String>,
+    pub tx: RecordId,
+    pub brokerage: RecordId,
+    pub user: RecordId,
+}

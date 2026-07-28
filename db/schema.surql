@@ -405,6 +405,35 @@ DEFINE TABLE OVERWRITE for_item     SCHEMAFULL TYPE RELATION FROM document      
 DEFINE TABLE OVERWRITE uploaded     SCHEMAFULL TYPE RELATION FROM user           TO document;
 DEFINE TABLE OVERWRITE version_of   SCHEMAFULL TYPE RELATION FROM document       TO document;
 
+-- Server-side ticket for a presigned direct-to-storage upload. Created
+-- when the browser asks for an upload URL, consumed by the finalize
+-- call that verifies the object (HEAD: exists + within the size cap)
+-- and turns it into a `document` row. The row — never the client — is
+-- the source of truth for where the object lives and who may finalize
+-- it; rows that outlive `expires_at` are swept opportunistically and
+-- their objects deleted.
+DEFINE TABLE OVERWRITE pending_upload SCHEMAFULL;
+DEFINE FIELD OVERWRITE storage_key   ON pending_upload TYPE string ASSERT string::len($value) >= 1;
+DEFINE FIELD OVERWRITE filename      ON pending_upload TYPE string ASSERT string::len($value) >= 1;
+DEFINE FIELD OVERWRITE form_code     ON pending_upload TYPE string DEFAULT "MISC";
+DEFINE FIELD OVERWRITE content_type  ON pending_upload TYPE string;
+DEFINE FIELD OVERWRITE declared_size ON pending_upload TYPE int ASSERT $value >= 0;
+DEFINE FIELD OVERWRITE item_id       ON pending_upload TYPE option<string>;
+-- `tx`, not `transaction`: TRANSACTION is a SurrealQL keyword (BEGIN
+-- TRANSACTION) and field names shadowing keywords invite parse trouble.
+DEFINE FIELD OVERWRITE tx            ON pending_upload TYPE record<transaction>;
+DEFINE FIELD OVERWRITE brokerage     ON pending_upload TYPE record<brokerage>;
+DEFINE FIELD OVERWRITE user          ON pending_upload TYPE record<user>;
+DEFINE FIELD OVERWRITE created_at    ON pending_upload TYPE datetime DEFAULT time::now();
+-- This is the finalize-by horizon for orphan cleanup, NOT an upload
+-- timeout — the presigned URL's validity only bounds when the PUT may
+-- START (signatures are checked at request start), so a legitimate
+-- 100 MB transfer on a ~1 Mbit/s uplink can still be in flight two
+-- hours later. Six hours comfortably outlasts any real upload while
+-- keeping abandoned objects from parking for days. Computed here so
+-- the app never writes timestamps for this table.
+DEFINE FIELD OVERWRITE expires_at    ON pending_upload TYPE datetime DEFAULT time::now() + 6h;
+
 -- ----------------------------------------------------------------------------
 -- Comments — free-text notes attached to either a transaction or a
 -- single checklist_item. The polymorphic `target` field carries the
