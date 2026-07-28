@@ -8,6 +8,19 @@ the bottom-right of every page.
 
 ## July 2026
 
+### v0.6.1 — Comments are conversation, not alarms
+
+- **Leaving a comment no longer flags the transaction for review.**
+  Previously every comment moved the deal onto the other person's
+  "Needs attention" list — whoever spoke last put the ball in the
+  other side's court, so a simple question or an FYI lit up dashboards
+  across the brokerage. Now only real review events raise the flag: a
+  denied item stays with the agent until it's fixed, and an uploaded
+  document stays in the reviewer's queue until it's actually approved
+  or denied. That last part also fixes a quirk where replying to an
+  upload cleared it from your own review queue even though you hadn't
+  reviewed it yet.
+
 ### v0.6.0 — A faster, clearer upload experience
 
 - **Large uploads no longer stall at a frozen percentage.** Two hidden

@@ -60,7 +60,6 @@ async fn stat_grid_totals(
     state: &AppState,
     transactions: &[Transaction],
     role: Role,
-    brokerage_id: &RecordId,
 ) -> Result<StatTotals, AppError> {
     let total = transactions.len();
     let active_count = transactions
@@ -75,7 +74,7 @@ async fn stat_grid_totals(
         .iter()
         .filter(|t| matches!(t.status_enum(), TransactionStatus::Sold))
         .count();
-    let needs_attention = count_needs_attention(state, transactions, role, brokerage_id).await?;
+    let needs_attention = count_needs_attention(state, transactions, role).await?;
     Ok(StatTotals {
         total,
         active_count,
@@ -214,7 +213,7 @@ pub async fn list(
     // filter is applied, so the cards keep showing real counts even when
     // a filter is active. (Otherwise "Active" view would say "Total: 5"
     // which defeats the purpose of leaving the cards on the page.)
-    let totals = stat_grid_totals(&state, &transactions, user.role, &user.brokerage_id).await?;
+    let totals = stat_grid_totals(&state, &transactions, user.role).await?;
 
     let status_filter = canonical_status_filter(filters.status.as_deref().unwrap_or_default());
     if !status_filter.is_empty() && status_filter != "all" {
@@ -259,7 +258,7 @@ pub async fn list(
     let attention_on = is_truthy(&filters.attention);
     if attention_on {
         let flags =
-            needs_attention_flags(&state, &transactions, user.role, &user.brokerage_id).await?;
+            needs_attention_flags(&state, &transactions, user.role).await?;
         transactions = transactions
             .into_iter()
             .zip(flags)
@@ -558,7 +557,7 @@ pub async fn stats_fragment(
     Query(filters): Query<ListFilters>,
 ) -> Result<Html<String>, AppError> {
     let transactions = load_visible_transactions(&state, &user).await?;
-    let totals = stat_grid_totals(&state, &transactions, user.role, &user.brokerage_id).await?;
+    let totals = stat_grid_totals(&state, &transactions, user.role).await?;
     let status_filter = canonical_status_filter(filters.status.as_deref().unwrap_or_default());
     let attention_on = is_truthy(&filters.attention);
     let active_filter = derive_active_filter(&status_filter, attention_on).to_string();
@@ -615,7 +614,7 @@ async fn render_stat_html(
         has_avatar: false,
     };
     let transactions = load_visible_transactions(state, &probe).await?;
-    let totals = stat_grid_totals(state, &transactions, role, brokerage_id).await?;
+    let totals = stat_grid_totals(state, &transactions, role).await?;
     let html = StatGridFragment {
         total: totals.total,
         active_count: totals.active_count,
@@ -2435,14 +2434,20 @@ async fn needs_attention_flags(
     state: &AppState,
     transactions: &[Transaction],
     role: Role,
-    brokerage_id: &RecordId,
 ) -> Result<Vec<bool>, AppError> {
-    needs_attention_flags_with(&state.db, transactions, role, brokerage_id).await
+    needs_attention_flags_with(&state.db, transactions, role).await
 }
 
 /// Which court holds the ball for one checklist item. Computed from
-/// (approval_status, has_upload, latest comment author). Returning
-/// `None` means the item is settled or idle — neither side flags.
+/// (approval_status, has_upload) alone. Returning `None` means the
+/// item is settled or idle — neither side flags.
+///
+/// Comments are deliberately NOT a signal (client feedback, 2026-07).
+/// An earlier iteration handed the ball to the opposite side of
+/// whoever commented last, which made every casual note light up the
+/// other party's "Needs attention" list — far too spammy in practice.
+/// If a comment-driven nudge ever comes back, make it an explicit
+/// "request changes" action, not a side effect of typing in a thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Court {
     Reviewer,
@@ -2456,7 +2461,6 @@ async fn needs_attention_flags_with(
     db: &crate::state::Db,
     transactions: &[Transaction],
     role: Role,
-    brokerage_id: &RecordId,
 ) -> Result<Vec<bool>, AppError> {
     use std::collections::HashMap;
 
@@ -2471,31 +2475,7 @@ async fn needs_attention_flags_with(
     };
     let tx_ids: Vec<RecordId> = transactions.iter().map(|t| t.id.clone()).collect();
 
-    // ---- 1. Brokerage roster -------------------------------------
-    // (user_id, role-on-brokerage) — used to classify comment
-    // authors into reviewer vs agent sides. One row per member.
-    #[derive(Debug, Deserialize, SurrealValue)]
-    struct MemberRow {
-        user_id: RecordId,
-        role: String,
-    }
-    let mut mq = db
-        .query("SELECT in AS user_id, role FROM works_at WHERE out = $b")
-        .bind(("b", brokerage_id.clone()))
-        .await?;
-    let members: Vec<MemberRow> = mq.take(0).unwrap_or_default();
-    let user_court: HashMap<RecordId, Court> = members
-        .into_iter()
-        .map(|m| {
-            let court = match m.role.as_str() {
-                "broker" | "coordinator" => Court::Reviewer,
-                _ => Court::Agent,
-            };
-            (m.user_id, court)
-        })
-        .collect();
-
-    // ---- 2. Items in scope --------------------------------------
+    // ---- 1. Items in scope --------------------------------------
     // For every checklist_item under any visible tx: id, parent tx,
     // approval_status, and whether at least one document is attached.
     // Two queries: first the has_item edges (because SurrealDB won't
@@ -2534,51 +2514,16 @@ async fn needs_attention_flags_with(
         .await?;
     let items: Vec<ItemRow> = iq.take(0).unwrap_or_default();
 
-    // ---- 3. Latest comment per item (item-targeted only) --------
-    // ORDER BY created_at DESC + dedupe by target = first row per
-    // item wins. SurrealValue requires every ORDER BY column to
-    // appear in the projection; `created_at` is selected but unused.
-    #[derive(Debug, Deserialize, SurrealValue)]
-    struct CommentRow {
-        target: RecordId,
-        author: RecordId,
-        #[allow(dead_code)]
-        created_at: chrono::DateTime<chrono::Utc>,
-    }
-    let mut cq = db
-        .query(
-            "SELECT target, author, created_at FROM comment \
-             WHERE target IN $items \
-             ORDER BY created_at DESC",
-        )
-        .bind(("items", item_ids.clone()))
-        .await?;
-    let comments: Vec<CommentRow> = cq.take(0).unwrap_or_default();
-    let mut latest_author: HashMap<RecordId, RecordId> = HashMap::new();
-    for c in comments {
-        latest_author.entry(c.target).or_insert(c.author);
-    }
-
-    // ---- 4. Compute per-item ball, aggregate per tx --------------
+    // ---- 2. Compute per-item ball, aggregate per tx --------------
+    // Denials sit with the agent until fixed; a pending item with an
+    // upload sits with the reviewer until approved or denied. Comments
+    // deliberately don't move the ball — see the `Court` docs.
     let mut flagged_tx: std::collections::HashSet<RecordId> = std::collections::HashSet::new();
     for item in &items {
         let ball: Option<Court> = match item.approval_status.as_str() {
             "approved" => None,
             "denied" => Some(Court::Agent),
-            "pending" => match latest_author.get(&item.id) {
-                Some(author) => {
-                    // Ball goes to the OPPOSITE side of whoever spoke
-                    // last. Unknown authors (e.g. a removed member's
-                    // residual comment) fall through to the no-comment
-                    // branch via `flatten`.
-                    user_court.get(author).map(|c| match c {
-                        Court::Reviewer => Court::Agent,
-                        Court::Agent => Court::Reviewer,
-                    })
-                }
-                None if item.has_upload => Some(Court::Reviewer),
-                None => None,
-            },
+            "pending" if item.has_upload => Some(Court::Reviewer),
             _ => None,
         };
         if ball == Some(viewer)
@@ -2601,9 +2546,8 @@ async fn count_needs_attention(
     state: &AppState,
     transactions: &[Transaction],
     role: Role,
-    brokerage_id: &RecordId,
 ) -> Result<usize, AppError> {
-    let flags = needs_attention_flags(state, transactions, role, brokerage_id).await?;
+    let flags = needs_attention_flags(state, transactions, role).await?;
     Ok(flags.into_iter().filter(|&b| b).count())
 }
 
@@ -3172,8 +3116,7 @@ mod tests {
     #[tokio::test]
     async fn empty_input_returns_empty() {
         let db = make_db().await;
-        let b = insert_brokerage(&db).await;
-        let flags = needs_attention_flags_with(&db, &[], Role::Broker, &b)
+        let flags = needs_attention_flags_with(&db, &[], Role::Broker)
             .await
             .expect("flags");
         assert!(flags.is_empty());
@@ -3184,9 +3127,8 @@ mod tests {
     #[tokio::test]
     async fn closed_statuses_flag_on_new_activity() {
         // Even after a deal closes, late activity (a denial that the
-        // agent still needs to fix, a comment from the reviewer)
-        // should bubble up — the "ball in your court" rule isn't
-        // gated on lifecycle status.
+        // agent still needs to fix) should bubble up — the "ball in
+        // your court" rule isn't gated on lifecycle status.
         let db = make_db().await;
         let b = insert_brokerage(&db).await;
         let sold = insert_tx(&db, &b, "sold").await;
@@ -3199,7 +3141,6 @@ mod tests {
             &db,
             &[sold.clone(), canceled.clone(), withdrawn.clone()],
             Role::Agent,
-            &b,
         )
         .await
         .expect("flags");
@@ -3214,43 +3155,40 @@ mod tests {
         let b = insert_brokerage(&db).await;
         let tx = insert_tx(&db, &b, "active").await;
         insert_item(&db, &tx.id, "denied").await;
-        let flags = needs_attention_flags_with(&db, &[tx], Role::Agent, &b)
+        let flags = needs_attention_flags_with(&db, &[tx], Role::Agent)
             .await
             .expect("flags");
         assert_eq!(flags, vec![true]);
     }
 
     #[tokio::test]
-    async fn agent_view_flags_on_reviewer_item_comment() {
-        // Reviewer drops a comment on an item — that's a "ball in
-        // your court" handoff for the agent.
-        let db = make_db().await;
-        let b = insert_brokerage(&db).await;
-        let tx = insert_tx(&db, &b, "active").await;
-        let item = insert_item(&db, &tx.id, "pending").await;
-        let broker = insert_user(&db, "broker@x.com").await;
-        put_user_in_brokerage(&db, &broker, &b, "broker").await;
-        add_comment(&db, &item, &broker).await;
-        let flags = needs_attention_flags_with(&db, &[tx], Role::Agent, &b)
-            .await
-            .expect("flags");
-        assert_eq!(flags, vec![true]);
-    }
-
-    #[tokio::test]
-    async fn agent_view_ignores_self_authored_comments() {
-        // An agent's own comment shouldn't make their own row flag.
+    async fn item_comments_never_flag_either_side() {
+        // Comments are chatter, not a review signal (client feedback:
+        // the old "ball to the opposite side of the last commenter"
+        // rule flagged the other party on EVERY note — too spammy).
+        // A pending item with no upload stays quiet for both sides no
+        // matter who comments, in either order.
         let db = make_db().await;
         let b = insert_brokerage(&db).await;
         let tx = insert_tx(&db, &b, "active").await;
         let item = insert_item(&db, &tx.id, "pending").await;
         let agent = insert_user(&db, "agent@x.com").await;
         put_user_in_brokerage(&db, &agent, &b, "agent").await;
+        let broker = insert_user(&db, "broker@x.com").await;
+        put_user_in_brokerage(&db, &broker, &b, "broker").await;
+
         add_comment(&db, &item, &agent).await;
-        let flags = needs_attention_flags_with(&db, &[tx], Role::Agent, &b)
+        add_comment(&db, &item, &broker).await;
+
+        let reviewer_flags =
+            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Broker)
+                .await
+                .expect("flags");
+        assert_eq!(reviewer_flags, vec![false], "comments must not flag reviewers");
+        let agent_flags = needs_attention_flags_with(&db, &[tx], Role::Agent)
             .await
             .expect("flags");
-        assert_eq!(flags, vec![false]);
+        assert_eq!(agent_flags, vec![false], "comments must not flag agents");
     }
 
     #[tokio::test]
@@ -3269,77 +3207,14 @@ mod tests {
         add_comment(&db, &tx.id, &broker).await;
         // Neither side should be flagged by a tx-target comment.
         let agent_flags =
-            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent, &b)
+            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent)
                 .await
                 .expect("flags");
-        let reviewer_flags = needs_attention_flags_with(&db, &[tx], Role::Broker, &b)
+        let reviewer_flags = needs_attention_flags_with(&db, &[tx], Role::Broker)
             .await
             .expect("flags");
         assert_eq!(agent_flags, vec![false]);
         assert_eq!(reviewer_flags, vec![false]);
-    }
-
-    #[tokio::test]
-    async fn latest_comment_rule_handoff() {
-        // The "ball in your court" rule: only the LATEST comment on an
-        // item determines who flags.
-        //   1. Agent comments → reviewer flags.
-        //   2. Reviewer comments back → agent flags, reviewer clear.
-        let db = make_db().await;
-        let b = insert_brokerage(&db).await;
-        let tx = insert_tx(&db, &b, "active").await;
-        let item = insert_item(&db, &tx.id, "pending").await;
-        let agent = insert_user(&db, "agent@x.com").await;
-        put_user_in_brokerage(&db, &agent, &b, "agent").await;
-        let broker = insert_user(&db, "broker@x.com").await;
-        put_user_in_brokerage(&db, &broker, &b, "broker").await;
-
-        // Step 1: agent posts first — reviewer should flag.
-        add_comment(&db, &item, &agent).await;
-        let reviewer_flags =
-            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Broker, &b)
-                .await
-                .expect("flags");
-        assert_eq!(
-            reviewer_flags,
-            vec![true],
-            "reviewer should flag after agent posts"
-        );
-        let agent_flags =
-            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent, &b)
-                .await
-                .expect("flags");
-        assert_eq!(
-            agent_flags,
-            vec![false],
-            "agent should not flag on own comment"
-        );
-
-        // SurrealDB's `time::now()` resolves at insert time; insert a
-        // small delay so the reviewer's comment sorts strictly later
-        // than the agent's. (SurrealKV's mem engine has microsecond
-        // resolution; a 10ms sleep is generous.)
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-        // Step 2: reviewer replies — handoff completes.
-        add_comment(&db, &item, &broker).await;
-        let reviewer_flags =
-            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Broker, &b)
-                .await
-                .expect("flags");
-        assert_eq!(
-            reviewer_flags,
-            vec![false],
-            "reviewer should clear after replying"
-        );
-        let agent_flags = needs_attention_flags_with(&db, &[tx], Role::Agent, &b)
-            .await
-            .expect("flags");
-        assert_eq!(
-            agent_flags,
-            vec![true],
-            "agent should flag after reviewer replies"
-        );
     }
 
     // ---- reviewer view ----
@@ -3351,7 +3226,7 @@ mod tests {
         let tx = insert_tx(&db, &b, "active").await;
         let item = insert_item(&db, &tx.id, "pending").await;
         attach_document(&db, &item).await;
-        let flags = needs_attention_flags_with(&db, &[tx], Role::Broker, &b)
+        let flags = needs_attention_flags_with(&db, &[tx], Role::Broker)
             .await
             .expect("flags");
         assert_eq!(flags, vec![true]);
@@ -3363,25 +3238,10 @@ mod tests {
         let b = insert_brokerage(&db).await;
         let tx = insert_tx(&db, &b, "active").await;
         insert_item(&db, &tx.id, "pending").await; // no document attached
-        let flags = needs_attention_flags_with(&db, &[tx], Role::Broker, &b)
+        let flags = needs_attention_flags_with(&db, &[tx], Role::Broker)
             .await
             .expect("flags");
         assert_eq!(flags, vec![false]);
-    }
-
-    #[tokio::test]
-    async fn reviewer_view_flags_on_agent_comment_on_item() {
-        let db = make_db().await;
-        let b = insert_brokerage(&db).await;
-        let tx = insert_tx(&db, &b, "active").await;
-        let item = insert_item(&db, &tx.id, "pending").await;
-        let agent = insert_user(&db, "agent@x.com").await;
-        put_user_in_brokerage(&db, &agent, &b, "agent").await;
-        add_comment(&db, &item, &agent).await;
-        let flags = needs_attention_flags_with(&db, &[tx], Role::Broker, &b)
-            .await
-            .expect("flags");
-        assert_eq!(flags, vec![true]);
     }
 
     #[tokio::test]
@@ -3390,7 +3250,7 @@ mod tests {
         let b = insert_brokerage(&db).await;
         let tx = insert_tx(&db, &b, "active").await;
         insert_item(&db, &tx.id, "approved").await;
-        let flags = needs_attention_flags_with(&db, &[tx], Role::Broker, &b)
+        let flags = needs_attention_flags_with(&db, &[tx], Role::Broker)
             .await
             .expect("flags");
         assert_eq!(flags, vec![false]);
@@ -3398,10 +3258,10 @@ mod tests {
 
     // ---- approved-item-skip rule -------------------------------------
 
-    /// Approving an item must clear its comment-driven attention signal
-    /// for BOTH sides. Setup: pending item with an unanswered comment
-    /// from the agent → reviewer flags. Flip the item to approved →
-    /// neither side flags.
+    /// Approving an item must clear its attention signal for BOTH
+    /// sides. Setup: pending item with an upload (plus an inert agent
+    /// comment) → reviewer flags. Flip the item to approved → neither
+    /// side flags.
     #[tokio::test]
     async fn approved_item_clears_attention_for_both_sides() {
         let db = make_db().await;
@@ -3413,10 +3273,10 @@ mod tests {
         attach_document(&db, &item).await;
         add_comment(&db, &item, &agent).await;
 
-        // Baseline: reviewer flags because pending+upload AND because
-        // an agent comment is the latest on an unsettled item.
+        // Baseline: reviewer flags because of pending+upload (the
+        // comment contributes nothing).
         let reviewer_pre =
-            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Broker, &b)
+            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Broker)
                 .await
                 .expect("flags");
         assert_eq!(reviewer_pre, vec![true]);
@@ -3427,24 +3287,23 @@ mod tests {
             .await
             .expect("approve");
 
-        // Reviewer no longer flags — form signal off + comment-skip rule.
+        // Reviewer no longer flags — the form signal is off.
         let reviewer_post =
-            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Broker, &b)
+            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Broker)
                 .await
                 .expect("flags");
         assert_eq!(reviewer_post, vec![false]);
 
-        // Agent also doesn't flag — the comment was their own to start
-        // with, and the approval kills any residual signal.
-        let agent_post = needs_attention_flags_with(&db, &[tx], Role::Agent, &b)
+        // Agent also doesn't flag — approval settles the item.
+        let agent_post = needs_attention_flags_with(&db, &[tx], Role::Agent)
             .await
             .expect("flags");
         assert_eq!(agent_post, vec![false]);
     }
 
     /// Reviewer-authored item comment on an APPROVED item must NOT
-    /// flag the agent. The handoff rule normally fires here (latest
-    /// comment is from the other side) but approval supersedes.
+    /// flag the agent — approved items stay quiet no matter what's
+    /// said in their threads.
     #[tokio::test]
     async fn approved_item_ignores_other_side_comment_for_agent_view() {
         let db = make_db().await;
@@ -3457,11 +3316,11 @@ mod tests {
         add_comment(&db, &item, &broker).await;
 
         let agent_flags =
-            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent, &b)
+            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent)
                 .await
                 .expect("flags");
         assert_eq!(agent_flags, vec![false]);
-        let reviewer_flags = needs_attention_flags_with(&db, &[tx], Role::Broker, &b)
+        let reviewer_flags = needs_attention_flags_with(&db, &[tx], Role::Broker)
             .await
             .expect("flags");
         assert_eq!(reviewer_flags, vec![false]);
@@ -3492,11 +3351,11 @@ mod tests {
         add_comment(&db, &tx.id, &broker).await;
 
         let agent_flags =
-            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent, &b)
+            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent)
                 .await
                 .expect("flags");
         assert_eq!(agent_flags, vec![false]);
-        let reviewer_flags = needs_attention_flags_with(&db, &[tx], Role::Broker, &b)
+        let reviewer_flags = needs_attention_flags_with(&db, &[tx], Role::Broker)
             .await
             .expect("flags");
         assert_eq!(reviewer_flags, vec![false]);
@@ -3522,7 +3381,7 @@ mod tests {
 
         // Agent sees the flag because of the denied item.
         let agent_flags =
-            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent, &b)
+            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent)
                 .await
                 .expect("flags");
         assert_eq!(agent_flags, vec![true]);
@@ -3534,11 +3393,11 @@ mod tests {
             .await
             .expect("approve denied");
         let agent_flags =
-            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent, &b)
+            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent)
                 .await
                 .expect("flags");
         assert_eq!(agent_flags, vec![false]);
-        let reviewer_flags = needs_attention_flags_with(&db, &[tx], Role::Broker, &b)
+        let reviewer_flags = needs_attention_flags_with(&db, &[tx], Role::Broker)
             .await
             .expect("flags");
         assert_eq!(reviewer_flags, vec![false]);
@@ -3546,13 +3405,13 @@ mod tests {
 
     // ---- single-court override ---------------------------------------
 
-    /// The "ball moves" case: pending item with an upload would
-    /// normally flag the reviewer via the form signal, BUT once the
-    /// reviewer leaves a comment ("looks wrong, please re-upload")
-    /// the ball belongs in the agent's court. Reviewer flag clears;
-    /// agent flag fires. At most one side ever flags an item.
+    /// A pending item with an upload flags the reviewer until they
+    /// approve or deny — a comment ("looks wrong, please re-upload")
+    /// does NOT stand in for that decision. The old behavior moved the
+    /// ball to the agent here, which both spammed the agent and made
+    /// the reviewer's queue lie: the upload was still unreviewed.
     #[tokio::test]
-    async fn reviewer_comment_on_pending_upload_moves_ball_to_agent() {
+    async fn reviewer_comment_does_not_clear_pending_upload_flag() {
         let db = make_db().await;
         let b = insert_brokerage(&db).await;
         let broker = insert_user(&db, "broker@x.com").await;
@@ -3563,11 +3422,11 @@ mod tests {
 
         // Before the comment: reviewer flagged (form signal alone).
         let reviewer_pre =
-            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Broker, &b)
+            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Broker)
                 .await
                 .expect("flags");
         assert_eq!(reviewer_pre, vec![true]);
-        let agent_pre = needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent, &b)
+        let agent_pre = needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent)
             .await
             .expect("flags");
         assert_eq!(agent_pre, vec![false]);
@@ -3575,22 +3434,22 @@ mod tests {
         // Reviewer comments on the item.
         add_comment(&db, &item, &broker).await;
 
-        // After: ball has moved. Reviewer no longer flagged; agent is.
+        // After: nothing moves. The upload still awaits an actual
+        // approve/deny, and the agent isn't nagged over a note.
         let reviewer_post =
-            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Broker, &b)
+            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Broker)
                 .await
                 .expect("flags");
-        assert_eq!(reviewer_post, vec![false]);
+        assert_eq!(reviewer_post, vec![true]);
         let agent_post =
-            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent, &b)
+            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent)
                 .await
                 .expect("flags");
-        assert_eq!(agent_post, vec![true]);
+        assert_eq!(agent_post, vec![false]);
     }
 
-    /// Agent self-comment on a pending+upload item shouldn't move the
-    /// ball — it's still in the reviewer's court. Latest comment is
-    /// from the agent → opposite-of-agent = reviewer.
+    /// Agent self-comment on a pending+upload item leaves the flag
+    /// where the upload put it: with the reviewer.
     #[tokio::test]
     async fn agent_self_comment_on_pending_upload_keeps_ball_with_reviewer() {
         let db = make_db().await;
@@ -3602,20 +3461,20 @@ mod tests {
         attach_document(&db, &item).await;
         add_comment(&db, &item, &agent).await;
 
-        let reviewer = needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Broker, &b)
+        let reviewer = needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Broker)
             .await
             .expect("flags");
         assert_eq!(reviewer, vec![true]);
         let agent_flags =
-            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent, &b)
+            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent)
                 .await
                 .expect("flags");
         assert_eq!(agent_flags, vec![false]);
     }
 
-    /// At no point does a single item flag both sides. This is the
-    /// invariant the override rule guarantees — sweep every plausible
-    /// pending-item shape and confirm the two role views never both
+    /// At no point does a single item flag both sides — sweep every
+    /// plausible pending-item shape (with comments thrown in to prove
+    /// they're inert) and confirm the two role views never both
     /// return true on the same row.
     #[tokio::test]
     async fn no_item_ever_flags_both_sides_simultaneously() {
@@ -3647,10 +3506,10 @@ mod tests {
         add_comment(&db, &i4, &broker).await; // pending no-upload + reviewer
 
         let txs = vec![tx1, tx2, tx3, tx4];
-        let reviewer = needs_attention_flags_with(&db, &txs, Role::Broker, &b)
+        let reviewer = needs_attention_flags_with(&db, &txs, Role::Broker)
             .await
             .expect("flags");
-        let agent_flags = needs_attention_flags_with(&db, &txs, Role::Agent, &b)
+        let agent_flags = needs_attention_flags_with(&db, &txs, Role::Agent)
             .await
             .expect("flags");
         for (i, (r, a)) in reviewer.iter().zip(agent_flags.iter()).enumerate() {
@@ -3668,11 +3527,11 @@ mod tests {
         let tx = insert_tx(&db, &b, "active").await;
         // No items inserted.
         let agent_flags =
-            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent, &b)
+            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent)
                 .await
                 .expect("flags");
         assert_eq!(agent_flags, vec![false]);
-        let reviewer_flags = needs_attention_flags_with(&db, &[tx], Role::Broker, &b)
+        let reviewer_flags = needs_attention_flags_with(&db, &[tx], Role::Broker)
             .await
             .expect("flags");
         assert_eq!(reviewer_flags, vec![false]);
