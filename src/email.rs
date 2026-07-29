@@ -343,6 +343,52 @@ impl Mailer {
         self.send(to, "Welcome to TransactVault", html, text).await;
     }
 
+    /// Tell the broker who queued a background export that the
+    /// archives are built and ready to download. Builds can run for
+    /// hours on a big brokerage, so this is the primary "it's done"
+    /// signal — the Exports page is the fallback.
+    pub async fn send_export_ready(
+        &self,
+        to: &str,
+        name: &str,
+        link: &str,
+        chunks: usize,
+        total_size: &str,
+    ) {
+        let summary = match chunks {
+            0 => "no documents to archive — the export finished empty".to_string(),
+            1 => format!("1 archive ({total_size})"),
+            n => format!("{n} archives ({total_size} total)"),
+        };
+        let html = format!(
+            "<!doctype html><html><body style=\"font-family:system-ui,sans-serif;color:#0f172a\">\
+               <p>Hi {name},</p>\
+               <p>Your brokerage export is ready: {summary}.</p>\
+               <p><a href=\"{link}\" \
+                     style=\"background:#0f766e;color:#fff;padding:10px 18px;\
+                            border-radius:8px;text-decoration:none;display:inline-block\">Open the Exports page</a></p>\
+               <p>Downloads are served straight from storage, so interrupted \
+                  transfers resume where they left off. The archives stay \
+                  available for 7 days, then they're removed automatically.</p>\
+               <p>— The TransactVault team</p>\
+             </body></html>",
+            name = html_escape(name),
+            summary = html_escape(&summary),
+            link = link,
+        );
+        let text = format!(
+            "Hi {name},\n\n\
+             Your brokerage export is ready: {summary}.\n\n\
+             Download it here: {link}\n\n\
+             Downloads are served straight from storage, so interrupted transfers \
+             resume where they left off. The archives stay available for 7 days, \
+             then they're removed automatically.\n\n\
+             — The TransactVault team\n",
+        );
+        self.send(to, "Your brokerage export is ready", html, text)
+            .await;
+    }
+
     /// Notify the invitee that somebody added them to a brokerage.
     ///
     /// `inviter_email` is wired into the message's `Reply-To` so that

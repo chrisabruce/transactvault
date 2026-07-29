@@ -240,6 +240,66 @@ impl Storage {
             .map_err(|e| anyhow::anyhow!("presign_put: {e}"))
     }
 
+    /// Presigned browser GET for `key`, valid for `expiry_secs`.
+    ///
+    /// This is how big export artifacts leave the system: the app hands
+    /// out a signed URL and the store serves the bytes itself — with
+    /// native `Range` support, so the browser (or aria2/curl) can
+    /// resume an interrupted multi-GB download, and none of the
+    /// transfer occupies an app connection.
+    ///
+    /// `download_name` rides in the signed
+    /// `response-content-disposition` query parameter so the store
+    /// serves the object as an attachment with a human filename instead
+    /// of the raw key basename. Callers pass server-built names only —
+    /// the value is embedded in a header by the store, so it must never
+    /// carry user-typed text with quotes/control characters.
+    pub async fn presign_get(
+        &self,
+        key: &str,
+        expiry_secs: u32,
+        download_name: Option<&str>,
+    ) -> anyhow::Result<String> {
+        let custom_queries = download_name.map(|name| {
+            std::collections::HashMap::from([(
+                "response-content-disposition".to_string(),
+                format!("attachment; filename=\"{name}\""),
+            )])
+        });
+        self.presign_bucket
+            .presign_get(key, expiry_secs, custom_queries)
+            .await
+            .map_err(|e| anyhow::anyhow!("presign_get: {e}"))
+    }
+
+    /// Delete every object under `prefix` (paged listing, one
+    /// `DeleteObject` per key — the portable lowest common denominator
+    /// across S3 implementations). Returns how many objects were
+    /// deleted; per-object failures are logged and skipped so a later
+    /// sweep can retry them.
+    ///
+    /// Callers own prefix hygiene: pass the full `exports/<b>/<job>/`
+    /// style prefix INCLUDING the trailing slash, or sibling keys that
+    /// merely share the string prefix would be swept up too.
+    pub async fn delete_prefix(&self, prefix: &str) -> anyhow::Result<usize> {
+        let mut deleted = 0usize;
+        let pages = self
+            .bucket
+            .list(prefix.to_string(), None)
+            .await
+            .map_err(|e| anyhow::anyhow!("list {prefix}: {e}"))?;
+        for page in pages {
+            for obj in page.contents {
+                match self.bucket.delete_object(&obj.key).await {
+                    Ok(_) => deleted += 1,
+                    Err(e) if is_not_found(&e) => {}
+                    Err(e) => tracing::warn!(key = %obj.key, error = %e, "prefix delete failed"),
+                }
+            }
+        }
+        Ok(deleted)
+    }
+
     /// Size of the stored object, `Ok(None)` when the key doesn't
     /// exist. This is the post-upload enforcement half of the presigned
     /// flow: the server never saw the bytes, so the object's true size

@@ -257,8 +257,7 @@ pub async fn list(
 
     let attention_on = is_truthy(&filters.attention);
     if attention_on {
-        let flags =
-            needs_attention_flags(&state, &transactions, user.role).await?;
+        let flags = needs_attention_flags(&state, &transactions, user.role).await?;
         transactions = transactions
             .into_iter()
             .zip(flags)
@@ -581,7 +580,10 @@ struct StreamMembership {
     role: String,
 }
 
-async fn current_membership(db: &crate::state::Db, user_id: &RecordId) -> Option<(RecordId, Role)> {
+pub(crate) async fn current_membership(
+    db: &crate::state::Db,
+    user_id: &RecordId,
+) -> Option<(RecordId, Role)> {
     let mut q = db
         .query("SELECT out AS brokerage, role FROM works_at WHERE in = $u LIMIT 1")
         .bind(("u", user_id.clone()))
@@ -628,27 +630,11 @@ async fn render_stat_html(
 }
 
 /// Format an HTML fragment as a Datastar `datastar-patch-elements` SSE
-/// event. Datastar joins the `elements`-prefixed data lines back into a
-/// document and morphs the element with the matching `id` in place —
-/// for us that's `<section id="stat-grid">`.
-///
-/// EVERY line of the payload must carry the `elements ` prefix:
-/// Datastar's SSE parser splits each `data:` line at its first space
-/// and buckets the remainder under that first word. The previous
-/// implementation prefixed only the first line, so a multi-line
-/// fragment collapsed to its opening tag and the "patch" morphed the
-/// stat grid into an empty section — the "live updates not working"
-/// bug. The regression test on `/app/stats/stream` now asserts the
-/// per-line prefix.
+/// event — for us that's `<section id="stat-grid">`. Shared helper:
+/// see [`crate::controllers::common::patch_elements_event`] for the
+/// per-line-prefix rationale (and the bug that earned it).
 fn stat_patch_event(html: &str) -> SseEvent {
-    let data = html
-        .lines()
-        .map(|line| format!("elements {line}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    SseEvent::default()
-        .event("datastar-patch-elements")
-        .data(data)
+    crate::controllers::common::patch_elements_event(html)
 }
 
 /// Bump the client's `txrev` signal — the "your rows are stale" nudge.
@@ -3184,7 +3170,11 @@ mod tests {
             needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Broker)
                 .await
                 .expect("flags");
-        assert_eq!(reviewer_flags, vec![false], "comments must not flag reviewers");
+        assert_eq!(
+            reviewer_flags,
+            vec![false],
+            "comments must not flag reviewers"
+        );
         let agent_flags = needs_attention_flags_with(&db, &[tx], Role::Agent)
             .await
             .expect("flags");
@@ -3206,10 +3196,9 @@ mod tests {
         // Reviewer leaves a note on the transaction itself.
         add_comment(&db, &tx.id, &broker).await;
         // Neither side should be flagged by a tx-target comment.
-        let agent_flags =
-            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent)
-                .await
-                .expect("flags");
+        let agent_flags = needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent)
+            .await
+            .expect("flags");
         let reviewer_flags = needs_attention_flags_with(&db, &[tx], Role::Broker)
             .await
             .expect("flags");
@@ -3275,10 +3264,9 @@ mod tests {
 
         // Baseline: reviewer flags because of pending+upload (the
         // comment contributes nothing).
-        let reviewer_pre =
-            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Broker)
-                .await
-                .expect("flags");
+        let reviewer_pre = needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Broker)
+            .await
+            .expect("flags");
         assert_eq!(reviewer_pre, vec![true]);
 
         // Approve the item. (Upload precondition satisfied above.)
@@ -3315,10 +3303,9 @@ mod tests {
         // Reviewer comments AFTER approval — e.g., a "looks good" note.
         add_comment(&db, &item, &broker).await;
 
-        let agent_flags =
-            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent)
-                .await
-                .expect("flags");
+        let agent_flags = needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent)
+            .await
+            .expect("flags");
         assert_eq!(agent_flags, vec![false]);
         let reviewer_flags = needs_attention_flags_with(&db, &[tx], Role::Broker)
             .await
@@ -3350,10 +3337,9 @@ mod tests {
         add_comment(&db, &tx.id, &agent).await;
         add_comment(&db, &tx.id, &broker).await;
 
-        let agent_flags =
-            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent)
-                .await
-                .expect("flags");
+        let agent_flags = needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent)
+            .await
+            .expect("flags");
         assert_eq!(agent_flags, vec![false]);
         let reviewer_flags = needs_attention_flags_with(&db, &[tx], Role::Broker)
             .await
@@ -3380,10 +3366,9 @@ mod tests {
         add_comment(&db, &approved_item, &broker).await;
 
         // Agent sees the flag because of the denied item.
-        let agent_flags =
-            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent)
-                .await
-                .expect("flags");
+        let agent_flags = needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent)
+            .await
+            .expect("flags");
         assert_eq!(agent_flags, vec![true]);
 
         // Promote the denied item to approved → no more flags for
@@ -3392,10 +3377,9 @@ mod tests {
             .bind(("i", denied_item))
             .await
             .expect("approve denied");
-        let agent_flags =
-            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent)
-                .await
-                .expect("flags");
+        let agent_flags = needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent)
+            .await
+            .expect("flags");
         assert_eq!(agent_flags, vec![false]);
         let reviewer_flags = needs_attention_flags_with(&db, &[tx], Role::Broker)
             .await
@@ -3421,10 +3405,9 @@ mod tests {
         attach_document(&db, &item).await;
 
         // Before the comment: reviewer flagged (form signal alone).
-        let reviewer_pre =
-            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Broker)
-                .await
-                .expect("flags");
+        let reviewer_pre = needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Broker)
+            .await
+            .expect("flags");
         assert_eq!(reviewer_pre, vec![true]);
         let agent_pre = needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent)
             .await
@@ -3441,10 +3424,9 @@ mod tests {
                 .await
                 .expect("flags");
         assert_eq!(reviewer_post, vec![true]);
-        let agent_post =
-            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent)
-                .await
-                .expect("flags");
+        let agent_post = needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent)
+            .await
+            .expect("flags");
         assert_eq!(agent_post, vec![false]);
     }
 
@@ -3465,10 +3447,9 @@ mod tests {
             .await
             .expect("flags");
         assert_eq!(reviewer, vec![true]);
-        let agent_flags =
-            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent)
-                .await
-                .expect("flags");
+        let agent_flags = needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent)
+            .await
+            .expect("flags");
         assert_eq!(agent_flags, vec![false]);
     }
 
@@ -3526,10 +3507,9 @@ mod tests {
         let b = insert_brokerage(&db).await;
         let tx = insert_tx(&db, &b, "active").await;
         // No items inserted.
-        let agent_flags =
-            needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent)
-                .await
-                .expect("flags");
+        let agent_flags = needs_attention_flags_with(&db, std::slice::from_ref(&tx), Role::Agent)
+            .await
+            .expect("flags");
         assert_eq!(agent_flags, vec![false]);
         let reviewer_flags = needs_attention_flags_with(&db, &[tx], Role::Broker)
             .await

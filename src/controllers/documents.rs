@@ -1078,7 +1078,7 @@ fn property_folder(tx: &Transaction) -> String {
 /// upload.
 const SEGMENT_MAX: usize = 120;
 
-fn sanitize_path_segment(s: &str) -> String {
+pub(crate) fn sanitize_path_segment(s: &str) -> String {
     // `is_unsafe_text_char` widens the old `is_control` test to the
     // Unicode bidi overrides and zero-width characters. `is_control` is
     // category Cc only, so U+202E RIGHT-TO-LEFT OVERRIDE used to survive
@@ -1112,7 +1112,7 @@ fn sanitize_path_segment(s: &str) -> String {
 /// `Property:` entry, a fabricated agent section. A compliance auditor
 /// reads that file as a statement of what the archive contains, which is
 /// exactly why forging lines in it matters even though nothing executes.
-fn manifest_field(s: &str) -> String {
+pub(crate) fn manifest_field(s: &str) -> String {
     crate::sanitize::scrub(s)
 }
 
@@ -1174,8 +1174,9 @@ fn enforce_export_size(sizes: impl Iterator<Item = i64>) -> Result<(), AppError>
     if total > EXPORT_MAX_BYTES {
         return Err(AppError::invalid(format!(
             "This export would be about {} MB — more than the {} MB limit for a \
-             single archive. Export individual transactions instead (each \
-             transaction page has its own Export ZIP button).",
+             single on-the-spot archive. Use Team → Export center to build it in \
+             the background instead: it splits the archive into per-agent chunks \
+             with no size limit and emails you when the downloads are ready.",
             total / (1024 * 1024),
             EXPORT_MAX_BYTES / (1024 * 1024),
         )));
@@ -1278,157 +1279,9 @@ pub async fn export_member_zip(
     zip_response(body, &format!("transactvault-{}-transactions", meta.name))
 }
 
-/// Download a ZIP of every document in the whole brokerage, organized
-/// alphabetically by agent: `<Agent>/<Property>/<FORM CODE>/<file>`.
-/// Transactions with no owner land under `Unassigned/`. Broker only.
-pub async fn export_brokerage_zip(
-    State(state): State<AppState>,
-    user: CurrentUser,
-) -> Result<Response, AppError> {
-    if !user.role.is_broker() {
-        return Err(AppError::Forbidden);
-    }
-    allow_export(&state, &user)?;
-
-    #[derive(serde::Deserialize, SurrealValue)]
-    struct BrokerageMeta {
-        name: String,
-    }
-    let mut bq = state
-        .db
-        .query("SELECT name FROM ONLY $b")
-        .bind(("b", user.brokerage_id.clone()))
-        .await?;
-    let brokerage: Option<BrokerageMeta> = bq.take(0)?;
-    let brokerage_name = brokerage
-        .map(|b| b.name)
-        .unwrap_or_else(|| "brokerage".into());
-
-    let mut tq = state
-        .db
-        .query("SELECT * FROM $b->has_transaction->transaction ORDER BY property_address ASC")
-        .bind(("b", user.brokerage_id.clone()))
-        .await?;
-    let txs: Vec<Transaction> = tq.take(0).unwrap_or_default();
-    let tx_ids: Vec<RecordId> = txs.iter().map(|t| t.id.clone()).collect();
-
-    // Owner per transaction (one query), then owner display names.
-    #[derive(serde::Deserialize, SurrealValue)]
-    struct OwnsEdge {
-        tx: RecordId,
-        owner: RecordId,
-    }
-    let owner_by_tx: std::collections::HashMap<RecordId, RecordId> = if tx_ids.is_empty() {
-        Default::default()
-    } else {
-        let mut oq = state
-            .db
-            .query("SELECT out AS tx, in AS owner FROM owns WHERE out IN $ids")
-            .bind(("ids", tx_ids.clone()))
-            .await?;
-        let edges: Vec<OwnsEdge> = oq.take(0).unwrap_or_default();
-        edges.into_iter().map(|e| (e.tx, e.owner)).collect()
-    };
-    #[derive(serde::Deserialize, SurrealValue)]
-    struct UserRow {
-        id: RecordId,
-        name: String,
-    }
-    let owner_ids: Vec<RecordId> = {
-        let mut seen: Vec<RecordId> = Vec::new();
-        for o in owner_by_tx.values() {
-            if !seen.contains(o) {
-                seen.push(o.clone());
-            }
-        }
-        seen
-    };
-    let names: std::collections::HashMap<RecordId, String> = if owner_ids.is_empty() {
-        Default::default()
-    } else {
-        let mut nq = state
-            .db
-            .query("SELECT id, name FROM user WHERE id IN $ids")
-            .bind(("ids", owner_ids))
-            .await?;
-        let rows: Vec<UserRow> = nq.take(0).unwrap_or_default();
-        rows.into_iter().map(|r| (r.id, r.name)).collect()
-    };
-
-    let docs_by_tx = load_docs_for_transactions(&state, &txs).await?;
-
-    // Alphabetical by agent (case-insensitive), "Unassigned" last, then
-    // by address — the order the client reads the archive in.
-    let mut ordered: Vec<(String, &Transaction)> = txs
-        .iter()
-        .map(|tx| {
-            let agent = owner_by_tx
-                .get(&tx.id)
-                .and_then(|o| names.get(o))
-                .cloned()
-                .unwrap_or_else(|| "Unassigned".to_string());
-            (agent, tx)
-        })
-        .collect();
-    ordered.sort_by(|a, b| {
-        let a_unassigned = a.0 == "Unassigned";
-        let b_unassigned = b.0 == "Unassigned";
-        a_unassigned
-            .cmp(&b_unassigned)
-            .then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase()))
-            .then_with(|| a.1.property_address.cmp(&b.1.property_address))
-    });
-
-    let mut used_folders: Vec<String> = Vec::new();
-    let mut entries: Vec<ArchiveItem> = Vec::new();
-    let mut manifest = format!(
-        "TransactVault brokerage export\nBrokerage: {}\nGenerated: {}\nTransactions: {}\n\n",
-        manifest_field(&brokerage_name),
-        chrono::Utc::now().to_rfc3339(),
-        ordered.len(),
-    );
-    let mut last_agent = String::new();
-    for (agent, tx) in &ordered {
-        if *agent != last_agent {
-            manifest.push_str(&format!("\n== {} ==\n", manifest_field(agent)));
-            last_agent = agent.clone();
-        }
-        let agent_folder = sanitize_path_segment(agent);
-        let folder = unique_folder(
-            &format!("{agent_folder}/{}", export_property_folder(tx)),
-            &mut used_folders,
-        );
-        let docs = docs_by_tx.get(&tx.id).cloned().unwrap_or_default();
-        manifest.push_str(&format!(
-            "{folder}/ — {} ({} · {} document(s))\n",
-            manifest_field(&tx.property_address),
-            tx.status,
-            docs.len(),
-        ));
-        for doc in docs {
-            let path = format!(
-                "{folder}/{}/{}",
-                sanitize_path_segment(&doc.form_code),
-                zip_safe_filename(&doc)
-            );
-            entries.push(ArchiveItem {
-                path,
-                storage_key: doc.storage_key.clone(),
-                size_bytes: doc.size_bytes,
-            });
-        }
-    }
-
-    let body = stream_archive(&state.storage, manifest, entries).await?;
-    zip_response(
-        body,
-        &format!("transactvault-{brokerage_name}-all-transactions"),
-    )
-}
-
 /// All documents for a set of transactions in two round trips (edges,
 /// then rows), bucketed by transaction id.
-async fn load_docs_for_transactions(
+pub(crate) async fn load_docs_for_transactions(
     state: &AppState,
     txs: &[Transaction],
 ) -> Result<std::collections::HashMap<RecordId, Vec<Document>>, AppError> {
@@ -1481,7 +1334,7 @@ async fn load_docs_for_transactions(
 
 /// Human-readable per-transaction folder: the street address when
 /// present, else the APN/record-key folder used by the storage layout.
-fn export_property_folder(tx: &Transaction) -> String {
+pub(crate) fn export_property_folder(tx: &Transaction) -> String {
     let addr = sanitize_path_segment(tx.property_address.trim());
     if addr.is_empty() {
         property_folder(tx)
@@ -1492,7 +1345,7 @@ fn export_property_folder(tx: &Transaction) -> String {
 
 /// Dedupe a folder path against the ones already handed out — a second
 /// "123_Main_St" becomes "123_Main_St~2".
-fn unique_folder(base: &str, used: &mut Vec<String>) -> String {
+pub(crate) fn unique_folder(base: &str, used: &mut Vec<String>) -> String {
     let mut candidate = base.to_string();
     let mut n = 1;
     while used.iter().any(|u| u == &candidate) {
@@ -1516,7 +1369,10 @@ fn unique_folder(base: &str, used: &mut Vec<String>) -> String {
 ///
 /// The counter goes before the extension (`Q1_report~2.pdf`) so the file
 /// still opens in whatever application owns that type.
-fn unique_entry_path(path: &str, used: &mut std::collections::HashSet<String>) -> String {
+pub(crate) fn unique_entry_path(
+    path: &str,
+    used: &mut std::collections::HashSet<String>,
+) -> String {
     if used.insert(path.to_string()) {
         return path.to_string();
     }
@@ -1687,7 +1543,7 @@ fn zip_response(body: Body, stem: &str) -> Result<Response, AppError> {
 /// (applied at upload) neutralizes separators but not dot segments —
 /// a file literally named `..` would otherwise become a traversing ZIP
 /// entry. Ordinary filenames pass through unchanged.
-fn zip_safe_filename(doc: &Document) -> String {
+pub(crate) fn zip_safe_filename(doc: &Document) -> String {
     let name = if doc.version > 1 {
         let (stem, ext) = split_filename(&doc.filename);
         if ext.is_empty() {
@@ -1805,8 +1661,8 @@ async fn create_versioned_document(
 #[cfg(test)]
 mod path_safety_tests {
     use super::{
-        canonical_content_type, manifest_field, preview_csp, sanitize_path_segment,
-        split_filename, unique_entry_path,
+        canonical_content_type, manifest_field, preview_csp, sanitize_path_segment, split_filename,
+        unique_entry_path,
     };
 
     /// The upload allowlist is the only gate between arbitrary client
@@ -1823,9 +1679,7 @@ mod path_safety_tests {
         assert_eq!(canonical_content_type("photo.HEIC"), Some("image/heic"));
         assert_eq!(
             canonical_content_type("addendum.docx"),
-            Some(
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            )
+            Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
         );
 
         for rejected in [

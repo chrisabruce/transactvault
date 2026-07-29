@@ -1,0 +1,86 @@
+{# The live jobs section. Root id `exports-live` is the Datastar SSE
+   morph target — the whole section re-renders whenever the worker
+   finishes a chunk or a job changes state. Keep everything about a
+   job's display INSIDE this element or live updates will miss it. #}
+<section id="exports-live" aria-label="Export history" aria-live="polite">
+    {% if jobs.is_empty() %}
+        <section class="panel">
+            <p class="meta">No exports yet. Start one above — it builds in the background and shows up here.</p>
+        </section>
+    {% endif %}
+    {% for job in jobs %}
+        <article class="panel export-job {{ job.status_slug }}" aria-label="Export requested {{ job.created_label }}">
+            <header class="page-title">
+                <section>
+                    <h2>Requested {{ job.created_label }}</h2>
+                    <p class="meta">
+                        {{ job.progress }}
+                        {% match job.expires_label %}{% when Some with (exp) %} · downloads available until {{ exp }}{% when None %}{% endmatch %}
+                    </p>
+                </section>
+                <span class="chip">{{ job.status_label }}</span>
+            </header>
+
+            {% if job.active && job.chunk_total > 0 %}
+                <progress max="{{ job.chunk_total }}" value="{{ job.chunks_done }}">
+                    {{ job.chunks_done }} of {{ job.chunk_total }}
+                </progress>
+            {% endif %}
+
+            {% match job.error %}{% when Some with (msg) %}
+                <p class="alert error" role="alert">{{ msg }}</p>
+            {% when None %}{% endmatch %}
+
+            {% if !job.chunks.is_empty() %}
+                <div class="table-scroll">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th scope="col">Archive</th>
+                                <th scope="col">Contents</th>
+                                <th scope="col">Size</th>
+                                <th scope="col"><span class="visually-hidden">Download</span></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for chunk in job.chunks %}
+                                <tr>
+                                    <td>{{ chunk.label }}</td>
+                                    <td>{{ chunk.txs }} transaction(s) · {{ chunk.docs }} document(s)</td>
+                                    <td>{{ chunk.size }}</td>
+                                    <td class="actions">
+                                        <a class="btn small secondary"
+                                           data-export-chunk-link
+                                           data-export-job="{{ job.key }}"
+                                           href="/app/exports/{{ job.key }}/chunks/{{ chunk.key }}/download">Download</a>
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% endif %}
+
+            <footer class="invite-actions">
+                {% if job.chunks.len() > 1 %}
+                    <button type="button" class="btn small" data-export-download-all="{{ job.key }}">
+                        Download all ({{ job.chunks.len() }})
+                    </button>
+                    <a class="btn small secondary"
+                       href="/app/exports/{{ job.key }}/urls.txt"
+                       title="A plain list of download links — feed it to aria2c or curl for parallel, resumable batch downloads">Download link list</a>
+                {% endif %}
+                {% if job.active %}
+                    <form method="post" action="/app/exports/{{ job.key }}/cancel" class="inline-form">
+                        <button type="submit" class="btn small danger">Cancel</button>
+                    </form>
+                {% else %}
+                    <form method="post" action="/app/exports/{{ job.key }}/delete" class="inline-form"
+                          data-confirm="Delete this export and its downloadable archives now? Documents themselves are not affected.">
+                        <button type="submit" class="btn small danger">Delete</button>
+                    </form>
+                {% endif %}
+            </footer>
+        </article>
+    {% endfor %}
+</section>

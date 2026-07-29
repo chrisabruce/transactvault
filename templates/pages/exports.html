@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+
+{% block title %}Exports — {{ app_name }}{% endblock %}
+{% block body_class %}page-app{% endblock %}
+
+{% block body %}
+{% include "components/app_header.html" %}
+
+<main class="app-main">
+    <header class="page-title">
+        <section>
+            <h1>Exports</h1>
+            <p class="subtitle">Full-brokerage document archives, built in the background.</p>
+        </section>
+    </header>
+
+    <section class="panel" aria-labelledby="new-export-heading">
+        <h2 id="new-export-heading">Start a new export</h2>
+        <p>
+            The export covers every document in the brokerage, packaged as one ZIP per
+            agent and year (busy years split by month) so even a very large archive
+            arrives as manageable pieces. It builds in the background — you can close
+            this page, and you'll get an email when everything is ready. Downloads are
+            served straight from storage, so an interrupted download resumes where it
+            left off. Archives stay available for {{ retention_label }}, then they're
+            removed automatically.
+        </p>
+        <form method="post" action="/app/exports">
+            <button type="submit" class="btn">Start export</button>
+        </form>
+    </section>
+
+    {# `data-init` opens the SSE stream that live-patches #exports-live
+       as the worker finishes chunks. #}
+    <div data-init="@get('/app/exports/stream')">
+        {% include "partials/export_jobs.html" %}
+    </div>
+</main>
+
+<script>
+// "Download all": click each chunk link with a stagger so the browser
+// treats them as individual downloads (Chrome asks once for permission
+// to download multiple files). Delegated from the document so it keeps
+// working across Datastar's live re-renders of the jobs section.
+(function () {
+    document.addEventListener('click', function (ev) {
+        var btn = ev.target.closest('[data-export-download-all]');
+        if (!btn || btn.disabled) return;
+        var job = btn.getAttribute('data-export-download-all');
+        var links = document.querySelectorAll(
+            '[data-export-chunk-link][data-export-job="' + CSS.escape(job) + '"]');
+        if (!links.length) return;
+        var prev = btn.textContent;
+        btn.disabled = true;
+        var i = 0;
+        (function next() {
+            if (i >= links.length) {
+                btn.textContent = prev;
+                btn.disabled = false;
+                return;
+            }
+            btn.textContent = 'Starting ' + (i + 1) + ' of ' + links.length + '…';
+            links[i].click();
+            i += 1;
+            setTimeout(next, 1500);
+        })();
+    });
+})();
+</script>
+{% endblock %}

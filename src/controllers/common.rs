@@ -5,10 +5,34 @@
 //! an `AppHeader`?" means a new optional header field (e.g. a feature
 //! flag, an unread-count badge) lands in one place.
 
+use axum::response::sse::Event as SseEvent;
+
 use crate::auth::CurrentUser;
 use crate::billing;
 use crate::state::AppState;
 use crate::templates::AppHeader;
+
+/// Format an HTML fragment as a Datastar `datastar-patch-elements` SSE
+/// event. Datastar joins the `elements`-prefixed data lines back into a
+/// document and morphs the element with the matching `id` in place.
+///
+/// EVERY line of the payload must carry the `elements ` prefix:
+/// Datastar's SSE parser splits each `data:` line at its first space
+/// and buckets the remainder under that first word. An implementation
+/// that prefixed only the first line collapsed multi-line fragments to
+/// their opening tag and the "patch" morphed the target into an empty
+/// section — the "live updates not working" bug. The regression test
+/// on `/app/stats/stream` asserts the per-line prefix.
+pub(crate) fn patch_elements_event(html: &str) -> SseEvent {
+    let data = html
+        .lines()
+        .map(|line| format!("elements {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    SseEvent::default()
+        .event("datastar-patch-elements")
+        .data(data)
+}
 
 /// Build a fully-populated [`AppHeader`] for an authenticated page.
 ///

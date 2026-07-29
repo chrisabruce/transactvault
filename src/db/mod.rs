@@ -159,6 +159,9 @@ pub async fn reset_schema(db: &Surreal<Any>) -> anyhow::Result<()> {
         REMOVE TABLE IF EXISTS uses_locality;
         REMOVE TABLE IF EXISTS hides_form;
         REMOVE TABLE IF EXISTS owns_form;
+        REMOVE TABLE IF EXISTS pending_upload;
+        REMOVE TABLE IF EXISTS export_chunk;
+        REMOVE TABLE IF EXISTS export_job;
         REMOVE TABLE IF EXISTS comment;
         REMOVE TABLE IF EXISTS document;
         REMOVE TABLE IF EXISTS checklist_item;

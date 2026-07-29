@@ -19,6 +19,7 @@ mod db;
 mod email;
 mod error;
 mod events;
+mod export_worker;
 mod forms;
 mod models;
 mod router;
@@ -127,6 +128,12 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let state = AppState::new(db, storage, mailer, stripe_client, config.clone());
+
+    // Background export builder: claims queued `export_job` rows and
+    // assembles chunked brokerage archives into object storage. One
+    // job at a time; sequential chunks; see `export_worker` for the
+    // resource profile.
+    export_worker::spawn(state.clone());
 
     // Database heartbeat. The SDK's WS engine already sends protocol
     // pings and auto-reconnects (verified in surrealdb 3.2.3 source:

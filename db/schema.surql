@@ -435,6 +435,54 @@ DEFINE FIELD OVERWRITE created_at    ON pending_upload TYPE datetime DEFAULT tim
 DEFINE FIELD OVERWRITE expires_at    ON pending_upload TYPE datetime DEFAULT time::now() + 6h;
 
 -- ----------------------------------------------------------------------------
+-- Export jobs — queued background builds of the brokerage-wide document
+-- archive. One job produces N chunk ZIPs (one per agent + year, split
+-- further by month / part when a chunk would exceed the size cap), each
+-- uploaded to object storage under `exports/<brokerage>/<job>/` and
+-- downloaded via short-lived presigned GETs. Artifacts expire after
+-- `expires_at`; the worker's retention sweep purges objects + rows.
+-- ----------------------------------------------------------------------------
+DEFINE TABLE OVERWRITE export_job SCHEMAFULL;
+DEFINE FIELD OVERWRITE brokerage    ON export_job TYPE record<brokerage>;
+DEFINE FIELD OVERWRITE requested_by ON export_job TYPE record<user>;
+DEFINE FIELD OVERWRITE status       ON export_job TYPE string DEFAULT "queued"
+    ASSERT $value IN ["queued", "running", "completed", "failed", "canceled"];
+-- User-safe failure summary; the full error chain goes to tracing.
+DEFINE FIELD OVERWRITE error        ON export_job TYPE option<string>;
+-- Compressed bytes actually uploaded so far (sum of finished chunks).
+DEFINE FIELD OVERWRITE total_bytes  ON export_job TYPE int DEFAULT 0;
+-- Planned chunk count (set once planning finishes) / finished count.
+DEFINE FIELD OVERWRITE chunk_total  ON export_job TYPE int DEFAULT 0;
+DEFINE FIELD OVERWRITE chunks_done  ON export_job TYPE int DEFAULT 0;
+DEFINE FIELD OVERWRITE created_at   ON export_job TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE started_at   ON export_job TYPE option<datetime>;
+DEFINE FIELD OVERWRITE finished_at  ON export_job TYPE option<datetime>;
+-- Set when the job reaches a terminal status; the sweep deletes the
+-- job (and its objects) once this passes.
+DEFINE FIELD OVERWRITE expires_at   ON export_job TYPE option<datetime>;
+DEFINE INDEX OVERWRITE idx_export_job_status    ON export_job FIELDS status;
+DEFINE INDEX OVERWRITE idx_export_job_brokerage ON export_job FIELDS brokerage;
+
+-- One finished chunk ZIP of an export job. Rows are inserted as each
+-- chunk completes so the exports page shows progress; `storage_key`
+-- points at the uploaded object.
+DEFINE TABLE OVERWRITE export_chunk SCHEMAFULL;
+DEFINE FIELD OVERWRITE job           ON export_chunk TYPE record<export_job>;
+DEFINE FIELD OVERWRITE seq           ON export_chunk TYPE int;
+-- Human label ("Jane Smith — 2025 (part 2)") and the download filename.
+DEFINE FIELD OVERWRITE label         ON export_chunk TYPE string;
+DEFINE FIELD OVERWRITE filename      ON export_chunk TYPE string;
+DEFINE FIELD OVERWRITE storage_key   ON export_chunk TYPE string ASSERT string::len($value) >= 1;
+-- Compressed ZIP size (what the user downloads) and the uncompressed
+-- content total that went into it.
+DEFINE FIELD OVERWRITE size_bytes    ON export_chunk TYPE int DEFAULT 0;
+DEFINE FIELD OVERWRITE content_bytes ON export_chunk TYPE int DEFAULT 0;
+DEFINE FIELD OVERWRITE doc_count     ON export_chunk TYPE int DEFAULT 0;
+DEFINE FIELD OVERWRITE tx_count      ON export_chunk TYPE int DEFAULT 0;
+DEFINE FIELD OVERWRITE created_at    ON export_chunk TYPE datetime DEFAULT time::now();
+DEFINE INDEX OVERWRITE idx_export_chunk_job ON export_chunk FIELDS job;
+
+-- ----------------------------------------------------------------------------
 -- Comments — free-text notes attached to either a transaction or a
 -- single checklist_item. The polymorphic `target` field carries the
 -- record link so a single thread query can hydrate either parent type.
@@ -474,7 +522,9 @@ DEFINE FIELD OVERWRITE kind ON audit_event TYPE string
         "member_removed",
         "tier_created", "tier_updated",
         "brokerage_comp_granted", "brokerage_comp_revoked",
-        "error_log_cleared"
+        "error_log_cleared",
+        "export_requested", "export_canceled", "export_deleted",
+        "export_downloaded"
     ];
 DEFINE FIELD OVERWRITE actor_email ON audit_event TYPE option<string>;
 DEFINE FIELD OVERWRITE actor       ON audit_event TYPE option<record<user>>;

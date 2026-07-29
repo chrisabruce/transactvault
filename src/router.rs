@@ -17,8 +17,8 @@ use tower_http::trace::{DefaultOnFailure, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 
 use crate::controllers::{
-    admin, auth, checklists, comments, documents, forms, health, marketing, members, orphan,
-    profile, subscribe, tiers, transactions, webhooks,
+    admin, auth, checklists, comments, documents, exports, forms, health, marketing, members,
+    orphan, profile, subscribe, tiers, transactions, webhooks,
 };
 use crate::state::AppState;
 
@@ -108,10 +108,20 @@ pub fn build(state: AppState) -> Router {
         .route("/app/documents/{id}/preview", get(documents::preview))
         .route("/app/documents/{id}/delete", post(documents::delete))
         .route("/app/team", get(members::list))
-        .route("/app/team/export", get(documents::export_brokerage_zip))
         .route(
             "/app/team/{user_id}/export",
             get(documents::export_member_zip),
+        )
+        // Background full-brokerage exports: queue a job, watch it
+        // build over SSE, download finished chunks via presigned GETs.
+        .route("/app/exports", get(exports::page).post(exports::create))
+        .route("/app/exports/stream", get(exports::stream))
+        .route("/app/exports/{job}/urls.txt", get(exports::urls_txt))
+        .route("/app/exports/{job}/cancel", post(exports::cancel))
+        .route("/app/exports/{job}/delete", post(exports::purge))
+        .route(
+            "/app/exports/{job}/chunks/{chunk}/download",
+            get(exports::download_chunk),
         )
         .route("/app/team/invite", post(members::invite))
         .route(

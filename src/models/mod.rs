@@ -8,6 +8,7 @@ pub mod brokerage;
 pub mod checklist;
 pub mod comment;
 pub mod document;
+pub mod export;
 pub mod invitation;
 pub mod tier;
 pub mod transaction;
@@ -18,9 +19,10 @@ pub use brokerage::{Brokerage, NewBrokerage};
 pub use checklist::{ApprovalStatus, ChecklistItem, NewChecklistItem};
 pub use comment::{Comment, NewComment};
 pub use document::Document;
-pub use document::{NewPendingUpload, PendingUpload};
 #[allow(unused_imports)]
 pub use document::NewDocument;
+pub use document::{NewPendingUpload, PendingUpload};
+pub use export::{ExportChunk, ExportJob, ExportStatus, NewExportChunk, NewExportJob};
 pub use invitation::{Invitation, NewInvitation};
 #[allow(unused_imports)]
 pub use tier::NewTier;

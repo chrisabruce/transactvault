@@ -8,6 +8,34 @@ the bottom-right of every page.
 
 ## July 2026
 
+### v0.7.0 — Whole-brokerage exports that actually finish
+
+- **Export everything, no matter how big.** The old "Download brokerage
+  ZIP" button built one giant file while you waited, and anything past
+  400 MB was refused outright. There's now an Export center (Team →
+  Brokerage archive → Open export center): click Start and the archive
+  is built in the background — close the tab, keep working, and you'll
+  get an email when it's ready. No size limit.
+
+- **Archives arrive as tidy pieces instead of one monster file.** Each
+  agent's transactions are packaged per year (busy years split by
+  month), so even a very large brokerage becomes a set of reasonable
+  downloads. Inside, files are organized by property and form code with
+  a manifest listing exactly what's included — the same layout auditors
+  see on the per-transaction export.
+
+- **Interrupted downloads pick up where they left off.** Archives are
+  served straight from secure storage rather than through the app, so a
+  dropped connection resumes instead of starting over — the difference
+  between "possible" and "hopeless" for multi-gigabyte files on
+  ordinary internet. Grab archives one at a time, use "Download all",
+  or take the download link list if you prefer a download manager.
+
+- **You stay in control.** Watch the build progress live, cancel it
+  mid-way, or delete finished archives early. Downloads stay available
+  for 7 days and are then cleaned up automatically, and every export
+  and download is recorded in the audit log.
+
 ### v0.6.1 — Comments are conversation, not alarms
 
 - **Leaving a comment no longer flags the transaction for review.**

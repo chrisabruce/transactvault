@@ -1258,3 +1258,112 @@ impl AdminUser {
         crate::db::record_key(&self.id)
     }
 }
+
+// ---------------------------------------------------------------------------
+// App: exports (background brokerage archives)
+// ---------------------------------------------------------------------------
+
+#[derive(Template)]
+#[template(path = "pages/exports.html")]
+pub struct ExportsPage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+    pub signed_in: bool,
+    pub header: AppHeader,
+    pub jobs: Vec<ExportJobView>,
+    /// "7 days" — sourced from the worker so page copy can't drift
+    /// from the actual sweep window.
+    pub retention_label: &'a str,
+}
+
+/// The live jobs section alone — re-rendered over SSE while a build
+/// runs. Root element id `exports-live` is the Datastar morph target.
+#[derive(Template)]
+#[template(path = "partials/export_jobs.html")]
+pub struct ExportJobsFragment {
+    pub jobs: Vec<ExportJobView>,
+}
+
+/// One export job, render-ready.
+pub struct ExportJobView {
+    pub key: String,
+    pub status_label: &'static str,
+    /// Slug for a status CSS hook (`export-queued`, `export-running`, …).
+    pub status_slug: &'static str,
+    /// Queued or running — shows progress + Cancel instead of Delete.
+    pub active: bool,
+    pub created_label: String,
+    pub expires_label: Option<String>,
+    pub error: Option<String>,
+    /// One-line status summary ("Building archive 3 of 12…").
+    pub progress: String,
+    pub chunk_total: i64,
+    pub chunks_done: i64,
+    pub chunks: Vec<ExportChunkView>,
+}
+
+pub struct ExportChunkView {
+    pub key: String,
+    pub label: String,
+    pub size: String,
+    pub docs: i64,
+    pub txs: i64,
+}
+
+impl ExportJobView {
+    pub fn build(job: crate::models::ExportJob, chunks: Vec<crate::models::ExportChunk>) -> Self {
+        use crate::models::ExportStatus;
+
+        let status = job.status_enum();
+        let total_size = humansize::format_size(job.total_bytes.max(0) as u64, humansize::DECIMAL);
+        let progress = match status {
+            ExportStatus::Queued => "Waiting in the queue…".to_string(),
+            ExportStatus::Running if job.chunk_total == 0 => "Planning archives…".to_string(),
+            ExportStatus::Running => format!(
+                "Building archive {} of {}…",
+                (job.chunks_done + 1).min(job.chunk_total),
+                job.chunk_total
+            ),
+            ExportStatus::Completed if job.chunk_total == 0 => {
+                "No documents to export — the brokerage has no uploads yet.".to_string()
+            }
+            ExportStatus::Completed => {
+                format!("{} archive(s) · {} total", job.chunk_total, total_size)
+            }
+            ExportStatus::Failed => format!(
+                "{} of {} archives were built before the failure.",
+                job.chunks_done, job.chunk_total
+            ),
+            ExportStatus::Canceled => "Canceled.".to_string(),
+        };
+
+        Self {
+            key: job.url_key(),
+            status_label: status.label(),
+            status_slug: match status {
+                ExportStatus::Queued => "export-queued",
+                ExportStatus::Running => "export-running",
+                ExportStatus::Completed => "export-completed",
+                ExportStatus::Failed => "export-failed",
+                ExportStatus::Canceled => "export-canceled",
+            },
+            active: status.is_active(),
+            created_label: job.created_at.format("%b %-d, %Y at %H:%M UTC").to_string(),
+            expires_label: job.expires_at.map(|t| t.format("%b %-d, %Y").to_string()),
+            error: job.error.clone(),
+            progress,
+            chunk_total: job.chunk_total,
+            chunks_done: job.chunks_done,
+            chunks: chunks
+                .into_iter()
+                .map(|c| ExportChunkView {
+                    key: c.url_key(),
+                    size: c.size_display(),
+                    label: c.label,
+                    docs: c.doc_count,
+                    txs: c.tx_count,
+                })
+                .collect(),
+        }
+    }
+}

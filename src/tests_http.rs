@@ -2237,7 +2237,9 @@ async fn checklist_renders_code_chip_for_custom_codes() {
 }
 
 /// Team ZIP exports: broker-only, scoped to the caller's brokerage, and
-/// the response is a real ZIP (PK magic) even with zero documents.
+/// the response is a real ZIP (PK magic) even with zero documents. The
+/// old synchronous whole-brokerage export is gone — that flow now lives
+/// at /app/exports as a background job.
 #[tokio::test]
 async fn team_zip_exports_are_broker_only_and_brokerage_scoped() {
     let app = make_app().await;
@@ -2251,8 +2253,6 @@ async fn team_zip_exports_are_broker_only_and_brokerage_scoped() {
     let agent_key = crate::db::record_key(&agent);
 
     // Agents can't export anything.
-    let (status, _, _) = authed_get_raw(&app, &agent, "/app/team/export").await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
     let (status, _, _) =
         authed_get_raw(&app, &agent, &format!("/app/team/{agent_key}/export")).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
@@ -2264,11 +2264,9 @@ async fn team_zip_exports_are_broker_only_and_brokerage_scoped() {
     assert_eq!(ct, "application/zip");
     assert!(bytes.starts_with(b"PK"), "response should be a ZIP archive");
 
-    // Broker: whole-brokerage export is a ZIP.
-    let (status, ct, bytes) = authed_get_raw(&app, &broker, "/app/team/export").await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(ct, "application/zip");
-    assert!(bytes.starts_with(b"PK"));
+    // The synchronous whole-brokerage route no longer exists.
+    let (status, _, _) = authed_get_raw(&app, &broker, "/app/team/export").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 
     // A broker from ANOTHER brokerage can't export our agent.
     let b2 = seed_brokerage(&app.state, "Rival").await;
@@ -2276,6 +2274,220 @@ async fn team_zip_exports_are_broker_only_and_brokerage_scoped() {
     join(&app.state, &rival, &b2, "broker").await;
     let (status, _, _) =
         authed_get_raw(&app, &rival, &format!("/app/team/{agent_key}/export")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// Background exports: the page and job mutations are broker-only, and
+/// a brokerage holds at most one active (queued/running) job — clicking
+/// Start twice must not build the archive twice. Cancel frees the slot.
+/// The worker never runs under test, so jobs stay deterministically
+/// `queued`.
+#[tokio::test]
+async fn export_jobs_are_broker_only_and_deduped() {
+    async fn job_count(app: &TestApp, b: &RecordId) -> usize {
+        let mut q = app
+            .state
+            .db
+            .query("SELECT * FROM export_job WHERE brokerage = $b")
+            .bind(("b", b.clone()))
+            .await
+            .expect("job query");
+        let jobs: Vec<crate::models::ExportJob> = q.take(0).unwrap_or_default();
+        jobs.len()
+    }
+
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    let agent = seed_user(&app.state, "agent@a").await;
+    join(&app.state, &broker, &b, "broker").await;
+    join(&app.state, &agent, &b, "agent").await;
+
+    // Agents: no page, no job creation, no stream.
+    let (status, _) = authed_get(&app, &agent, "/app/exports").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = authed_post(&app, &agent, "/app/exports", "").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = authed_get(&app, &agent, "/app/exports/stream").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // Broker: page renders, job queues.
+    let (status, body) = authed_get(&app, &broker, "/app/exports").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Start a new export"));
+
+    let (status, _) = authed_post(&app, &broker, "/app/exports", "").await;
+    assert!(status.is_redirection());
+    assert_eq!(job_count(&app, &b).await, 1);
+
+    // Second Start while one is active: no duplicate.
+    let (status, _) = authed_post(&app, &broker, "/app/exports", "").await;
+    assert!(status.is_redirection());
+    assert_eq!(job_count(&app, &b).await, 1);
+
+    let (_, body) = authed_get(&app, &broker, "/app/exports").await;
+    assert!(
+        body.contains("Waiting in the queue"),
+        "queued job should be visible"
+    );
+
+    // Cancel releases the active slot.
+    let mut q = app
+        .state
+        .db
+        .query("SELECT * FROM export_job WHERE brokerage = $b LIMIT 1")
+        .bind(("b", b.clone()))
+        .await
+        .expect("find job");
+    let jobs: Vec<crate::models::ExportJob> = q.take(0).unwrap_or_default();
+    let job_key = crate::db::record_key(&jobs[0].id);
+
+    // A foreign broker can't cancel it.
+    let b2 = seed_brokerage(&app.state, "Rival").await;
+    let rival = seed_user(&app.state, "r@b").await;
+    join(&app.state, &rival, &b2, "broker").await;
+    let (status, _) =
+        authed_post(&app, &rival, &format!("/app/exports/{job_key}/cancel"), "").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, _) =
+        authed_post(&app, &broker, &format!("/app/exports/{job_key}/cancel"), "").await;
+    assert!(status.is_redirection());
+    let mut q = app
+        .state
+        .db
+        .query("SELECT VALUE status FROM export_job WHERE brokerage = $b")
+        .bind(("b", b.clone()))
+        .await
+        .expect("status query");
+    let statuses: Vec<String> = q.take(0).unwrap_or_default();
+    assert_eq!(statuses, vec!["canceled".to_string()]);
+
+    let (status, _) = authed_post(&app, &broker, "/app/exports", "").await;
+    assert!(status.is_redirection());
+    assert_eq!(job_count(&app, &b).await, 2);
+}
+
+/// Chunk downloads 303-redirect to a presigned storage URL — signed,
+/// carrying the download filename, served (and resumable) by the store
+/// itself — and both download surfaces are scoped to the owning
+/// brokerage.
+#[tokio::test]
+async fn export_chunk_download_redirects_to_presigned_url() {
+    use axum::extract::ConnectInfo;
+    use std::net::SocketAddr;
+
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    join(&app.state, &broker, &b, "broker").await;
+
+    // Seed a completed job with one chunk, exactly as the worker would.
+    let job: Option<crate::models::ExportJob> = app
+        .state
+        .db
+        .create("export_job")
+        .content(crate::models::NewExportJob {
+            brokerage: b.clone(),
+            requested_by: broker.clone(),
+        })
+        .await
+        .expect("create job");
+    let job = job.expect("job row");
+    app.state
+        .db
+        .query(
+            "UPDATE $j SET status = 'completed', chunk_total = 1, chunks_done = 1, \
+             finished_at = time::now(), expires_at = time::now() + 7d",
+        )
+        .bind(("j", job.id.clone()))
+        .await
+        .expect("complete job");
+    let storage_key = format!(
+        "exports/{}/{}/001-Al-2025.zip",
+        crate::db::record_key(&b),
+        crate::db::record_key(&job.id)
+    );
+    let chunk: Option<crate::models::ExportChunk> = app
+        .state
+        .db
+        .create("export_chunk")
+        .content(crate::models::NewExportChunk {
+            job: job.id.clone(),
+            seq: 1,
+            label: "Al — 2025".into(),
+            filename: "transactvault-Al-2025.zip".into(),
+            storage_key: storage_key.clone(),
+            size_bytes: 10,
+            content_bytes: 10,
+            doc_count: 1,
+            tx_count: 1,
+        })
+        .await
+        .expect("create chunk");
+    let chunk = chunk.expect("chunk row");
+
+    let job_key = crate::db::record_key(&job.id);
+    let chunk_key = crate::db::record_key(&chunk.id);
+
+    let cookie = session_cookie(&app, &broker);
+    let mut req = Request::builder()
+        .uri(format!(
+            "/app/exports/{job_key}/chunks/{chunk_key}/download"
+        ))
+        .header("cookie", cookie)
+        .body(Body::empty())
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo::<SocketAddr>(
+        "127.0.0.1:0".parse().expect("loopback addr"),
+    ));
+    let res = app
+        .router
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("download responds");
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let location = res
+        .headers()
+        .get("location")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        location.contains("X-Amz-Signature"),
+        "expected a presigned URL, got: {location}"
+    );
+    assert!(location.contains("001-Al-2025.zip"));
+    assert!(
+        location
+            .to_ascii_lowercase()
+            .contains("response-content-disposition"),
+        "download filename should ride in the signed query: {location}"
+    );
+
+    // urls.txt: same presigned URLs, one per line, as an attachment.
+    let (status, body) =
+        authed_get(&app, &broker, &format!("/app/exports/{job_key}/urls.txt")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.lines()
+            .any(|l| !l.starts_with('#') && l.contains("X-Amz-Signature")),
+        "urls.txt should carry presigned URLs: {body}"
+    );
+
+    // Foreign brokers get 404 on both surfaces.
+    let b2 = seed_brokerage(&app.state, "Rival").await;
+    let rival = seed_user(&app.state, "r@b").await;
+    join(&app.state, &rival, &b2, "broker").await;
+    let (status, _) = authed_get(
+        &app,
+        &rival,
+        &format!("/app/exports/{job_key}/chunks/{chunk_key}/download"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = authed_get(&app, &rival, &format!("/app/exports/{job_key}/urls.txt")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
