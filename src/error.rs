@@ -83,9 +83,10 @@ impl IntoResponse for AppError {
         };
 
         let body = Html(format!(
-            "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>{code}</title><link rel=\"stylesheet\" href=\"/static/css/main.css\"></head><body><main class=\"error-page\"><h1>{code}</h1><p>{msg}</p><p><a href=\"/\">Back to home</a></p></main></body></html>",
+            "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>{code}</title><link rel=\"stylesheet\" href=\"/static/css/main.css?v={ver}\"></head><body><main class=\"error-page\"><h1>{code}</h1><p>{msg}</p><p><a href=\"/\">Back to home</a></p></main></body></html>",
             code = status.as_u16(),
             msg = html_escape(&message),
+            ver = crate::APP_VERSION,
         ));
 
         // The detail rides along as a response extension for the

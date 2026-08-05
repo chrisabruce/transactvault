@@ -8,6 +8,16 @@ the bottom-right of every page.
 
 ## August 2026
 
+### v0.8.1 — Updates now look right immediately
+
+- **No more "half-updated" pages.** After we shipped an update, your
+  browser could keep using the previous visual styling for a while,
+  which made new pages look plain or oddly arranged — the new homepage
+  below, for example, could appear without its speech bubbles. Every
+  release now tells your browser to fetch the latest styling
+  automatically. (If a page still looks plain right now, refresh it
+  once while holding Shift and you're set.)
+
 ### v0.8.0 — A clearer front door, with familiar faces
 
 - **Real voices on the homepage.** Six of our earliest partners across

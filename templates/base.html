@@ -16,7 +16,11 @@
     <meta name="twitter:card" content="summary_large_image">
 
     <link rel="icon" type="image/svg+xml" href="/static/images/logo.svg">
-    <link rel="stylesheet" href="/static/css/main.css">
+    {#- The ?v= query string ties browser caching of mutable assets to the
+        release: ServeDir sends no Cache-Control, so without it browsers
+        heuristically cache main.css and can pair fresh HTML with a weeks-old
+        stylesheet. New version → new URL → guaranteed fresh fetch. -#}
+    <link rel="stylesheet" href="/static/css/main.css?v={{ crate::APP_VERSION }}">
     {% block head %}{% endblock %}
 </head>
 <body class="{% block body_class %}page-public{% endblock %}">
@@ -26,7 +30,7 @@
         `env!("CARGO_PKG_VERSION")` constant defined in `main.rs`. Update
         Cargo's version on each release and the footer follows. -#}
     <footer class="app-version-footer" aria-label="Build version">v{{ crate::APP_VERSION }}</footer>
-    <script src="/static/js/confirm-action.js" defer></script>
+    <script src="/static/js/confirm-action.js?v={{ crate::APP_VERSION }}" defer></script>
     {#- Datastar is served from the GitHub release bundle, not npm. The
         npm package doesn't publish a /dist/datastar.js (that path 404s);
         the canonical browser build lives under bundles/ on the tagged
