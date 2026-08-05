@@ -409,29 +409,92 @@ a.btn {
 .compare-strip .cross  { color: #fca5a5; font-weight: 700; margin-inline-end: 0.35rem; }
 .compare-strip .check { color: #86efac; font-weight: 700; margin-inline-end: 0.35rem; }
 
+/* Testimonials — speech bubbles with a tail pointing at the speaker.
+   Even-numbered bubbles switch to the brand tint via custom properties;
+   the tail (a rotated square on ::after) inherits both fill and line
+   color, so variants never need their own tail rules. */
 .testimonial-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
-    gap: var(--sp-5);
+    grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr));
+    gap: var(--sp-6) var(--sp-5);
+    align-items: stretch;
 }
 .testimonial {
-    background: var(--color-surface);
-    border: 1px solid var(--color-line);
-    border-radius: var(--radius-lg);
-    padding: var(--sp-6);
+    --bubble-bg:   var(--color-surface);
+    --bubble-line: var(--color-line);
+    margin: 0;
+    display: flex;
+    flex-direction: column;
 }
-.testimonial blockquote {
-    margin: 0 0 var(--sp-4);
+.testimonial:nth-child(even) {
+    --bubble-bg:   var(--color-brand-tint);
+    --bubble-line: #99f6e4;
+}
+.testimonial .bubble {
+    position: relative;
+    flex: 1;
+    margin: 0 0 1.4rem;
+    background: var(--bubble-bg);
+    border: 1px solid var(--bubble-line);
+    border-radius: var(--radius-xl);
+    padding: var(--sp-6);
+    box-shadow: var(--shadow-sm);
+}
+.testimonial .bubble::after {
+    content: "";
+    position: absolute;
+    bottom: -0.56rem;
+    left: 2.4rem;
+    width: 1.1rem;
+    height: 1.1rem;
+    background: var(--bubble-bg);
+    border-right: 1px solid var(--bubble-line);
+    border-bottom: 1px solid var(--bubble-line);
+    transform: rotate(45deg);
+}
+.testimonial .bubble p {
+    margin: 0;
     color: var(--color-body);
-    font-size: var(--fs-md);
-    line-height: 1.6;
+    font-size: var(--fs-base);
+    line-height: 1.65;
+}
+.testimonial figcaption {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    padding-inline-start: var(--sp-3);
+}
+.testimonial figcaption img {
+    width: 3.5rem;
+    height: 3.5rem;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid var(--color-surface);
+    box-shadow: var(--shadow);
+    background: var(--color-surface);
 }
 .testimonial cite {
     font-style: normal;
     color: var(--color-muted);
     font-size: var(--fs-sm);
+    line-height: 1.35;
 }
 .testimonial cite strong { color: var(--color-ink); display: block; }
+
+/* Bubbles drift up as they scroll into view; static everywhere the
+   scroll-driven-animation API or motion itself is unwelcome. */
+@supports (animation-timeline: view()) {
+    @media (prefers-reduced-motion: no-preference) {
+        .testimonial {
+            animation: bubble-in linear both;
+            animation-timeline: view();
+            animation-range: entry 0% entry 40%;
+        }
+    }
+}
+@keyframes bubble-in {
+    from { opacity: 0; transform: translateY(14px) scale(0.98); }
+}
 
 .cta-banner {
     text-align: center;

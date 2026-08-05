@@ -1,10 +1,11 @@
 {% extends "base.html" %}
 
-{% block title %}Transaction management that actually feels good — {{ app_name }}{% endblock %}
-{% block description %}Modern real estate transaction management for California brokerages. Flat pricing. 3 years of compliant storage included. No sales calls.{% endblock %}
+{% block title %}Real Estate Transaction Management Software — {{ app_name }}{% endblock %}
+{% block description %}Modern real estate transaction management for California brokerages. Flat pricing, 3 years of compliant storage, no sales calls. Start your free 14-day trial.{% endblock %}
 {% block canonical %}{{ base_url }}/{% endblock %}
 {% block og_url %}{{ base_url }}/{% endblock %}
-{% block og_title %}Transaction management that actually feels good to use{% endblock %}
+{% block og_title %}Real estate transaction management that actually feels good to use{% endblock %}
+{% block og_description %}Flat pricing, 3 years of compliant storage, no sales calls. Built for California brokerages.{% endblock %}
 
 {% block head %}
 <script type="application/ld+json">
@@ -12,14 +13,33 @@
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
     "name": {{ app_name|json|safe }},
+    "url": "{{ base_url }}/",
     "applicationCategory": "BusinessApplication",
-    "description": "Modern real estate transaction management for California brokerages.",
+    "description": "Real estate transaction management software for California brokerages: flat pricing, compliance checklists, versioned document storage, and audit-ready exports.",
     "operatingSystem": "Web",
     "offers": {
         "@type": "AggregateOffer",
         "priceCurrency": "USD",
         "lowPrice": "149",
         "highPrice": "799"
+    }
+}
+</script>
+<script type="application/ld+json">
+{
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    "name": "TransactVault, LLC",
+    "url": "{{ base_url }}/",
+    "logo": "{{ base_url }}/static/images/logo.svg",
+    "email": "hello@transactvault.app",
+    "address": {
+        "@type": "PostalAddress",
+        "streetAddress": "30 N. Gould Street, Suite R",
+        "addressLocality": "Sheridan",
+        "addressRegion": "WY",
+        "postalCode": "82801",
+        "addressCountry": "US"
     }
 }
 </script>
@@ -32,8 +52,8 @@
     <section class="hero">
         <div class="wrap">
             <span class="eyebrow">Built for California brokerages</span>
-            <h1>Transaction management that actually feels good to use.</h1>
-            <p class="lede">Flat pricing. 3 years of compliant storage included. No sales calls, no surprises — just a beautiful, audit-ready way to run every deal.</p>
+            <h1>Real estate transaction management that actually feels good to use.</h1>
+            <p class="lede">Flat pricing. Three years of compliant document storage included. No sales calls, no surprises — just a beautiful, audit-ready way to run every deal from listing to close.</p>
             <div class="hero-actions">
                 <a class="btn" href="/signup">Start free 14-day trial</a>
                 <a class="btn secondary" href="/pricing">See pricing</a>
@@ -48,15 +68,15 @@
 
     <section class="section" id="benefits">
         <header class="section-heading">
-            <h2>Why brokerages switch from SkySlope and Dotloop</h2>
-            <p>Every surface of TransactVault exists to make compliance easier — not to push more seats, add-ons, or upsells.</p>
+            <h2>Why brokerages are switching from SkySlope and Dotloop</h2>
+            <p>Every part of TransactVault exists to make compliance easier. We're here to help — not to push more seats, add-ons, or upsells.</p>
         </header>
 
         <div class="benefit-grid">
             <article class="benefit-card">
                 <span class="badge" aria-hidden="true">$</span>
                 <h3>Transparent flat pricing</h3>
-                <p>Pick a plan, pay monthly, cancel anytime. No per-user fees. No hidden charges for storage, signatures, or audit features.</p>
+                <p>Pick a plan, pay monthly — or yearly for a 17% saving — and cancel anytime. No per-user fees. No hidden charges for storage, audit exports, or cancellation.</p>
             </article>
             <article class="benefit-card">
                 <span class="badge" aria-hidden="true">⌛</span>
@@ -65,23 +85,33 @@
             </article>
             <article class="benefit-card">
                 <span class="badge" aria-hidden="true">✦</span>
-                <h3>Beautiful and fast</h3>
-                <p>Designed from scratch to feel modern and calm. Pages load instantly, micro-interactions delight, and nothing gets in your way.</p>
+                <h3>Fast and beautiful</h3>
+                <p>Designed from scratch to feel modern, clean, and calm. Pages load instantly, updates stream in live, and nothing gets in your way.</p>
             </article>
             <article class="benefit-card">
                 <span class="badge" aria-hidden="true">✓</span>
                 <h3>Full compliance visibility</h3>
-                <p>A live compliance score on every transaction. When the whole checklist is green, the deal is audit-ready — and the broker can see it at a glance.</p>
+                <p>A live compliance score on every transaction. The broker sees everything at a glance — when the checklist turns green, the deal is audit-ready.</p>
             </article>
             <article class="benefit-card">
                 <span class="badge" aria-hidden="true">★</span>
-                <h3>California-focused</h3>
-                <p>Default checklists mirror California transaction standards. Antelope Valley brokerages were our earliest design partners.</p>
+                <h3>California focused</h3>
+                <p>Default checklists mirror California transaction standards. Antelope Valley brokerages were our earliest design and development partners.</p>
             </article>
             <article class="benefit-card">
                 <span class="badge" aria-hidden="true">↻</span>
                 <h3>Versioned by default</h3>
-                <p>Every upload is stored as a new version. Signed PDFs are preserved exactly. The audit trail shows who did what and when.</p>
+                <p>Every upload is stored as a new version, so there's no confusion about which document is current. The audit trail shows who did what, and when.</p>
+            </article>
+            <article class="benefit-card">
+                <span class="badge" aria-hidden="true">➜</span>
+                <h3>Simple to navigate</h3>
+                <p>Tech-savvy or paper-first, anyone can master TransactVault: fast account setup, effortless transaction creation, and no training courses required.</p>
+            </article>
+            <article class="benefit-card">
+                <span class="badge" aria-hidden="true">◈</span>
+                <h3>Bank-level security</h3>
+                <p>Your documents are encrypted in transit and at rest, stored across multiple servers. A bad guy has a better shot at Fort Knox than at your files.</p>
             </article>
         </div>
     </section>
@@ -90,40 +120,85 @@
         <div class="wrap">
             <article>
                 <h3>Better than SkySlope</h3>
-                <p><span class="cross">✕</span> Hidden fees and per-seat add-ons</p>
-                <p><span class="check">✓</span> Flat monthly pricing, everything included</p>
+                <p><span class="cross">✕</span> Hidden fees, per-seat add-ons, cancellation hassles</p>
+                <p><span class="check">✓</span> Flat monthly pricing — everything included</p>
+                <p><span class="check">✓</span> No re-entering the same information twice</p>
             </article>
             <article>
                 <h3>Better than Dotloop</h3>
-                <p><span class="cross">✕</span> Sales-call gated onboarding</p>
+                <p><span class="cross">✕</span> Sales-call gated onboarding and junk email</p>
                 <p><span class="check">✓</span> Sign up online in under a minute</p>
+                <p><span class="check">✓</span> Transactions created automatically</p>
             </article>
             <article>
                 <h3>Designed for compliance</h3>
-                <p><span class="cross">✕</span> Scattered trust that audits are ready</p>
-                <p><span class="check">✓</span> Clear green “Compliance Complete” signal</p>
+                <p><span class="check">✓</span> Three years of secure storage on multiple servers</p>
+                <p><span class="check">✓</span> Audit-ready exports — one deal or the entire office</p>
+                <p><span class="check">✓</span> Developed with real brokers, perfected by real agents</p>
             </article>
         </div>
     </aside>
 
     <section class="section" id="testimonials">
         <header class="section-heading">
-            <h2>What brokers are saying</h2>
-            <p>Early design partners across the Antelope Valley shared how TransactVault changed their workflow.</p>
+            <h2>What real estate professionals are saying</h2>
+            <p>Early design and development partners across the Antelope Valley shared how TransactVault changed their workflow.</p>
         </header>
         <div class="testimonial-grid">
-            <article class="testimonial">
-                <blockquote>“The compliance score is the first thing my TC checks every morning. We know within a glance which deals need love today.”</blockquote>
-                <cite><strong>Renee Okafor</strong>Broker/Owner · Lancaster Realty Group</cite>
-            </article>
-            <article class="testimonial">
-                <blockquote>“Switching from SkySlope saved us $6k a year and my agents actually want to use it. That second part is the shocker.”</blockquote>
-                <cite><strong>Miguel Duran</strong>Managing Broker · Palmdale Heritage Homes</cite>
-            </article>
-            <article class="testimonial">
-                <blockquote>“Our DRE audit last quarter was painless — one click exports the whole folder and the audit trail is already there.”</blockquote>
-                <cite><strong>Jenn Hall</strong>Transaction Coordinator · Quartz Hill Realty</cite>
-            </article>
+            <figure class="testimonial">
+                <blockquote class="bubble">
+                    <p>“Switching from SkySlope saved us over $6,000 a year — but the biggest surprise was our agents actually wanting to use it. TransactVault is cool, quick, and made things easier for everyone. Saving money while improving office production? That's a win we didn't expect.”</p>
+                </blockquote>
+                <figcaption>
+                    <img src="/static/images/testimonials/glenda-walsh.jpg" alt="Glenda Walsh" width="240" height="240" loading="lazy" decoding="async">
+                    <cite><strong>Glenda Walsh</strong><span>REALTOR® · The Real Estate Place</span></cite>
+                </figcaption>
+            </figure>
+            <figure class="testimonial">
+                <blockquote class="bubble">
+                    <p>“Honestly, I thought TransactVault was too new to compete with the big names in the industry, but I couldn't have been more wrong. Their site is fast, modern, and incredibly easy to use. Knowing that all of my clients' documents are secured gives me real peace of mind.”</p>
+                </blockquote>
+                <figcaption>
+                    <img src="/static/images/testimonials/kirk-swirczynski.jpg" alt="Kirk Swirczynski" width="240" height="240" loading="lazy" decoding="async">
+                    <cite><strong>Kirk Swirczynski</strong><span>Broker/REALTOR® · Century 21 Doug Anderson</span></cite>
+                </figcaption>
+            </figure>
+            <figure class="testimonial">
+                <blockquote class="bubble">
+                    <p>“TransactVault has streamlined the way we manage our files. Instead of juggling email attachments and worrying about document security, everything is organized into one secure place. It saves us time, and gives our clients confidence that their information is protected.”</p>
+                </blockquote>
+                <figcaption>
+                    <img src="/static/images/testimonials/maria-muro.jpg" alt="Maria Muro" width="240" height="240" loading="lazy" decoding="async">
+                    <cite><strong>Maria Muro</strong><span>Transaction Coordinator · Century 21 Doug Anderson</span></cite>
+                </figcaption>
+            </figure>
+            <figure class="testimonial">
+                <blockquote class="bubble">
+                    <p>“I'm not a big fan of technology, but this tool is very easy and simple enough for even me to use. Less clutter, and more organization! The website colors are even easy on the eyes. I would definitely recommend TransactVault to other agents.”</p>
+                </blockquote>
+                <figcaption>
+                    <img src="/static/images/testimonials/amanda-lefebvre.jpg" alt="Amanda LeFebvre" width="240" height="240" loading="lazy" decoding="async">
+                    <cite><strong>Amanda LeFebvre</strong><span>REALTOR® · LeFebvre's East Valley Real Estate</span></cite>
+                </figcaption>
+            </figure>
+            <figure class="testimonial">
+                <blockquote class="bubble">
+                    <p>“At first, I was a little bit skeptical because TransactVault was so new. After using it, I realized being new is actually an advantage. Much faster loading speeds, far superior website technology, and an overall simpler and easier work environment. I'm glad that we made the switch!”</p>
+                </blockquote>
+                <figcaption>
+                    <img src="/static/images/testimonials/christie-mai.jpg" alt="Christie Mai" width="195" height="195" loading="lazy" decoding="async">
+                    <cite><strong>Christie Mai</strong><span>REALTOR® · The Real Estate Place</span></cite>
+                </figcaption>
+            </figure>
+            <figure class="testimonial">
+                <blockquote class="bubble">
+                    <p>“Between lenders, escrow officers, title reps, inspectors, and clients… there's a steady flow of documents I need to store. TransactVault keeps everything secure and organized, allowing me to focus on serving my clients' needs instead of chasing paperwork.”</p>
+                </blockquote>
+                <figcaption>
+                    <img src="/static/images/testimonials/jason-bruce.jpg" alt="Jason Bruce" width="240" height="240" loading="lazy" decoding="async">
+                    <cite><strong>Jason Bruce</strong><span>Broker/REALTOR® · Century 21 Doug Anderson</span></cite>
+                </figcaption>
+            </figure>
         </div>
     </section>
 
