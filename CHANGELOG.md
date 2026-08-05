@@ -6,6 +6,31 @@ the bottom-right of every page.
 
 ---
 
+## August 2026
+
+### v0.8.0 — A clearer front door, with familiar faces
+
+- **Real voices on the homepage.** Six of our earliest partners across
+  the Antelope Valley — from Century 21 Doug Anderson, The Real Estate
+  Place, and LeFebvre's East Valley Real Estate — now share how
+  TransactVault changed their workflow, photos and all, in a fresh
+  speech-bubble design. Thank you Glenda, Kirk, Maria, Amanda,
+  Christie, and Jason.
+
+- **Plainer words about what we do.** The homepage now says "real
+  estate transaction management" right in the headline, spells out the
+  full list of reasons brokerages switch (now eight, including how
+  simple the site is to navigate and how your documents are protected),
+  and gives the SkySlope and Dotloop comparisons more detail.
+
+- **Better link previews.** Pasting transactvault.app into a text
+  message or social post now shows a proper branded preview card
+  instead of a blank space.
+
+- **Small fixes.** A formatting glitch in the footer is gone, and our
+  mailing address is now listed there. Behind the scenes, we also added
+  tooling that makes rolling out updates to you smoother.
+
 ## July 2026
 
 ### v0.7.0 — Whole-brokerage exports that actually finish
