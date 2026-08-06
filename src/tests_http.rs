@@ -6070,3 +6070,51 @@ async fn admin_storage_delete_all_reports_zero_when_nothing_found() {
     let (status, _) = authed_post(&app, &admin, "/admin/storage/delete-all", "").await;
     assert_eq!(status, StatusCode::SEE_OTHER);
 }
+
+// ---------------------------------------------------------------------------
+// robots.txt + sitemap.xml
+// ---------------------------------------------------------------------------
+
+/// Both discovery files serve, carry the right shapes, and stay
+/// reachable during maintenance (a window mustn't erase crawl policy).
+#[tokio::test]
+async fn robots_and_sitemap_serve_and_survive_maintenance() {
+    let app = make_app().await;
+
+    let (status, body) = send(
+        &app,
+        Request::builder()
+            .uri("/robots.txt")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Disallow: /app"));
+    assert!(body.contains("Sitemap: http://test.local/sitemap.xml"));
+
+    let (status, body) = send(
+        &app,
+        Request::builder()
+            .uri("/sitemap.xml")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("<loc>http://test.local/pricing</loc>"));
+
+    app.state.ops.set_maintenance(true);
+    for path in ["/robots.txt", "/sitemap.xml"] {
+        let (status, _) = send(
+            &app,
+            Request::builder().uri(path).body(Body::empty()).unwrap(),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "{path} must stay open in maintenance"
+        );
+    }
+}

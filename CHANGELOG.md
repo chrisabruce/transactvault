@@ -8,6 +8,14 @@ the bottom-right of every page.
 
 ## August 2026
 
+### v0.11.1: Easier for search engines to find us
+
+- **The site now introduces itself to search engines properly.** We
+  added the two standard files crawlers look for (robots.txt and a
+  sitemap), pointing them at the public pages and away from your
+  private workspace. No visible change for you; it helps new brokers
+  find TransactVault when they search.
+
 ### v0.11.0: Storage housekeeping
 
 - **Orphaned files can now be found and swept.** Over time a storage

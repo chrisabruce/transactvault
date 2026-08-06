@@ -28,6 +28,8 @@ pub fn build(state: AppState) -> Router {
         .route("/", get(marketing::landing))
         .route("/pricing", get(marketing::pricing))
         .route("/brand", get(marketing::brand))
+        .route("/robots.txt", get(marketing::robots_txt))
+        .route("/sitemap.xml", get(marketing::sitemap_xml))
         .route("/login", get(auth::login_form).post(auth::login))
         .route("/signup", get(auth::signup_form).post(auth::signup))
         .route("/signup/check-email", get(auth::signup_check_email))
@@ -630,9 +632,17 @@ async fn maintenance_gate(
     }
 
     let path = req.uri().path();
+    // robots.txt + sitemap.xml stay open so a maintenance window can't
+    // make a crawler think the site's crawl policy vanished.
     let open = matches!(
         path,
-        "/" | "/pricing" | "/brand" | "/login" | "/logout" | "/healthcheck"
+        "/" | "/pricing"
+            | "/brand"
+            | "/login"
+            | "/logout"
+            | "/healthcheck"
+            | "/robots.txt"
+            | "/sitemap.xml"
     ) || path.starts_with("/static/")
         || path == "/admin"
         || path.starts_with("/admin/");

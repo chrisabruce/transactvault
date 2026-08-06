@@ -209,3 +209,45 @@ pub async fn brand(
         signed_in: user.is_some(),
     })
 }
+
+/// `GET /robots.txt` — crawl policy plus the sitemap pointer.
+///
+/// The app area and the token-carrying auth links are off limits;
+/// everything marketing-facing is open, including to AI crawlers
+/// (GPTBot, PerplexityBot, ClaudeBot fall under `*`) — being cited by
+/// AI search is distribution, not leakage, for a marketing site.
+pub async fn robots_txt(State(state): State<AppState>) -> impl axum::response::IntoResponse {
+    let body = format!(
+        "User-agent: *\n\
+         Allow: /\n\
+         Disallow: /app\n\
+         Disallow: /admin\n\
+         Disallow: /verify/\n\
+         Disallow: /reset/\n\
+         Disallow: /invite/\n\
+         \n\
+         Sitemap: {base}/sitemap.xml\n",
+        base = state.config.base_url.trim_end_matches('/')
+    );
+    ([("content-type", "text/plain; charset=utf-8")], body)
+}
+
+/// `GET /sitemap.xml` — the indexable marketing pages. Deliberately
+/// short: a sitemap earns trust by containing only canonical,
+/// index-worthy URLs, not by being long. No `lastmod` — a wrong or
+/// static date is worse than none.
+pub async fn sitemap_xml(State(state): State<AppState>) -> impl axum::response::IntoResponse {
+    let base = state.config.base_url.trim_end_matches('/').to_string();
+    let urls: [&str; 3] = ["/", "/pricing", "/signup"];
+    let entries: String = urls
+        .iter()
+        .map(|path| format!("  <url><loc>{base}{path}</loc></url>\n"))
+        .collect();
+    let body = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n\
+         {entries}\
+         </urlset>\n"
+    );
+    ([("content-type", "application/xml; charset=utf-8")], body)
+}
