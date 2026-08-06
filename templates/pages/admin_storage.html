@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+
+{% block title %}Storage — Admin — {{ app_name }}{% endblock %}
+{% block body_class %}page-app page-admin{% endblock %}
+
+{% block body %}
+{% include "components/app_header.html" %}
+
+<main class="app-main">
+    <header class="page-title">
+        <section>
+            <h1>Admin · Storage</h1>
+            <p class="subtitle">Every object in the bucket, checked against the database. What nothing references is an orphan, and orphans are safe to delete.</p>
+        </section>
+        <nav class="admin-subnav" aria-label="Admin sections">
+            <a href="/admin">Users</a>
+            <a href="/admin/brokerages">Brokerages</a>
+            <a href="/admin/tiers">Tiers</a>
+            <a href="/admin/forms">Forms</a>
+            <a href="/admin/feedback">Feedback</a>
+            <a href="/admin/audit">Audit log</a>
+            <a href="/admin/errors">Errors</a>
+            <a href="/admin/ops">Ops</a>
+            <a href="/admin/changelog">Changelog</a>
+        </nav>
+    </header>
+
+    {% match flash %}{% when Some with (msg) %}
+        <p class="alert success" role="status">{{ msg }}</p>
+    {% when None %}{% endmatch %}
+
+    {% match scan.error %}{% when Some with (err) %}
+        <p class="alert error" role="alert">{{ err }}</p>
+    {% when None %}{% endmatch %}
+
+    <section class="storage-stats" aria-label="Storage summary">
+        <article class="storage-stat">
+            <strong>{{ scan.total_objects }}</strong>
+            <span>objects · {{ scan.total_size }}</span>
+        </article>
+        <article class="storage-stat">
+            <strong>{{ scan.referenced }}</strong>
+            <span>referenced by the database</span>
+        </article>
+        <article class="storage-stat {% if !scan.orphans.is_empty() %}bad{% endif %}">
+            <strong>{{ scan.orphans.len() }}</strong>
+            <span>orphaned · {{ scan.orphan_size }}</span>
+        </article>
+        <article class="storage-stat">
+            <strong>{{ scan.inflight }}</strong>
+            <span>uploads in flight (left alone)</span>
+        </article>
+    </section>
+
+    <p class="storage-note">
+        Objects newer than 24 hours are never listed or touched
+        {%- if scan.fresh_skipped > 0 %} ({{ scan.fresh_skipped }} skipped on this scan){% endif -%}
+        , so an upload that's still finishing can't be mistaken for junk.
+        Deletion re-checks against the database at the moment you click, not
+        when this page loaded.
+    </p>
+
+    {% if !scan.orphans.is_empty() %}
+    <form method="post" action="/admin/storage/delete-all" class="inline-form storage-sweep"
+          data-confirm="Delete all {{ scan.orphans.len() }} orphaned objects ({{ scan.orphan_size }})? Nothing in the database points at them, and this cannot be undone.">
+        <button class="btn danger" type="submit">Delete all {{ scan.orphans.len() }} orphans · reclaim {{ scan.orphan_size }}</button>
+    </form>
+    {% endif %}
+
+    <section class="panel admin-table-wrap">
+        <table class="admin-table storage-table">
+            <thead>
+                <tr>
+                    <th scope="col">Object</th>
+                    <th scope="col">Kind</th>
+                    <th scope="col">Belongs to</th>
+                    <th scope="col">Size</th>
+                    <th scope="col">Last modified</th>
+                    <th scope="col">Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for o in scan.orphans %}
+                    <tr>
+                        <td class="storage-key"><code>{{ o.key }}</code></td>
+                        <td>{{ o.kind }}</td>
+                        <td>{{ o.owner }}</td>
+                        <td>{{ o.size }}</td>
+                        <td>{{ o.age }}</td>
+                        <td>
+                            <form method="post" action="/admin/storage/delete" class="inline-form"
+                                  data-confirm="Delete this object? Nothing in the database points at it, and this cannot be undone.">
+                                <input type="hidden" name="key" value="{{ o.key }}">
+                                <button class="btn small ghost danger" type="submit">Delete</button>
+                            </form>
+                        </td>
+                    </tr>
+                {% endfor %}
+                {% if scan.orphans.is_empty() %}
+                    <tr><td colspan="6" class="empty-row">No orphans. Every object in the bucket is accounted for.</td></tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </section>
+</main>
+{% endblock %}

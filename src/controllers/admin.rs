@@ -507,6 +507,7 @@ const AUDIT_KIND_OPTIONS: &[&str] = &[
     "maintenance_disabled",
     "maintenance_notice_set",
     "maintenance_notice_cleared",
+    "storage_orphans_deleted",
 ];
 
 /// `POST /admin/errors/clear` — permanently delete every captured error.

@@ -241,7 +241,10 @@ pub fn build(state: AppState) -> Router {
         .route("/admin/feedback/{key}/delete", post(feedback::delete))
         .route("/admin/ops", get(ops::page))
         .route("/admin/ops/maintenance", post(ops::set_maintenance))
-        .route("/admin/ops/notice", post(ops::set_notice));
+        .route("/admin/ops/notice", post(ops::set_notice))
+        .route("/admin/storage", get(ops::storage_page))
+        .route("/admin/storage/delete", post(ops::storage_delete_one))
+        .route("/admin/storage/delete-all", post(ops::storage_delete_all));
 
     let base = Router::new()
         .merge(public)

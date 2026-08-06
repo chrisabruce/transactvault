@@ -6027,3 +6027,46 @@ async fn passkey_delete_is_owner_only() {
         .expect("select");
     assert!(gone.is_none());
 }
+
+// ---------------------------------------------------------------------------
+// Storage cleanup (admin)
+// ---------------------------------------------------------------------------
+
+/// The storage page is super-admin only, and renders (with an inline
+/// error, not a 500) even when the object store is unreachable — the
+/// test harness's null storage points at a dead endpoint, which is
+/// exactly the failure mode a misconfigured prod would show.
+#[tokio::test]
+async fn admin_storage_page_is_gated_and_degrades_without_storage() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "HQ").await;
+    let admin = seed_user(&app.state, "admin@test").await;
+    join(&app.state, &admin, &b, "broker").await;
+    let agent = seed_user(&app.state, "agent@x.test").await;
+    join(&app.state, &agent, &b, "agent").await;
+
+    let (status, _) = authed_get(&app, &agent, "/admin/storage").await;
+    assert_ne!(status, StatusCode::OK, "non-admin must not see the page");
+
+    let (status, body) = authed_get(&app, &admin, "/admin/storage").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains("list the storage bucket"),
+        "unreachable storage should surface as an inline error"
+    );
+    assert!(body.contains("No orphans"));
+}
+
+/// Delete-all recomputes the orphan set server-side; with storage
+/// unreachable there are no orphans to delete, so it reports zero
+/// rather than failing.
+#[tokio::test]
+async fn admin_storage_delete_all_reports_zero_when_nothing_found() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "HQ").await;
+    let admin = seed_user(&app.state, "admin@test").await;
+    join(&app.state, &admin, &b, "broker").await;
+
+    let (status, _) = authed_post(&app, &admin, "/admin/storage/delete-all", "").await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+}

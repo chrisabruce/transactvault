@@ -530,7 +530,8 @@ DEFINE FIELD OVERWRITE kind ON audit_event TYPE string
         "feedback_resolved", "feedback_reopened", "feedback_deleted",
         "maintenance_enabled", "maintenance_disabled",
         "maintenance_notice_set", "maintenance_notice_cleared",
-        "passkey_registered", "passkey_removed"
+        "passkey_registered", "passkey_removed",
+        "storage_orphans_deleted"
     ];
 DEFINE FIELD OVERWRITE actor_email ON audit_event TYPE option<string>;
 DEFINE FIELD OVERWRITE actor       ON audit_event TYPE option<record<user>>;

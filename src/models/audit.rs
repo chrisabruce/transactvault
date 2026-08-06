@@ -121,6 +121,7 @@ impl AuditEvent {
             "maintenance_disabled" => "Maintenance mode off",
             "maintenance_notice_set" => "Maintenance notice set",
             "maintenance_notice_cleared" => "Maintenance notice cleared",
+            "storage_orphans_deleted" => "Orphaned storage deleted",
             _ => "Event",
         }
     }

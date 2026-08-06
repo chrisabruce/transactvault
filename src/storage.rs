@@ -17,6 +17,16 @@ use tokio::io::AsyncRead;
 
 use crate::config::RustFsConfig;
 
+/// One bucket entry from [`Storage::list_all`].
+#[derive(Debug, Clone)]
+pub struct StoredObject {
+    pub key: String,
+    pub size: u64,
+    /// `None` when the store returned an unparseable timestamp — the
+    /// scanner treats that as "too new to touch", failing safe.
+    pub last_modified: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 /// How long a presigned upload URL stays valid. This bounds when the
 /// PUT may *start* — signatures are checked at request start, so a
 /// slow transfer that began in time may run as long as the provider
@@ -298,6 +308,31 @@ impl Storage {
             }
         }
         Ok(deleted)
+    }
+
+    /// Every object in the bucket: key, size, and last-modified time.
+    /// Feeds the admin orphan scanner — which needs the whole inventory
+    /// to diff against the database, so there is deliberately no prefix
+    /// argument to get subtly wrong.
+    pub async fn list_all(&self) -> anyhow::Result<Vec<StoredObject>> {
+        let pages = self
+            .bucket
+            .list(String::new(), None)
+            .await
+            .map_err(|e| anyhow::anyhow!("list bucket: {e}"))?;
+        let mut out = Vec::new();
+        for page in pages {
+            for obj in page.contents {
+                out.push(StoredObject {
+                    key: obj.key,
+                    size: obj.size,
+                    last_modified: chrono::DateTime::parse_from_rfc3339(&obj.last_modified)
+                        .ok()
+                        .map(|t| t.with_timezone(&chrono::Utc)),
+                });
+            }
+        }
+        Ok(out)
     }
 
     /// Size of the stored object, `Ok(None)` when the key doesn't

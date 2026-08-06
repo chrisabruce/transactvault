@@ -1012,6 +1012,19 @@ pub struct AdminOpsPage<'a> {
     pub env_forced: bool,
 }
 
+/// `/admin/storage` — bucket-vs-database diff with per-orphan and
+/// sweep-everything deletion.
+#[derive(Template)]
+#[template(path = "pages/admin_storage.html")]
+pub struct AdminStoragePage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+    pub signed_in: bool,
+    pub header: AppHeader,
+    pub scan: crate::controllers::ops::StorageScan,
+    pub flash: Option<String>,
+}
+
 /// `/admin/feedback` — user-submitted notes, newest first.
 #[derive(Template)]
 #[template(path = "pages/admin_feedback.html")]

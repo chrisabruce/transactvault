@@ -201,3 +201,372 @@ fn urlencode(s: &str) -> String {
         })
         .collect()
 }
+
+// ---------------------------------------------------------------------------
+// Storage cleanup — find and remove orphaned objects
+// ---------------------------------------------------------------------------
+
+use std::collections::{HashMap, HashSet};
+
+use humansize::{DECIMAL, format_size};
+
+/// Objects younger than this are never shown or deleted: an upload can
+/// be mid-flight (browser PUT done, finalize not yet arrived), and a
+/// day of slack costs nothing next to deleting someone's disclosure.
+const FRESH_GUARD_HOURS: i64 = 24;
+
+/// One orphaned object, shaped for the template.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OrphanView {
+    pub key: String,
+    pub size: String,
+    pub size_bytes: u64,
+    pub age: String,
+    /// Resolved owner: brokerage name, user email, or "unknown".
+    pub owner: String,
+    /// What the key shape says it was: Document / Avatar / Export
+    /// archive / Abandoned upload.
+    pub kind: String,
+}
+
+pub struct StorageScan {
+    pub total_objects: usize,
+    pub total_size: String,
+    pub referenced: usize,
+    pub orphans: Vec<OrphanView>,
+    pub orphan_size: String,
+    pub fresh_skipped: usize,
+    pub inflight: usize,
+    pub error: Option<String>,
+}
+
+/// Every storage key the database can explain, plus how many pending
+/// uploads are fresh enough to leave alone.
+async fn referenced_keys(state: &AppState) -> anyhow::Result<(HashSet<String>, usize)> {
+    let mut referenced: HashSet<String> = HashSet::new();
+
+    let mut q = state
+        .db
+        .query("SELECT VALUE storage_key FROM document")
+        .await?;
+    let docs: Vec<String> = q.take(0).unwrap_or_default();
+    referenced.extend(docs);
+
+    let mut q = state
+        .db
+        .query("SELECT VALUE avatar_storage_key FROM user WHERE avatar_storage_key != NONE")
+        .await?;
+    let avatars: Vec<String> = q.take(0).unwrap_or_default();
+    referenced.extend(avatars);
+
+    let mut q = state
+        .db
+        .query("SELECT VALUE storage_key FROM export_chunk")
+        .await?;
+    let chunks: Vec<String> = q.take(0).unwrap_or_default();
+    referenced.extend(chunks);
+
+    // Fresh pending uploads are in-flight, not orphans. Stale ones are
+    // exactly what this page exists to sweep: the browser PUT the bytes
+    // and the finalize call never came.
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct Pending {
+        storage_key: String,
+        created_at: chrono::DateTime<chrono::Utc>,
+    }
+    let mut q = state
+        .db
+        .query("SELECT storage_key, created_at FROM pending_upload")
+        .await?;
+    let pending: Vec<Pending> = q.take(0).unwrap_or_default();
+    let cutoff = chrono::Utc::now() - chrono::Duration::hours(FRESH_GUARD_HOURS);
+    let mut inflight = 0usize;
+    for p in pending {
+        if p.created_at > cutoff {
+            referenced.insert(p.storage_key);
+            inflight += 1;
+        }
+    }
+
+    Ok((referenced, inflight))
+}
+
+/// Name lookups for the "belongs to" column. Both tables are small at
+/// our scale; two full scans beat N per-row queries.
+async fn owner_maps(state: &AppState) -> (HashMap<String, String>, HashMap<String, String>) {
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct Named {
+        id: RecordId,
+        name: String,
+    }
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct Mailed {
+        id: RecordId,
+        email: String,
+    }
+
+    let brokerages: HashMap<String, String> =
+        match state.db.query("SELECT id, name FROM brokerage").await {
+            Ok(mut q) => q
+                .take::<Vec<Named>>(0)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|b| (crate::db::record_key(&b.id), b.name))
+                .collect(),
+            Err(_) => HashMap::new(),
+        };
+    let users: HashMap<String, String> = match state.db.query("SELECT id, email FROM user").await {
+        Ok(mut q) => q
+            .take::<Vec<Mailed>>(0)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|u| (crate::db::record_key(&u.id), u.email))
+            .collect(),
+        Err(_) => HashMap::new(),
+    };
+    (brokerages, users)
+}
+
+fn classify(
+    key: &str,
+    brokerages: &HashMap<String, String>,
+    users: &HashMap<String, String>,
+) -> (String, String) {
+    if let Some(rest) = key.strip_prefix("avatars/") {
+        let user_key = rest.trim_end_matches(".png");
+        let owner = users
+            .get(user_key)
+            .cloned()
+            .unwrap_or_else(|| "deleted user".to_string());
+        return ("Avatar".to_string(), owner);
+    }
+    if key.starts_with("exports/") {
+        let owner = key
+            .split('/')
+            .find_map(|seg| brokerages.get(seg))
+            .cloned()
+            .unwrap_or_else(|| "deleted brokerage".to_string());
+        return ("Export archive".to_string(), owner);
+    }
+    // Document layout: {brokerage}/{property}/{form}/{file}
+    let first = key.split('/').next().unwrap_or_default();
+    let owner = brokerages
+        .get(first)
+        .cloned()
+        .unwrap_or_else(|| "deleted brokerage".to_string());
+    ("Document".to_string(), owner)
+}
+
+/// Diff the bucket against the database. The expensive half is the
+/// bucket LIST; the queries are all indexed or tiny.
+async fn scan_storage(state: &AppState) -> StorageScan {
+    let objects = match state.storage.list_all().await {
+        Ok(objs) => objs,
+        Err(e) => {
+            return StorageScan {
+                total_objects: 0,
+                total_size: "0 B".into(),
+                referenced: 0,
+                orphans: Vec::new(),
+                orphan_size: "0 B".into(),
+                fresh_skipped: 0,
+                inflight: 0,
+                error: Some(format!("Couldn't list the storage bucket: {e}")),
+            };
+        }
+    };
+
+    let (referenced, inflight) = match referenced_keys(state).await {
+        Ok(r) => r,
+        Err(e) => {
+            return StorageScan {
+                total_objects: objects.len(),
+                total_size: format_size(objects.iter().map(|o| o.size).sum::<u64>(), DECIMAL),
+                referenced: 0,
+                orphans: Vec::new(),
+                orphan_size: "0 B".into(),
+                fresh_skipped: 0,
+                inflight: 0,
+                error: Some(format!("Couldn't read reference tables: {e}")),
+            };
+        }
+    };
+
+    let (brokerages, users) = owner_maps(state).await;
+    let cutoff = chrono::Utc::now() - chrono::Duration::hours(FRESH_GUARD_HOURS);
+
+    let total_objects = objects.len();
+    let total_bytes: u64 = objects.iter().map(|o| o.size).sum();
+    let mut orphans = Vec::new();
+    let mut orphan_bytes = 0u64;
+    let mut fresh_skipped = 0usize;
+    let mut referenced_count = 0usize;
+
+    for obj in objects {
+        if referenced.contains(&obj.key) {
+            referenced_count += 1;
+            continue;
+        }
+        // Fail safe on freshness: unknown age counts as fresh.
+        let old_enough = obj.last_modified.map(|t| t < cutoff).unwrap_or(false);
+        if !old_enough {
+            fresh_skipped += 1;
+            continue;
+        }
+        let (kind, owner) = classify(&obj.key, &brokerages, &users);
+        let age = obj
+            .last_modified
+            .map(|t| t.format("%b %-d, %Y").to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        orphan_bytes += obj.size;
+        orphans.push(OrphanView {
+            key: obj.key,
+            size: format_size(obj.size, DECIMAL),
+            size_bytes: obj.size,
+            age,
+            owner,
+            kind,
+        });
+    }
+    // Biggest wins first.
+    orphans.sort_by_key(|o| std::cmp::Reverse(o.size_bytes));
+
+    StorageScan {
+        total_objects,
+        total_size: format_size(total_bytes, DECIMAL),
+        referenced: referenced_count,
+        orphans,
+        orphan_size: format_size(orphan_bytes, DECIMAL),
+        fresh_skipped,
+        inflight,
+        error: None,
+    }
+}
+
+/// `GET /admin/storage` — run the scan and show the results.
+pub async fn storage_page(
+    State(state): State<AppState>,
+    SuperAdmin(user): SuperAdmin,
+    axum::extract::Query(q): axum::extract::Query<OpsQuery>,
+) -> Result<Html<String>, AppError> {
+    let scan = scan_storage(&state).await;
+    let header = crate::controllers::common::build_app_header(&state, &user, "admin").await;
+    render(&crate::templates::AdminStoragePage {
+        app_name: &state.config.app_name,
+        base_url: &state.config.base_url,
+        signed_in: true,
+        header,
+        scan,
+        flash: q.flash,
+    })
+}
+
+/// Delete orphans. With `key`, exactly that one; without, every orphan
+/// from a FRESH scan. Either way the reference check happens at delete
+/// time, so a page that sat open for an hour can't delete an object a
+/// finalize call claimed in the meantime.
+async fn delete_orphans(state: &AppState, only_key: Option<String>) -> (usize, u64, usize) {
+    let scan = scan_storage(state).await;
+    let targets: Vec<&OrphanView> = match &only_key {
+        Some(k) => scan.orphans.iter().filter(|o| &o.key == k).collect(),
+        None => scan.orphans.iter().collect(),
+    };
+
+    let mut deleted = 0usize;
+    let mut bytes = 0u64;
+    let mut failed = 0usize;
+    for orphan in targets {
+        match state.storage.delete(&orphan.key).await {
+            Ok(()) => {
+                deleted += 1;
+                bytes += orphan.size_bytes;
+                // Drop any stale pending_upload row that pointed here,
+                // so the table shrinks along with the bucket.
+                let _ = state
+                    .db
+                    .query("DELETE pending_upload WHERE storage_key = $k")
+                    .bind(("k", orphan.key.clone()))
+                    .await;
+            }
+            Err(e) => {
+                failed += 1;
+                tracing::warn!(key = %orphan.key, error = %e, "orphan delete failed");
+            }
+        }
+    }
+    (deleted, bytes, failed)
+}
+
+/// `POST /admin/storage/delete-all` — sweep every orphan.
+pub async fn storage_delete_all(
+    State(state): State<AppState>,
+    SuperAdmin(user): SuperAdmin,
+) -> Result<Response, AppError> {
+    let (deleted, bytes, failed) = delete_orphans(&state, None).await;
+
+    audit::record(
+        &state.db,
+        "storage_orphans_deleted",
+        Some(user.user_id.clone()),
+        Some(user.email.clone()),
+        None,
+        None,
+        Some(format!(
+            "{deleted} object(s), {}",
+            format_size(bytes, DECIMAL)
+        )),
+    )
+    .await;
+    tracing::info!(deleted, failed, bytes, actor = %user.email, "orphaned storage objects deleted");
+
+    let flash = if failed == 0 {
+        format!(
+            "Deleted {deleted} orphaned object(s), reclaiming {}.",
+            format_size(bytes, DECIMAL)
+        )
+    } else {
+        format!(
+            "Deleted {deleted} orphaned object(s) ({}); {failed} failed — see the logs.",
+            format_size(bytes, DECIMAL)
+        )
+    };
+    Ok(Redirect::to(&format!("/admin/storage?flash={}", urlencode(&flash))).into_response())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteOneForm {
+    pub key: String,
+}
+
+/// `POST /admin/storage/delete` — delete a single orphan by key.
+pub async fn storage_delete_one(
+    State(state): State<AppState>,
+    SuperAdmin(user): SuperAdmin,
+    Form(form): Form<DeleteOneForm>,
+) -> Result<Response, AppError> {
+    let (deleted, bytes, _failed) = delete_orphans(&state, Some(form.key.clone())).await;
+
+    if deleted > 0 {
+        audit::record(
+            &state.db,
+            "storage_orphans_deleted",
+            Some(user.user_id.clone()),
+            Some(user.email.clone()),
+            None,
+            None,
+            Some(format!(
+                "1 object, {} ({})",
+                format_size(bytes, DECIMAL),
+                form.key
+            )),
+        )
+        .await;
+    }
+
+    let flash = if deleted > 0 {
+        format!("Deleted. Reclaimed {}.", format_size(bytes, DECIMAL))
+    } else {
+        "Nothing deleted: that object is no longer an orphan (or is already gone).".to_string()
+    };
+    Ok(Redirect::to(&format!("/admin/storage?flash={}", urlencode(&flash))).into_response())
+}

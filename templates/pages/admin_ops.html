@@ -97,5 +97,18 @@
             {% endif %}
         </footer>
     </section>
+
+    <section class="panel ops-panel">
+        <header class="ops-panel-head">
+            <h2>Storage cleanup</h2>
+        </header>
+        <p>
+            Compare every object in the storage bucket against the database and
+            sweep what nothing references: half-finished uploads, files whose
+            delete didn't stick, leftovers from removed accounts. The scan is
+            read-only until you choose to delete.
+        </p>
+        <a class="btn secondary" href="/admin/storage">Scan for orphaned files</a>
+    </section>
 </main>
 {% endblock %}

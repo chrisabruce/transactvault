@@ -8,6 +8,18 @@ the bottom-right of every page.
 
 ## August 2026
 
+### v0.11.0: Storage housekeeping
+
+- **Orphaned files can now be found and swept.** Over time a storage
+  bucket collects strays: uploads that never finished, files whose
+  owner account was removed. Admin → Ops → "Scan for orphaned files"
+  now compares every stored object against the database and lists
+  anything nothing points to, with its size, age, and who it belonged
+  to. Delete them one at a time or all at once. Files newer than 24
+  hours are never touched, and every deletion re-checks the database
+  at the moment you click, so a file that just became real can't be
+  swept by a stale page.
+
 ### v0.10.0: Sign in with a passkey
 
 - **Your face, your fingerprint, or your device PIN can sign you in
