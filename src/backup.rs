@@ -37,6 +37,22 @@ use tokio::io::AsyncWriteExt;
 
 use crate::state::AppState;
 
+/// Flatten an `anyhow` chain onto one line.
+///
+/// `%e` on an `anyhow::Error` prints only the outermost context, which
+/// is why the first production backup failure logged "connecting to
+/// http://tv-surrealdb:8000 for backup" and not one word about why. The
+/// cause is the entire value of the message.
+pub fn describe(err: &anyhow::Error) -> String {
+    let mut parts = vec![err.to_string()];
+    let mut source = err.source();
+    while let Some(cause) = source {
+        parts.push(cause.to_string());
+        source = cause.source();
+    }
+    parts.join(": ")
+}
+
 /// Object-storage prefix for backup artifacts.
 const BACKUP_PREFIX: &str = "backups/";
 
@@ -360,7 +376,7 @@ pub fn spawn(state: AppState) {
             }
             match run_backup(&state, "auto").await {
                 Ok(b) => tracing::info!(filename = %b.filename, "scheduled backup complete"),
-                Err(e) => tracing::error!(error = %e, "scheduled backup FAILED"),
+                Err(e) => tracing::error!(error = %describe(&e), "scheduled backup FAILED"),
             }
         }
     });

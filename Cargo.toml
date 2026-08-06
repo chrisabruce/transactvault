@@ -1,6 +1,6 @@
 [package]
 name = "transactvault"
-version = "0.14.0"
+version = "0.14.1"
 edition = "2024"
 description = "TransactVault — modern real estate transaction management for California brokerages."
 # Proprietary, all rights reserved — source is public on GitHub for
@@ -12,7 +12,18 @@ publish = false
 [dependencies]
 axum = { version = "0.8", features = ["macros", "multipart"] }
 tokio = { version = "1", features = ["full"] }
-surrealdb = { version = "3", features = ["kv-mem", "kv-surrealkv"] }
+# `protocol-http` is NOT a default feature (defaults are protocol-ws +
+# rustls) and it is load-bearing for backups: the SDK registers
+# `ExtraFeatures::Backup` only on the HTTP engine, so export/import are
+# unavailable without it. Omitting it compiles and runs fine right up
+# until the first backup, which fails with "Cannot connect to the `HTTP`
+# remote engine as it is not enabled in this build of SurrealDB".
+surrealdb = { version = "3", features = [
+    "kv-mem",
+    "kv-surrealkv",
+    "protocol-ws",
+    "protocol-http",
+] }
 askama = { version = "0.14", features = ["serde_json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

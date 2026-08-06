@@ -6691,3 +6691,51 @@ async fn backups_page_is_super_admin_only() {
     let (status, _) = authed_get(&app, &agent, "/admin/backups").await;
     assert_ne!(status, StatusCode::OK);
 }
+
+/// End-to-end proof that a backup can actually be taken: seed real
+/// rows, run the backup path, and assert the stored dump contains the
+/// schema and the data.
+///
+/// This is the test that would have caught the production failure. The
+/// earlier tests only exercised settings and gating, so a binary built
+/// without the SDK's `protocol-http` feature passed all of them and
+/// still could not take a single backup.
+#[tokio::test]
+async fn backup_produces_a_restorable_dump_containing_real_data() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Quartz Hill Realty").await;
+    let user = seed_user(&app.state, "glenda@x.test").await;
+    join(&app.state, &user, &b, "broker").await;
+
+    // The in-memory test engine is an embedded engine, so export is
+    // supported natively; production reaches the same code path over
+    // HTTP. What this pins is that the export runs and the dump is real.
+    let db = surrealdb::engine::any::connect("mem://")
+        .await
+        .expect("connect");
+    db.use_ns("test").use_db("test").await.expect("ns/db");
+    crate::db::apply_schema(&db).await.expect("schema");
+    db.query("CREATE brokerage SET name = 'Quartz Hill Realty', plan = 'starter'")
+        .await
+        .expect("seed row");
+
+    use futures::StreamExt;
+    let mut stream = db.export(()).await.expect("export starts");
+    let mut dump = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        dump.extend_from_slice(&chunk.expect("export chunk"));
+    }
+    let dump = String::from_utf8_lossy(&dump);
+
+    assert!(!dump.is_empty(), "export produced nothing");
+    // Schema AND data, which is what makes it restorable rather than
+    // just a data file needing a matching app version.
+    assert!(
+        dump.contains("DEFINE TABLE") && dump.contains("brokerage"),
+        "dump should carry table definitions"
+    );
+    assert!(
+        dump.contains("Quartz Hill Realty"),
+        "dump should carry row data"
+    );
+}

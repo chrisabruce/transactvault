@@ -8,6 +8,16 @@ the bottom-right of every page.
 
 ## August 2026
 
+### v0.14.1: Backups actually run now
+
+- **Fixed: "Back up now" failed with a connection error.** The database
+  connection the backup used was missing from the build, so every backup
+  stopped before it started. It works now, on the schedule and on
+  demand. Nothing about your setup needed changing.
+
+- **Failures now say what went wrong.** The error on screen and in the
+  logs carries the underlying cause instead of just the last step.
+
 ### v0.14.0: Backups you can schedule, and admin cleanup tools
 
 - **Automatic database backups.** Under Admin → Backups you can turn on
