@@ -14,9 +14,6 @@
             <p class="alert error" role="alert">{{ msg }}</p>
         {% when None %}{% endmatch %}
 
-        <button type="button" class="btn google" disabled>Continue with Google <small>(coming soon)</small></button>
-        <p class="auth-divider">or with email</p>
-
         <form method="post" action="/signup" id="signup-form" novalidate>
             <fieldset>
                 <legend class="visually-hidden">Your details</legend>

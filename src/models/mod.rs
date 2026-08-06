@@ -11,6 +11,7 @@ pub mod document;
 pub mod export;
 pub mod feedback;
 pub mod invitation;
+pub mod passkey;
 pub mod tier;
 pub mod transaction;
 pub mod user;
@@ -26,6 +27,7 @@ pub use document::{NewPendingUpload, PendingUpload};
 pub use export::{ExportChunk, ExportJob, ExportStatus, NewExportChunk, NewExportJob};
 pub use feedback::{Feedback, NewFeedback};
 pub use invitation::{Invitation, NewInvitation};
+pub use passkey::{NewPasskeyRow, PasskeyRow};
 #[allow(unused_imports)]
 pub use tier::NewTier;
 pub use tier::Tier;

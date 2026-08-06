@@ -5871,3 +5871,159 @@ async fn admin_feedback_resolve_reopen_delete() {
         .expect("select one");
     assert!(row.is_none());
 }
+
+// ---------------------------------------------------------------------------
+// Passkeys
+// ---------------------------------------------------------------------------
+
+/// POST a JSON body as a signed-in user.
+async fn authed_post_json(
+    app: &TestApp,
+    user_id: &RecordId,
+    uri: &str,
+    json_body: &str,
+) -> (StatusCode, String) {
+    let cookie = session_cookie(app, user_id);
+    let req = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("cookie", cookie)
+        .header("content-type", "application/json")
+        .body(Body::from(json_body.to_string()))
+        .unwrap();
+    send(app, req).await
+}
+
+/// Registration challenges exist only for signed-in users.
+#[tokio::test]
+async fn passkey_register_start_requires_sign_in() {
+    let app = make_app().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/app/profile/passkeys/register/start")
+        .header("content-type", "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    let (status, _) = send(&app, req).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+/// A signed-in user gets a creation challenge with the pieces the
+/// browser API needs, and a ceremony id to answer with.
+#[tokio::test]
+async fn passkey_register_start_returns_challenge() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "HQ").await;
+    let user = seed_user(&app.state, "kirk@x.test").await;
+    join(&app.state, &user, &b, "agent").await;
+
+    let (status, body) =
+        authed_post_json(&app, &user, "/app/profile/passkeys/register/start", "{}").await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).expect("json");
+    assert!(json["ceremony"].is_string());
+    assert!(json["webauthnId"].is_string());
+    assert!(json["options"]["publicKey"]["challenge"].is_string());
+    assert_eq!(
+        json["options"]["publicKey"]["user"]["name"].as_str(),
+        Some("kirk@x.test")
+    );
+}
+
+/// The public sign-in challenge needs no session and no username.
+#[tokio::test]
+async fn passkey_login_start_is_public() {
+    let app = make_app().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/login/passkey/start")
+        .header("content-type", "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    let (status, body) = send(&app, req).await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).expect("json");
+    assert!(json["ceremony"].is_string());
+    assert!(json["options"]["publicKey"]["challenge"].is_string());
+}
+
+/// A finish against an expired/unknown ceremony fails with friendly
+/// copy, not a 500 — this is the "user waited too long" path.
+#[tokio::test]
+async fn passkey_login_finish_unknown_ceremony_is_friendly_400() {
+    let app = make_app().await;
+    let body = format!(
+        r#"{{"ceremony":"{}","credential":{{"id":"AAAA","rawId":"AAAA","type":"public-key",
+            "response":{{"authenticatorData":"AAAA","clientDataJSON":"AAAA",
+            "signature":"AAAA","userHandle":null}},"extensions":{{}}}}}}"#,
+        uuid::Uuid::now_v7()
+    );
+    let req = Request::builder()
+        .method("POST")
+        .uri("/login/passkey/finish")
+        .header("content-type", "application/json")
+        .body(Body::from(body))
+        .unwrap();
+    let (status, body) = send(&app, req).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body: {body}");
+    assert!(body.contains("expired"), "body: {body}");
+}
+
+/// Removing a passkey is owner-only, and the "not yours" answer is
+/// indistinguishable from "doesn't exist".
+#[tokio::test]
+async fn passkey_delete_is_owner_only() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "HQ").await;
+    let alice = seed_user(&app.state, "alice@x.test").await;
+    join(&app.state, &alice, &b, "agent").await;
+    let bob = seed_user(&app.state, "bob@x.test").await;
+    join(&app.state, &bob, &b, "agent").await;
+
+    let row: Option<crate::models::PasskeyRow> = app
+        .state
+        .db
+        .create("passkey")
+        .content(crate::models::NewPasskeyRow {
+            user: alice.clone(),
+            webauthn_id: uuid::Uuid::now_v7().to_string(),
+            cred_id: "test-cred-id".into(),
+            credential: "{}".into(),
+            label: "Work laptop".into(),
+        })
+        .await
+        .expect("create passkey row");
+    let key = row.expect("row").key();
+
+    // Bob can't remove Alice's passkey — and can't learn it exists.
+    let (status, _) = authed_post(
+        &app,
+        &bob,
+        &format!("/app/profile/passkeys/{key}/delete"),
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // The profile page shows it to Alice…
+    let (status, body) = authed_get(&app, &alice, "/app/profile").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Work laptop"));
+
+    // …and Alice can remove it.
+    let (status, _) = authed_post(
+        &app,
+        &alice,
+        &format!("/app/profile/passkeys/{key}/delete"),
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let gone: Option<crate::models::PasskeyRow> = app
+        .state
+        .db
+        .select(surrealdb::types::RecordId::new("passkey", key.as_str()))
+        .await
+        .expect("select");
+    assert!(gone.is_none());
+}

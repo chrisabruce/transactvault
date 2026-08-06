@@ -531,6 +531,8 @@ pub struct ProfilePage<'a> {
     pub email: &'a str,
     pub user_key: String,
     pub has_avatar: bool,
+    /// Registered passkeys, pre-formatted for display.
+    pub passkeys: Vec<crate::controllers::passkeys::PasskeyView>,
     pub profile_error: Option<&'a str>,
     pub password_error: Option<&'a str>,
 }

@@ -418,6 +418,7 @@ async fn render_profile(
     password_error: Option<&str>,
 ) -> Result<Html<String>, AppError> {
     let header = crate::controllers::common::build_app_header(state, user, "profile").await;
+    let passkey_rows = crate::controllers::passkeys::rows_for_user(state, &user.user_id).await;
 
     render(&ProfilePage {
         app_name: &state.config.app_name,
@@ -428,6 +429,7 @@ async fn render_profile(
         email: &user.email,
         user_key: crate::db::record_key(&user.user_id),
         has_avatar: user.has_avatar,
+        passkeys: crate::controllers::passkeys::views(&passkey_rows),
         profile_error,
         password_error,
     })

@@ -106,6 +106,50 @@
                 <button type="submit" class="btn">Change password</button>
             </form>
         </article>
+
+        <article class="panel" id="passkeys">
+            <h2>Passkeys</h2>
+            <p class="panel-lede">
+                Skip the password: sign in with your fingerprint, your face, or your
+                device PIN. A passkey lives on your device, can't be phished, and
+                your password keeps working alongside it.
+            </p>
+
+            {% if !passkeys.is_empty() %}
+            <ul class="passkey-list" role="list">
+                {% for pk in passkeys %}
+                    <li class="passkey-item">
+                        <section class="passkey-meta">
+                            <strong>{{ pk.label }}</strong>
+                            <small>
+                                Added {{ pk.created }}{% match pk.last_used %}{% when Some with (used) %} · last used {{ used }}{% when None %}{% endmatch %}
+                            </small>
+                        </section>
+                        <form method="post" action="/app/profile/passkeys/{{ pk.key }}/delete" class="inline-form"
+                              data-confirm="Remove the passkey named {{ pk.label }}? You can always add it back later, and your password keeps working.">
+                            <button type="submit" class="btn small ghost danger">Remove</button>
+                        </form>
+                    </li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+
+            {#- Hidden until passkey.js confirms WebAuthn support. -#}
+            <section class="passkey-add" hidden data-passkey-register>
+                <form class="passkey-add-form">
+                    <label>
+                        <span>Name it (optional)</span>
+                        <input type="text" name="label" maxlength="60"
+                               placeholder="Work laptop, phone, YubiKey…">
+                    </label>
+                    <button type="button" class="btn secondary passkey-btn">Add a passkey</button>
+                </form>
+                <p class="passkey-error alert error" role="alert" hidden></p>
+                <p class="passkey-done alert success" role="status" hidden>
+                    Passkey added. Next sign-in, tap "Sign in with a passkey" and you're in.
+                </p>
+            </section>
+        </article>
     </section>
 </main>
 
@@ -113,4 +157,5 @@
         integrity="sha384-jrOgQzBlDeUNdmQn3rUt/PZD+pdcRBdWd/HWRqRo+n2OR2QtGyjSaJC0GiCeH+ir"
         crossorigin="anonymous"></script>
 <script src="/static/js/avatar-cropper.js" defer></script>
+<script src="/static/js/passkey.js" defer></script>
 {% endblock %}

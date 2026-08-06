@@ -529,7 +529,8 @@ DEFINE FIELD OVERWRITE kind ON audit_event TYPE string
         "feedback_blocked_rate_limit",
         "feedback_resolved", "feedback_reopened", "feedback_deleted",
         "maintenance_enabled", "maintenance_disabled",
-        "maintenance_notice_set", "maintenance_notice_cleared"
+        "maintenance_notice_set", "maintenance_notice_cleared",
+        "passkey_registered", "passkey_removed"
     ];
 DEFINE FIELD OVERWRITE actor_email ON audit_event TYPE option<string>;
 DEFINE FIELD OVERWRITE actor       ON audit_event TYPE option<record<user>>;
@@ -570,3 +571,22 @@ DEFINE INDEX OVERWRITE idx_feedback_at     ON feedback FIELDS created_at;
 DEFINE TABLE OVERWRITE system_setting SCHEMAFULL;
 DEFINE FIELD OVERWRITE maintenance_mode   ON system_setting TYPE bool DEFAULT false;
 DEFINE FIELD OVERWRITE maintenance_notice ON system_setting TYPE option<string>;
+
+-- ---------------------------------------------------------------------------
+-- Passkeys (WebAuthn credentials). One row per registered authenticator.
+-- `credential` is the serialized webauthn-rs Passkey (public key, counter,
+-- flags); `cred_id` is its base64url credential id, unique so a sign-in
+-- can find the owner with one indexed lookup. `webauthn_id` is the
+-- per-user WebAuthn user handle (a UUID minted at first registration and
+-- shared by all of that user's passkeys).
+-- ---------------------------------------------------------------------------
+DEFINE TABLE OVERWRITE passkey SCHEMAFULL;
+DEFINE FIELD OVERWRITE user         ON passkey TYPE record<user>;
+DEFINE FIELD OVERWRITE webauthn_id  ON passkey TYPE string;
+DEFINE FIELD OVERWRITE cred_id      ON passkey TYPE string;
+DEFINE FIELD OVERWRITE credential   ON passkey TYPE string;
+DEFINE FIELD OVERWRITE label        ON passkey TYPE string DEFAULT "Passkey";
+DEFINE FIELD OVERWRITE created_at   ON passkey TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE last_used_at ON passkey TYPE option<datetime>;
+DEFINE INDEX OVERWRITE idx_passkey_user ON passkey FIELDS user;
+DEFINE INDEX OVERWRITE idx_passkey_cred ON passkey FIELDS cred_id UNIQUE;

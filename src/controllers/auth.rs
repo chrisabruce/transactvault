@@ -982,7 +982,7 @@ struct NameOnly {
 /// which is what lets [`bump_token_version`] revoke outstanding
 /// sessions. A missing row yields version 0 — the token is then
 /// rejected by the middleware anyway, since the user lookup fails.
-async fn set_session_cookie(
+pub(crate) async fn set_session_cookie(
     state: &AppState,
     cookies: &Cookies,
     user_id: &RecordId,

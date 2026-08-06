@@ -1,11 +1,13 @@
 //! Shared application state passed to every Axum handler via `State`.
 
-use std::sync::Arc;
-use std::sync::RwLock;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
 
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
+use surrealdb::types::RecordId;
 
 use crate::config::Config;
 use crate::email::Mailer;
@@ -61,6 +63,109 @@ struct OpsInner {
     notice: RwLock<Option<String>>,
 }
 
+/// Server-side state for in-flight WebAuthn ceremonies.
+///
+/// A registration or sign-in is two HTTP requests: `start` mints a
+/// challenge and this state, `finish` verifies the authenticator's
+/// answer against it. The state MUST stay server-side (it's what makes
+/// the challenge unforgeable), so it parks here keyed by a random
+/// ceremony id the client echoes back. In-memory on purpose: ceremonies
+/// live seconds, and losing them on restart only means someone taps the
+/// button again.
+#[derive(Clone, Default)]
+pub struct Ceremonies {
+    inner: Arc<Mutex<CeremonyMap>>,
+}
+
+#[derive(Default)]
+struct CeremonyMap {
+    reg: HashMap<uuid::Uuid, (webauthn_rs::prelude::PasskeyRegistration, RecordId, Instant)>,
+    auth: HashMap<uuid::Uuid, (webauthn_rs::prelude::DiscoverableAuthentication, Instant)>,
+}
+
+/// Ceremony lifetime — comfortably above authenticator UI timeouts.
+const CEREMONY_TTL: Duration = Duration::from_secs(300);
+/// Flood backstop. Real traffic never gets close; past this the maps
+/// are cleared outright (in-flight ceremonies just retry).
+const CEREMONY_CAP: usize = 4096;
+
+impl Ceremonies {
+    pub fn put_registration(
+        &self,
+        state: webauthn_rs::prelude::PasskeyRegistration,
+        user: RecordId,
+    ) -> uuid::Uuid {
+        let id = uuid::Uuid::now_v7();
+        if let Ok(mut map) = self.inner.lock() {
+            Self::prune(&mut map);
+            map.reg.insert(id, (state, user, Instant::now()));
+        }
+        id
+    }
+
+    /// One-shot take: a ceremony can't be answered twice.
+    pub fn take_registration(
+        &self,
+        id: uuid::Uuid,
+    ) -> Option<(webauthn_rs::prelude::PasskeyRegistration, RecordId)> {
+        let mut map = self.inner.lock().ok()?;
+        let (state, user, born) = map.reg.remove(&id)?;
+        (born.elapsed() < CEREMONY_TTL).then_some((state, user))
+    }
+
+    pub fn put_authentication(
+        &self,
+        state: webauthn_rs::prelude::DiscoverableAuthentication,
+    ) -> uuid::Uuid {
+        let id = uuid::Uuid::now_v7();
+        if let Ok(mut map) = self.inner.lock() {
+            Self::prune(&mut map);
+            map.auth.insert(id, (state, Instant::now()));
+        }
+        id
+    }
+
+    pub fn take_authentication(
+        &self,
+        id: uuid::Uuid,
+    ) -> Option<webauthn_rs::prelude::DiscoverableAuthentication> {
+        let mut map = self.inner.lock().ok()?;
+        let (state, born) = map.auth.remove(&id)?;
+        (born.elapsed() < CEREMONY_TTL).then_some(state)
+    }
+
+    fn prune(map: &mut CeremonyMap) {
+        map.reg
+            .retain(|_, (_, _, born)| born.elapsed() < CEREMONY_TTL);
+        map.auth
+            .retain(|_, (_, born)| born.elapsed() < CEREMONY_TTL);
+        if map.reg.len() + map.auth.len() > CEREMONY_CAP {
+            tracing::warn!("webauthn ceremony store over capacity — clearing (flood backstop)");
+            map.reg.clear();
+            map.auth.clear();
+        }
+    }
+}
+
+/// Build the [`webauthn_rs::Webauthn`] verifier from `BASE_URL`.
+///
+/// The RP id is the registrable part of the app's own host and the
+/// origin is BASE_URL itself — both are what browsers will assert, so
+/// any mismatch here makes every ceremony fail. Panics at boot on an
+/// unparseable BASE_URL, which other subsystems (cookies, CSRF) would
+/// stumble over anyway.
+fn build_webauthn(config: &Config) -> webauthn_rs::Webauthn {
+    use webauthn_rs::prelude::Url;
+    let origin = Url::parse(&config.base_url)
+        .unwrap_or_else(|e| panic!("BASE_URL {:?} is not a valid URL: {e}", config.base_url));
+    let rp_id = origin.host_str().unwrap_or("localhost").to_string();
+    webauthn_rs::WebauthnBuilder::new(&rp_id, &origin)
+        .expect("webauthn builder (BASE_URL host)")
+        .rp_name(&config.app_name)
+        .build()
+        .expect("webauthn build")
+}
+
 impl Ops {
     pub fn maintenance_on(&self) -> bool {
         self.inner.maintenance.load(Ordering::Relaxed)
@@ -107,10 +212,15 @@ pub struct AppState {
     pub events: Events,
     /// Maintenance switch + scheduled-maintenance notice. See [`Ops`].
     pub ops: Ops,
+    /// WebAuthn verifier, derived from `BASE_URL` at boot.
+    pub webauthn: Arc<webauthn_rs::Webauthn>,
+    /// In-flight passkey registration / sign-in ceremonies.
+    pub ceremonies: Ceremonies,
 }
 
 impl AppState {
     pub fn new(db: Db, storage: Storage, mailer: Mailer, stripe: Stripe, config: Config) -> Self {
+        let webauthn = Arc::new(build_webauthn(&config));
         Self {
             db,
             storage,
@@ -120,6 +230,8 @@ impl AppState {
             rate_limiter: RateLimiter::new(),
             events: Events::new(),
             ops: Ops::default(),
+            webauthn,
+            ceremonies: Ceremonies::default(),
         }
     }
 
@@ -137,6 +249,7 @@ impl AppState {
         db.use_ns("test").use_db("test").await.expect("use ns/db");
         crate::db::apply_schema(&db).await.expect("apply schema");
         let config = Config::for_tests();
+        let webauthn = Arc::new(build_webauthn(&config));
         Self {
             db: Arc::new(db),
             storage: Storage::null_for_tests(),
@@ -146,6 +259,8 @@ impl AppState {
             rate_limiter: RateLimiter::new(),
             events: Events::new(),
             ops: Ops::default(),
+            webauthn,
+            ceremonies: Ceremonies::default(),
         }
     }
 }

@@ -19,7 +19,7 @@ use tracing::Level;
 
 use crate::controllers::{
     admin, auth, checklists, comments, documents, exports, feedback, forms, health, marketing,
-    members, ops, orphan, profile, subscribe, tiers, transactions, webhooks,
+    members, ops, orphan, passkeys, profile, subscribe, tiers, transactions, webhooks,
 };
 use crate::state::AppState;
 
@@ -35,6 +35,10 @@ pub fn build(state: AppState) -> Router {
         .route("/forgot", get(auth::forgot_form).post(auth::forgot))
         .route("/reset/{token}", get(auth::reset_form).post(auth::reset))
         .route("/logout", post(auth::logout))
+        // Passkey sign-in: challenge + assertion. Public by design —
+        // the assertion itself is the authentication.
+        .route("/login/passkey/start", post(passkeys::login_start))
+        .route("/login/passkey/finish", post(passkeys::login_finish))
         .route(
             "/invite/{token}",
             get(auth::invite_form).post(auth::accept_invite),
@@ -151,6 +155,15 @@ pub fn build(state: AppState) -> Router {
                 .layer(axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024)),
         )
         .route("/app/profile/avatar/delete", post(profile::delete_avatar))
+        .route(
+            "/app/profile/passkeys/register/start",
+            post(passkeys::register_start),
+        )
+        .route(
+            "/app/profile/passkeys/register/finish",
+            post(passkeys::register_finish),
+        )
+        .route("/app/profile/passkeys/{key}/delete", post(passkeys::delete))
         .route("/app/users/{key}/avatar", get(profile::serve_avatar))
         // Registered BEFORE the `{slug}` route so "return" is matched
         // literally rather than being read as a tier slug.

@@ -1,6 +1,6 @@
 [package]
 name = "transactvault"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 description = "TransactVault — modern real estate transaction management for California brokerages."
 # Proprietary, all rights reserved — source is public on GitHub for
@@ -69,6 +69,9 @@ urlencoding = "2"
 # pure-Rust, no JS-bridge. Used by the admin changelog page to render
 # CHANGELOG.md without bundling a frontend renderer.
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+# Passkey sign-in. `conditional-ui` unlocks the discoverable-credential
+# flow (sign in without typing an email first); the rest is default.
+webauthn-rs = { version = "0.5", features = ["conditional-ui"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }

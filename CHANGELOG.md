@@ -8,6 +8,21 @@ the bottom-right of every page.
 
 ## August 2026
 
+### v0.10.0: Sign in with a passkey
+
+- **Your face, your fingerprint, or your device PIN can sign you in
+  now.** Add a passkey from Profile and password (there's a new
+  Passkeys section), and next time the sign-in page shows one button:
+  "Sign in with a passkey". Tap it, glance at your phone or touch the
+  sensor, and you're in. No password typed, nothing to forget, and
+  nothing a phishing site can steal. Your password keeps working
+  alongside it, and you can add one passkey per device, name them, and
+  remove any of them whenever you like.
+
+- **The "Continue with Google (coming soon)" button is gone.** It never
+  did anything, and passkeys are the better version of that promise:
+  the same one-tap sign-in, without handing Google a say in it.
+
 ### v0.9.0: A feedback button, and calmer maintenance
 
 - **Tell us what to fix.** There's now a small Feedback tab in the

@@ -14,6 +14,7 @@ pub mod marketing;
 pub mod members;
 pub mod ops;
 pub mod orphan;
+pub mod passkeys;
 pub mod profile;
 pub mod subscribe;
 pub mod tiers;
