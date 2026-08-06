@@ -12,6 +12,7 @@ use tokio::net::TcpListener;
 
 mod audit;
 mod auth;
+mod backup;
 mod billing;
 mod config;
 mod controllers;
@@ -140,6 +141,11 @@ async fn main() -> anyhow::Result<()> {
     // job at a time; sequential chunks; see `export_worker` for the
     // resource profile.
     export_worker::spawn(state.clone());
+
+    // Scheduled database backups. Reads its schedule from
+    // system_setting on each tick, so toggling it in the admin area
+    // takes effect without a restart.
+    backup::spawn(state.clone());
 
     // Database heartbeat. The SDK's WS engine already sends protocol
     // pings and auto-reconnects (verified in surrealdb 3.2.3 source:

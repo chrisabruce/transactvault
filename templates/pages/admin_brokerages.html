@@ -21,6 +21,7 @@
             <a href="/admin/audit">Audit log</a>
             <a href="/admin/errors">Errors</a>
             <a href="/admin/ops">Ops</a>
+            <a href="/admin/backups">Backups</a>
             <a href="/admin/changelog">Changelog</a>
         </nav>
     </header>
@@ -43,6 +44,13 @@
             <p class="value">{{ total_storage_display }}</p>
         </article>
     </section>
+
+    {% match flash %}{% when Some with (msg) %}
+        <p class="alert success" role="status">{{ msg }}</p>
+    {% when None %}{% endmatch %}
+    {% match error %}{% when Some with (msg) %}
+        <p class="alert error" role="alert">{{ msg }}</p>
+    {% when None %}{% endmatch %}
 
     {% if !pending.is_empty() %}
         <section class="panel danger-panel" aria-label="Pending deletion">
@@ -125,6 +133,15 @@
                                     <button type="submit" class="btn small {% if r.is_complimentary %}danger{% else %}secondary{% endif %}">
                                         {% if r.is_complimentary %}Revoke comp{% else %}Grant comp{% endif %}
                                     </button>
+                                </form>
+                                {#- The most destructive action in the product: this
+                                    takes the brokerage's users, transactions, and every
+                                    uploaded document. Typing the name is the gate. -#}
+                                <form method="post" action="/admin/brokerages/{{ r.key }}/delete" class="inline-form delete-form"
+                                      data-confirm="Permanently delete {{ r.name }}? This deletes {{ r.tx_count_display }} transactions, {{ r.document_count_display }} documents ({{ r.storage_display }}), and every user account in the brokerage. It cannot be undone.">
+                                    <input type="text" name="confirm" size="12" required
+                                           placeholder="brokerage name" aria-label="Type {{ r.name }} to confirm deletion">
+                                    <button type="submit" class="btn small ghost danger">Delete</button>
                                 </form>
                             </td>
                         </tr>

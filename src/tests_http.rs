@@ -6446,3 +6446,248 @@ async fn subscribe_review_is_broker_only() {
     let (status, _) = authed_get(&app, &agent, "/app/subscribe/metered").await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
+
+// ---------------------------------------------------------------------------
+// Admin deletes + backups
+// ---------------------------------------------------------------------------
+
+/// Deleting a user must NOT take the brokerage's transactions with it:
+/// the deal belongs to the office, not the person. Their ownership edge
+/// goes, so the transaction lands on the Unassigned page instead.
+#[tokio::test]
+async fn admin_delete_user_unassigns_transactions_rather_than_destroying_them() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "HQ").await;
+    let admin = seed_user(&app.state, "admin@test").await;
+    join(&app.state, &admin, &b, "broker").await;
+    let agent = seed_user(&app.state, "leaver@x.test").await;
+    join(&app.state, &agent, &b, "agent").await;
+    let tx = seed_tx(&app.state, &b, Some(&agent)).await;
+
+    let key = crate::db::record_key(&agent);
+    let (status, _) = authed_post(
+        &app,
+        &admin,
+        &format!("/admin/users/{key}/delete"),
+        "confirm=leaver%40x.test",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+
+    // User gone.
+    let gone: Option<crate::models::User> = app.state.db.select(agent.clone()).await.expect("sel");
+    assert!(gone.is_none(), "user row should be deleted");
+
+    // Transaction survives, unowned.
+    let survivor: Option<crate::models::Transaction> =
+        app.state.db.select(tx.clone()).await.expect("sel tx");
+    assert!(survivor.is_some(), "brokerage transaction must survive");
+
+    let mut q = app
+        .state
+        .db
+        .query("SELECT count() FROM owns WHERE out = $t GROUP ALL")
+        .bind(("t", tx))
+        .await
+        .expect("count owns");
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct CountRow {
+        count: i64,
+    }
+    let owns = q
+        .take::<Option<CountRow>>(0)
+        .ok()
+        .flatten()
+        .map(|c| c.count)
+        .unwrap_or(0);
+    assert_eq!(owns, 0, "ownership edge should be gone");
+}
+
+/// A mistyped confirmation deletes nothing, and an admin can't delete
+/// the account they're using.
+#[tokio::test]
+async fn admin_delete_user_requires_matching_confirmation() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "HQ").await;
+    let admin = seed_user(&app.state, "admin@test").await;
+    join(&app.state, &admin, &b, "broker").await;
+    let agent = seed_user(&app.state, "keeper@x.test").await;
+    join(&app.state, &agent, &b, "agent").await;
+
+    let key = crate::db::record_key(&agent);
+    let (status, _) = authed_post(
+        &app,
+        &admin,
+        &format!("/admin/users/{key}/delete"),
+        "confirm=wrong%40example.test",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let still: Option<crate::models::User> = app.state.db.select(agent).await.expect("sel");
+    assert!(still.is_some(), "mismatched confirmation must not delete");
+
+    // Self-delete is refused.
+    let admin_key = crate::db::record_key(&admin);
+    let (status, _) = authed_post(
+        &app,
+        &admin,
+        &format!("/admin/users/{admin_key}/delete"),
+        "confirm=admin%40test",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let self_row: Option<crate::models::User> = app.state.db.select(admin).await.expect("sel");
+    assert!(self_row.is_some(), "admin must not delete themselves");
+}
+
+/// Deleting a brokerage takes its users and transactions with it, and
+/// only when the typed name matches.
+#[tokio::test]
+async fn admin_delete_brokerage_cascades_after_name_confirmation() {
+    let app = make_app().await;
+    let doomed = seed_brokerage(&app.state, "Doomed Realty").await;
+    let hq = seed_brokerage(&app.state, "HQ").await;
+    let admin = seed_user(&app.state, "admin@test").await;
+    join(&app.state, &admin, &hq, "broker").await;
+    let member = seed_user(&app.state, "member@doomed.test").await;
+    join(&app.state, &member, &doomed, "agent").await;
+    let tx = seed_tx(&app.state, &doomed, Some(&member)).await;
+
+    let key = crate::db::record_key(&doomed);
+
+    // Wrong name: nothing happens.
+    let (status, _) = authed_post(
+        &app,
+        &admin,
+        &format!("/admin/brokerages/{key}/delete"),
+        "confirm=Wrong+Name",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let alive: Option<crate::models::Brokerage> =
+        app.state.db.select(doomed.clone()).await.expect("sel");
+    assert!(alive.is_some(), "mismatch must not delete the brokerage");
+
+    // Right name: everything goes.
+    let (status, _) = authed_post(
+        &app,
+        &admin,
+        &format!("/admin/brokerages/{key}/delete"),
+        "confirm=doomed+realty",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+
+    let gone: Option<crate::models::Brokerage> = app.state.db.select(doomed).await.expect("sel");
+    assert!(gone.is_none(), "brokerage should be deleted");
+    let user_gone: Option<crate::models::User> = app.state.db.select(member).await.expect("sel");
+    assert!(user_gone.is_none(), "its users should be deleted");
+    let tx_gone: Option<crate::models::Transaction> = app.state.db.select(tx).await.expect("sel");
+    assert!(tx_gone.is_none(), "its transactions should be deleted");
+
+    // The unrelated brokerage is untouched.
+    let other: Option<crate::models::Brokerage> = app.state.db.select(hq).await.expect("sel");
+    assert!(other.is_some(), "other brokerages must be unaffected");
+}
+
+/// Both destructive endpoints are super-admin only.
+#[tokio::test]
+async fn admin_delete_endpoints_reject_non_admins() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "HQ").await;
+    let broker = seed_user(&app.state, "broker@x.test").await;
+    join(&app.state, &broker, &b, "broker").await;
+    let victim = seed_user(&app.state, "victim@x.test").await;
+    join(&app.state, &victim, &b, "agent").await;
+
+    let vkey = crate::db::record_key(&victim);
+    let bkey = crate::db::record_key(&b);
+    for (uri, form) in [
+        (
+            format!("/admin/users/{vkey}/delete"),
+            "confirm=victim%40x.test",
+        ),
+        (format!("/admin/brokerages/{bkey}/delete"), "confirm=HQ"),
+    ] {
+        let (status, _) = authed_post(&app, &broker, &uri, form).await;
+        assert_ne!(
+            status,
+            StatusCode::SEE_OTHER,
+            "{uri} must reject a non-admin"
+        );
+    }
+    let still: Option<crate::models::User> = app.state.db.select(victim).await.expect("sel");
+    assert!(still.is_some());
+}
+
+/// Backup settings round-trip, and restore refuses to run unless
+/// maintenance mode is on — the gate that keeps a restore from
+/// rewriting the database while people are working in it.
+#[tokio::test]
+async fn backup_settings_save_and_restore_requires_maintenance_mode() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "HQ").await;
+    let admin = seed_user(&app.state, "admin@test").await;
+    join(&app.state, &admin, &b, "broker").await;
+
+    let (status, _) = authed_post(
+        &app,
+        &admin,
+        "/admin/backups/settings",
+        "enabled=on&every_hours=6&keep_days=14",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+
+    let settings = crate::backup::load_settings(&app.state).await;
+    assert!(settings.backup_enabled);
+    assert_eq!(settings.backup_every_hours, 6);
+    assert_eq!(settings.backup_keep_days, 14);
+
+    // Out-of-range values are clamped, not rejected.
+    let (_, _) = authed_post(
+        &app,
+        &admin,
+        "/admin/backups/settings",
+        "enabled=on&every_hours=99999&keep_days=0",
+    )
+    .await;
+    let settings = crate::backup::load_settings(&app.state).await;
+    assert_eq!(settings.backup_every_hours, 24 * 14);
+    assert_eq!(settings.backup_keep_days, 1);
+
+    // Restore without maintenance mode is refused before touching anything.
+    assert!(!app.state.ops.maintenance_on());
+    let (status, _) = authed_post(
+        &app,
+        &admin,
+        "/admin/backups/nonexistent/restore",
+        "confirm=RESTORE",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let (_, body) = authed_get(&app, &admin, "/admin/backups?error=needs_maintenance").await;
+    assert!(body.contains("Turn maintenance mode on before restoring"));
+
+    // With maintenance on, a wrong confirmation word still stops it.
+    app.state.ops.set_maintenance(true);
+    let (status, _) = authed_post(
+        &app,
+        &admin,
+        "/admin/backups/nonexistent/restore",
+        "confirm=yes",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+}
+
+/// The backups page is super-admin only.
+#[tokio::test]
+async fn backups_page_is_super_admin_only() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "HQ").await;
+    let agent = seed_user(&app.state, "agent@x.test").await;
+    join(&app.state, &agent, &b, "agent").await;
+    let (status, _) = authed_get(&app, &agent, "/admin/backups").await;
+    assert_ne!(status, StatusCode::OK);
+}

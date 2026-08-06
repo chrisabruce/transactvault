@@ -8,6 +8,26 @@ the bottom-right of every page.
 
 ## August 2026
 
+### v0.14.0: Backups you can schedule, and admin cleanup tools
+
+- **Automatic database backups.** Under Admin → Backups you can turn on
+  scheduled backups, choose how often they run, and say how long to keep
+  them. Each one is a complete copy of the database, stored alongside
+  your documents, and older copies are cleared out automatically. You
+  can also take one on demand, download the list, and restore from any
+  of them.
+
+- **Restoring is deliberately careful.** It only works while maintenance
+  mode is on, and asks you to type RESTORE first. The page explains in
+  plain terms what a restore does and does not undo.
+
+- **Admins can now remove accounts and brokerages.** Deleting a person
+  asks you to type their email; their transactions stay with the
+  brokerage and simply become unassigned. Deleting a whole brokerage
+  asks you to type its name, and removes its users, transactions, and
+  every uploaded document with it. Both are written to the audit log
+  before anything is removed.
+
 ### v0.13.0: A plain guide, and no surprises about limits
 
 - **A new Guide page.** "What is real estate transaction management?"

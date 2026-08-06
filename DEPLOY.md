@@ -316,7 +316,49 @@ against deletion.
 
 ---
 
-## 8. Maintenance mode
+## 8. Database backups
+
+Turn them on at **Admin → Backups**: a checkbox, an interval in hours, and
+a retention window in days. Each run stores a complete logical export of
+the database (every table definition, index, and row) as a `.surql` file in
+the same object storage as your documents, under `backups/`. Copies older
+than the retention window are deleted after each successful run.
+
+Two things worth knowing:
+
+- **Export needs HTTP, not WebSocket.** The SurrealDB Rust SDK implements
+  export/import on its HTTP and embedded engines only. Since SurrealDB
+  serves both protocols on one port, the app rewrites `SURREAL_URL`'s
+  scheme (`ws` → `http`, `wss` → `https`) and opens a short-lived
+  connection per backup. Nothing to configure, but if your database is
+  reachable over WebSocket and *not* over HTTP on the same port, backups
+  will fail with a connection error.
+- **Documents are not in the database.** Uploaded files live in object
+  storage, so a database backup does not contain them and a restore does
+  not touch them. Protect those with versioning or a lifecycle policy on
+  the bucket.
+
+### Restoring
+
+Restore is deliberately awkward. It requires maintenance mode to be on
+first, and the word RESTORE typed next to the backup you picked.
+
+A restore replays the dump into the current database, which makes it exactly
+right for recovering an empty or damaged one. It is **not** an undo: replaying
+an older copy does not remove records created after it was taken. For a true
+point-in-time rollback, restore into a fresh empty database and repoint
+`SURREAL_URL` at it.
+
+The manual equivalent, if you would rather drive it yourself:
+
+```bash
+surreal export --endpoint "$SURREAL_URL" --user "$SURREAL_USER" \
+  --pass "$SURREAL_PASS" --ns transactvault --db app backup.surql
+```
+
+---
+
+## 9. Maintenance mode
 
 While maintenance mode is on, every app route answers `503` with a calm
 "back in a few minutes" page (plus `Retry-After`, so search engines treat

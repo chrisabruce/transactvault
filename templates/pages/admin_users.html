@@ -21,6 +21,7 @@
             <a href="/admin/audit">Audit log</a>
             <a href="/admin/errors">Errors</a>
             <a href="/admin/ops">Ops</a>
+            <a href="/admin/backups">Backups</a>
             <a href="/admin/changelog">Changelog</a>
         </nav>
     </header>
@@ -39,6 +40,13 @@
             <p class="value warn">{{ unverified_count }}</p>
         </article>
     </section>
+
+    {% match flash %}{% when Some with (msg) %}
+        <p class="alert success" role="status">{{ msg }}</p>
+    {% when None %}{% endmatch %}
+    {% match error %}{% when Some with (msg) %}
+        <p class="alert error" role="alert">{{ msg }}</p>
+    {% when None %}{% endmatch %}
 
     <section class="filter-bar" aria-label="Filters">
         <form method="get" action="/admin" role="search">
@@ -65,6 +73,7 @@
                     <th scope="col">Signup IP</th>
                     <th scope="col">Created</th>
                     <th scope="col">Last login</th>
+                    <th scope="col">Delete</th>
                 </tr>
             </thead>
             <tbody>
@@ -88,10 +97,20 @@
                                 <time datetime="{{ t }}">{{ t.format("%b %-d, %Y %H:%M") }}</time>
                             {% when None %}—{% endmatch %}
                         </td>
+                        <td>
+                            {#- Type-to-confirm on the email: on a list of hundreds of
+                                similar rows, it is the one value that can't be confused
+                                with the row above. -#}
+                            <form method="post" action="/admin/users/{{ u.url_key() }}/delete" class="inline-form delete-form">
+                                <input type="text" name="confirm" size="10" required
+                                       placeholder="email" aria-label="Type {{ u.email }} to confirm deletion">
+                                <button class="btn small ghost danger" type="submit">Delete</button>
+                            </form>
+                        </td>
                     </tr>
                 {% endfor %}
                 {% if users.is_empty() %}
-                    <tr><td colspan="8" class="empty-row">No users match your filters.</td></tr>
+                    <tr><td colspan="9" class="empty-row">No users match your filters.</td></tr>
                 {% endif %}
             </tbody>
         </table>

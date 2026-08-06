@@ -31,6 +31,32 @@ pub struct UsersFilter {
     pub q: Option<String>,
     #[serde(default)]
     pub status: Option<String>,
+    #[serde(default)]
+    pub flash: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// Fixed messages for the destructive-action outcomes. Codes, not free
+/// text, for the same reason the ops pages use them.
+pub fn admin_flash(code: Option<&str>) -> Option<&'static str> {
+    match code? {
+        "user_deleted" => Some("User deleted. Any transactions they owned are now unassigned."),
+        "brokerage_deleted" => {
+            Some("Brokerage deleted, along with its users, transactions, and documents.")
+        }
+        _ => None,
+    }
+}
+
+pub fn admin_error(code: Option<&str>) -> Option<&'static str> {
+    match code? {
+        "confirm_mismatch" => {
+            Some("Nothing was deleted: what you typed didn't match, so we stopped.")
+        }
+        "self_delete" => Some("You can't delete the account you're signed in with."),
+        _ => None,
+    }
 }
 
 pub async fn users(
@@ -107,12 +133,15 @@ pub async fn users(
         unverified_count,
         query: filter.q.unwrap_or_default(),
         status_filter: filter.status.unwrap_or_default(),
+        flash: admin_flash(filter.flash.as_deref()),
+        error: admin_error(filter.error.as_deref()),
     })
 }
 
 pub async fn brokerages(
     State(state): State<AppState>,
     SuperAdmin(user): SuperAdmin,
+    Query(filter): Query<UsersFilter>,
 ) -> Result<Html<String>, AppError> {
     audit::record(
         &state.db,
@@ -212,6 +241,8 @@ pub async fn brokerages(
 
     let total_brokerages = rows.len() as u64;
     render(&AdminBrokeragesPage {
+        flash: admin_flash(filter.flash.as_deref()),
+        error: admin_error(filter.error.as_deref()),
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
         signed_in: true,
@@ -649,4 +680,144 @@ fn render_markdown(input: &str) -> String {
     let mut out = String::with_capacity(input.len() + input.len() / 4);
     html::push_html(&mut out, parser);
     out
+}
+
+// ---------------------------------------------------------------------------
+// Destructive admin actions
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct ConfirmNameForm {
+    #[serde(default)]
+    pub confirm: String,
+}
+
+/// `POST /admin/users/{key}/delete` — remove one person's account.
+///
+/// Deliberately NOT a cascade. A user's transactions belong to the
+/// brokerage, not to them, so deleting an agent must not destroy the
+/// office's files: their `owns` edges are dropped and the transactions
+/// land on the existing Unassigned page for a broker to hand out again.
+///
+/// What does go: the account, its membership, its passkeys, and its
+/// avatar object. Feedback they left survives with the name and email
+/// already denormalized onto it, so the trail of what was said doesn't
+/// disappear with the account.
+pub async fn delete_user(
+    State(state): State<AppState>,
+    SuperAdmin(admin): SuperAdmin,
+    Path(key): Path<String>,
+    axum::Form(form): axum::Form<ConfirmNameForm>,
+) -> Result<Response, AppError> {
+    let target = RecordId::new("user", key.as_str());
+
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct Row {
+        email: String,
+        name: String,
+        avatar_storage_key: Option<String>,
+    }
+    let mut q = state
+        .db
+        .query("SELECT email, name, avatar_storage_key FROM ONLY $u")
+        .bind(("u", target.clone()))
+        .await?;
+    let row: Option<Row> = q.take(0).ok().flatten();
+    let row = row.ok_or(AppError::NotFound)?;
+
+    // Type-to-confirm on the email: the one value that is unambiguous on
+    // a page listing hundreds of similar-looking rows.
+    if !form.confirm.trim().eq_ignore_ascii_case(&row.email) {
+        return Ok(Redirect::to("/admin?error=confirm_mismatch").into_response());
+    }
+    // A super-admin deleting their own account would sign themselves out
+    // of the only account that can undo it.
+    if target == admin.user_id {
+        return Ok(Redirect::to("/admin?error=self_delete").into_response());
+    }
+
+    audit::record(
+        &state.db,
+        "user_deleted_by_admin",
+        Some(admin.user_id.clone()),
+        Some(admin.email.clone()),
+        None,
+        None,
+        Some(format!("deleted {} ({})", row.email, row.name)),
+    )
+    .await;
+
+    if let Some(avatar) = row.avatar_storage_key.as_deref()
+        && let Err(e) = state.storage.delete(avatar).await
+    {
+        tracing::warn!(error = %e, key = %avatar, "avatar delete failed during user delete");
+    }
+
+    state
+        .db
+        .query(
+            r#"
+            BEGIN TRANSACTION;
+            DELETE owns     WHERE in = $u;
+            DELETE works_at WHERE in = $u;
+            DELETE passkey  WHERE user = $u;
+            UPDATE feedback SET user = NONE WHERE user = $u;
+            DELETE user     WHERE id = $u;
+            COMMIT TRANSACTION;
+            "#,
+        )
+        .bind(("u", target))
+        .await?;
+
+    tracing::warn!(actor = %admin.email, deleted = %row.email, "user deleted by admin");
+    Ok(Redirect::to("/admin?flash=user_deleted").into_response())
+}
+
+/// `POST /admin/brokerages/{key}/delete` — remove a brokerage and
+/// everything it owns, documents included.
+///
+/// This is the most destructive button in the product: it takes the
+/// transactions, the checklist items, the comments, every uploaded file,
+/// and every user account belonging to the brokerage. The confirmation
+/// is the brokerage's own name, typed.
+pub async fn delete_brokerage(
+    State(state): State<AppState>,
+    SuperAdmin(admin): SuperAdmin,
+    Path(key): Path<String>,
+    axum::Form(form): axum::Form<ConfirmNameForm>,
+) -> Result<Response, AppError> {
+    let brokerage_id = RecordId::new("brokerage", key.as_str());
+    let brokerage: Option<Brokerage> = state.db.select(brokerage_id.clone()).await?;
+    let brokerage = brokerage.ok_or(AppError::NotFound)?;
+
+    if !form
+        .confirm
+        .trim()
+        .eq_ignore_ascii_case(brokerage.name.trim())
+    {
+        return Ok(Redirect::to("/admin/brokerages?error=confirm_mismatch").into_response());
+    }
+
+    // Audit BEFORE the cascade: if it fails halfway, the record that
+    // this was deliberately requested still exists.
+    audit::record(
+        &state.db,
+        "brokerage_deleted_by_admin",
+        Some(admin.user_id.clone()),
+        Some(admin.email.clone()),
+        None,
+        None,
+        Some(format!("name=\"{}\"", brokerage.name)),
+    )
+    .await;
+
+    let summary = crate::controllers::members::purge_brokerage(&state, &brokerage_id).await?;
+
+    tracing::warn!(
+        actor = %admin.email,
+        brokerage = %brokerage.name,
+        documents = summary.document_count,
+        "brokerage deleted by admin"
+    );
+    Ok(Redirect::to("/admin/brokerages?flash=brokerage_deleted").into_response())
 }

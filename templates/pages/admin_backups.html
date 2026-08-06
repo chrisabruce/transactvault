@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+
+{% block title %}Backups | Admin | {{ app_name }}{% endblock %}
+{% block body_class %}page-app page-admin{% endblock %}
+
+{% block body %}
+{% include "components/app_header.html" %}
+
+<main class="app-main">
+    <header class="page-title">
+        <section>
+            <h1>Admin · Backups</h1>
+            <p class="subtitle">Complete copies of the database, stored in object storage. Each one is a full export: every table, every definition, every row, so a backup taken today still restores after the app has changed.</p>
+        </section>
+        <nav class="admin-subnav" aria-label="Admin sections">
+            <a href="/admin">Users</a>
+            <a href="/admin/brokerages">Brokerages</a>
+            <a href="/admin/tiers">Tiers</a>
+            <a href="/admin/forms">Forms</a>
+            <a href="/admin/feedback">Feedback</a>
+            <a href="/admin/audit">Audit log</a>
+            <a href="/admin/errors">Errors</a>
+            <a href="/admin/ops">Ops</a>
+            <a href="/admin/backups" class="active" aria-current="page">Backups</a>
+            <a href="/admin/changelog">Changelog</a>
+        </nav>
+    </header>
+
+    {% match flash %}{% when Some with (msg) %}
+        <p class="alert success" role="status">{{ msg }}</p>
+    {% when None %}{% endmatch %}
+    {% match error %}{% when Some with (msg) %}
+        <p class="alert error" role="alert">
+            {% if msg == "needs_maintenance" %}
+                Turn maintenance mode on before restoring. A restore rewrites the database
+                while people are using it otherwise.
+            {% else if msg == "needs_confirm" %}
+                Restore cancelled: the confirmation word didn't match.
+            {% else %}
+                {{ msg }}
+            {% endif %}
+        </p>
+    {% when None %}{% endmatch %}
+
+    <section class="panel ops-panel">
+        <header class="ops-panel-head">
+            <h2>Schedule</h2>
+            {% if enabled %}
+                <span class="audit-pill ok">Automatic backups on</span>
+            {% else %}
+                <span class="audit-pill blocked">Off</span>
+            {% endif %}
+        </header>
+        <p>
+            When this is on, TransactVault backs itself up on the interval below and
+            deletes copies older than the retention window. Backups go to the same
+            object storage as your documents.
+            {% match last_run %}{% when Some with (when) %}Last backup: {{ when }}.{% when None %}No backup has run yet.{% endmatch %}
+        </p>
+        <form method="post" action="/admin/backups/settings" class="backup-settings">
+            <label class="backup-toggle">
+                <input type="checkbox" name="enabled" value="on" {% if enabled %}checked{% endif %}>
+                <span>Back up automatically</span>
+            </label>
+            <label>
+                <span>Every (hours)</span>
+                <input type="number" name="every_hours" min="1" max="336" value="{{ every_hours }}">
+            </label>
+            <label>
+                <span>Keep for (days)</span>
+                <input type="number" name="keep_days" min="1" max="365" value="{{ keep_days }}">
+            </label>
+            <button class="btn" type="submit">Save schedule</button>
+        </form>
+    </section>
+
+    <section class="panel ops-panel">
+        <header class="ops-panel-head">
+            <h2>Stored backups</h2>
+            <form method="post" action="/admin/backups/run" class="inline-form">
+                <button class="btn secondary" type="submit">Back up now</button>
+            </form>
+        </header>
+
+        {% if !maintenance_on %}
+            <p class="alert info">
+                Restoring is available once maintenance mode is on, over on
+                <a href="/admin/ops">Ops</a>. That keeps anyone from writing to the
+                database while it is being rewritten.
+            </p>
+        {% endif %}
+
+        <table class="admin-table backup-table">
+            <thead>
+                <tr>
+                    <th scope="col">Taken</th>
+                    <th scope="col">File</th>
+                    <th scope="col">Size</th>
+                    <th scope="col">How</th>
+                    <th scope="col">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for b in backups %}
+                    <tr>
+                        <td>{{ b.taken }}</td>
+                        <td><code>{{ b.filename }}</code></td>
+                        <td>{{ b.size }}</td>
+                        <td>
+                            {% if b.manual %}<span class="audit-pill neutral">Manual</span>
+                            {% else %}<span class="audit-pill ok">Scheduled</span>{% endif %}
+                        </td>
+                        <td class="backup-actions">
+                            {% if maintenance_on %}
+                                <form method="post" action="/admin/backups/{{ b.key }}/restore" class="inline-form restore-form">
+                                    <input type="text" name="confirm" placeholder="Type RESTORE"
+                                           aria-label="Type RESTORE to confirm" size="12" required>
+                                    <button class="btn small danger" type="submit">Restore</button>
+                                </form>
+                            {% endif %}
+                            <form method="post" action="/admin/backups/{{ b.key }}/delete" class="inline-form"
+                                  data-confirm="Delete the backup from {{ b.taken }}? The copy is gone for good.">
+                                <button class="btn small ghost danger" type="submit">Delete</button>
+                            </form>
+                        </td>
+                    </tr>
+                {% endfor %}
+                {% if backups.is_empty() %}
+                    <tr><td colspan="5" class="empty-row">No backups yet. Turn on the schedule above, or take one now.</td></tr>
+                {% endif %}
+            </tbody>
+        </table>
+
+        <details class="backup-note">
+            <summary>What restoring actually does</summary>
+            <p>
+                A restore replays the backup into the current database. It re-creates
+                everything the backup contains, which makes it exactly right for
+                recovering an empty or damaged database.
+            </p>
+            <p>
+                It is not an undo button: records created after the backup was taken are
+                not removed by replaying an older copy. If you need a true point-in-time
+                rollback, restore into a fresh, empty database and repoint the app at it.
+            </p>
+            <p>
+                Uploaded documents live in object storage, not the database, so they are
+                unaffected by a restore either way.
+            </p>
+        </details>
+    </section>
+</main>
+{% endblock %}

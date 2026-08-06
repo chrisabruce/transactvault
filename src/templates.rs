@@ -963,6 +963,9 @@ pub struct AdminUsersPage<'a> {
     pub unverified_count: usize,
     pub query: String,
     pub status_filter: String,
+    /// Outcome of a just-completed delete, if any.
+    pub flash: Option<&'static str>,
+    pub error: Option<&'static str>,
 }
 
 #[derive(Template)]
@@ -1055,6 +1058,26 @@ pub struct AdminStoragePage<'a> {
     pub flash: Option<&'static str>,
 }
 
+/// `/admin/backups` — schedule, stored backups, restore.
+#[derive(Template)]
+#[template(path = "pages/admin_backups.html")]
+pub struct AdminBackupsPage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+    pub signed_in: bool,
+    pub header: AppHeader,
+    pub enabled: bool,
+    pub every_hours: i64,
+    pub keep_days: i64,
+    pub last_run: Option<String>,
+    pub backups: Vec<crate::controllers::ops::BackupView>,
+    /// Restore refuses to run unless the maintenance gate is already on;
+    /// the page uses this to explain why the button is inert.
+    pub maintenance_on: bool,
+    pub flash: Option<&'static str>,
+    pub error: Option<String>,
+}
+
 /// `/admin/feedback` — user-submitted notes, newest first.
 #[derive(Template)]
 #[template(path = "pages/admin_feedback.html")]
@@ -1110,6 +1133,8 @@ pub struct AdminBrokeragesPage<'a> {
     pub pending: Vec<AdminBrokerageRow>,
     /// Pre-formatted totals (humansized + thousands-separated) so the
     /// template stays presentation-only.
+    pub flash: Option<&'static str>,
+    pub error: Option<&'static str>,
     pub total_brokerages_display: String,
     pub total_transactions_display: String,
     pub total_documents_display: String,

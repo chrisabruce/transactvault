@@ -533,7 +533,10 @@ DEFINE FIELD OVERWRITE kind ON audit_event TYPE string
         "passkey_registered", "passkey_removed",
         "storage_orphans_deleted",
         "contact_submitted", "contact_blocked_honeypot",
-        "contact_blocked_rate_limit", "contact_blocked_token"
+        "contact_blocked_rate_limit", "contact_blocked_token",
+        "user_deleted_by_admin", "brokerage_deleted_by_admin",
+        "backup_created", "backup_deleted", "backup_restored",
+        "backup_settings_changed"
     ];
 DEFINE FIELD OVERWRITE actor_email ON audit_event TYPE option<string>;
 DEFINE FIELD OVERWRITE actor       ON audit_event TYPE option<record<user>>;
@@ -601,3 +604,23 @@ DEFINE FIELD OVERWRITE created_at   ON passkey TYPE datetime DEFAULT time::now()
 DEFINE FIELD OVERWRITE last_used_at ON passkey TYPE option<datetime>;
 DEFINE INDEX OVERWRITE idx_passkey_user ON passkey FIELDS user;
 DEFINE INDEX OVERWRITE idx_passkey_cred ON passkey FIELDS cred_id UNIQUE;
+
+-- ---------------------------------------------------------------------------
+-- Backups — one row per stored database export. The bytes live in object
+-- storage; this table is the catalog the admin page lists and restores from.
+-- ---------------------------------------------------------------------------
+DEFINE TABLE OVERWRITE backup SCHEMAFULL;
+DEFINE FIELD OVERWRITE storage_key ON backup TYPE string;
+DEFINE FIELD OVERWRITE filename    ON backup TYPE string;
+DEFINE FIELD OVERWRITE size_bytes  ON backup TYPE int DEFAULT 0;
+-- "auto" (scheduler) or "manual" (admin pressed the button).
+DEFINE FIELD OVERWRITE kind        ON backup TYPE string DEFAULT "auto"
+    ASSERT $value IN ["auto", "manual"];
+DEFINE FIELD OVERWRITE created_at  ON backup TYPE datetime DEFAULT time::now();
+DEFINE INDEX OVERWRITE idx_backup_at ON backup FIELDS created_at;
+
+-- Backup scheduling lives on the same singleton as the other ops switches.
+DEFINE FIELD OVERWRITE backup_enabled        ON system_setting TYPE bool DEFAULT false;
+DEFINE FIELD OVERWRITE backup_every_hours    ON system_setting TYPE int DEFAULT 24;
+DEFINE FIELD OVERWRITE backup_keep_days      ON system_setting TYPE int DEFAULT 30;
+DEFINE FIELD OVERWRITE backup_last_run_at    ON system_setting TYPE option<datetime>;

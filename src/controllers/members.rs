@@ -941,64 +941,7 @@ pub async fn delete_brokerage(
     )
     .await;
 
-    // Storage purge first (so we don't end up with orphaned objects if
-    // the DB cascade succeeds and a later sweep would no longer see
-    // their keys). Best-effort — we log failures but continue.
-    for key in summary
-        .doc_storage_keys
-        .iter()
-        .chain(summary.avatar_keys.iter())
-    {
-        if let Err(e) = state.storage.delete(key).await {
-            tracing::warn!(error = %e, %key, "brokerage delete: storage purge failed");
-        }
-    }
-
-    // DB cascade — one big multi-statement query in a transaction so
-    // we don't end up half-deleted on a mid-cascade error.
-    state
-        .db
-        .query(
-            r#"
-            BEGIN TRANSACTION;
-            -- Comments on transactions or their checklist items.
-            LET $tx_ids   = $b->has_transaction->transaction.id;
-            LET $item_ids = $b->has_transaction->transaction->has_item->checklist_item.id;
-            LET $doc_ids  = $b->has_transaction->transaction->has_document->document.id;
-            LET $user_ids = $b<-works_at<-user.id;
-
-            DELETE comment WHERE target IN $tx_ids OR target IN $item_ids;
-
-            -- Document graph edges then documents themselves.
-            DELETE for_item   WHERE in IN $doc_ids;
-            DELETE version_of WHERE in IN $doc_ids OR out IN $doc_ids;
-            DELETE uploaded   WHERE out IN $doc_ids;
-            DELETE has_document WHERE out IN $doc_ids;
-            DELETE document   WHERE id IN $doc_ids;
-
-            -- Checklist items + their edges.
-            DELETE has_item WHERE out IN $item_ids;
-            DELETE checklist_item WHERE id IN $item_ids;
-
-            -- Transactions + their ownership edges.
-            DELETE has_transaction WHERE out IN $tx_ids;
-            DELETE owns            WHERE out IN $tx_ids;
-            DELETE transaction     WHERE id IN $tx_ids;
-
-            -- Brokerage-scoped invitations.
-            DELETE invitation WHERE brokerage = $b;
-
-            -- Membership + the users that belonged to this brokerage.
-            DELETE works_at WHERE out = $b;
-            DELETE user     WHERE id IN $user_ids;
-
-            -- Finally the brokerage row itself.
-            DELETE brokerage WHERE id = $b;
-            COMMIT TRANSACTION;
-            "#,
-        )
-        .bind(("b", user.brokerage_id.clone()))
-        .await?;
+    purge_brokerage(&state, &user.brokerage_id).await?;
 
     // The broker's own user row was just deleted. Their session cookie
     // is now pointing at nothing — clear it and bounce them to the
@@ -1010,11 +953,11 @@ pub async fn delete_brokerage(
 }
 
 #[derive(Debug, Default)]
-struct DeleteSummary {
-    user_count: usize,
-    transaction_count: usize,
-    document_count: usize,
-    total_bytes: u64,
+pub(crate) struct DeleteSummary {
+    pub(crate) user_count: usize,
+    pub(crate) transaction_count: usize,
+    pub(crate) document_count: usize,
+    pub(crate) total_bytes: u64,
     doc_storage_keys: Vec<String>,
     avatar_keys: Vec<String>,
 }
@@ -1109,4 +1052,77 @@ async fn render_delete_page(
         storage_display: format_size(summary.total_bytes, DECIMAL),
         error,
     })
+}
+
+/// Delete a brokerage and everything hanging off it: documents in object
+/// storage, every transaction and its checklist, comments, exports,
+/// invitations, and the user accounts that belonged to it.
+///
+/// Shared by the broker's own "delete my brokerage" flow and the
+/// super-admin equivalent, so the two can never drift into deleting
+/// different things. Callers own confirmation and audit; this is the
+/// cascade only.
+pub(crate) async fn purge_brokerage(
+    state: &AppState,
+    brokerage_id: &RecordId,
+) -> Result<DeleteSummary, AppError> {
+    let summary = gather_delete_summary(state, brokerage_id).await?;
+
+    // Storage first, so a mid-cascade failure leaves rows that still
+    // name their objects rather than objects nothing points at. The
+    // orphan scanner would eventually catch the reverse, but "eventually"
+    // is a poor promise for client documents.
+    for key in summary
+        .doc_storage_keys
+        .iter()
+        .chain(summary.avatar_keys.iter())
+    {
+        if let Err(e) = state.storage.delete(key).await {
+            tracing::warn!(error = %e, %key, "brokerage delete: storage purge failed");
+        }
+    }
+
+    state
+        .db
+        .query(
+            r#"
+            BEGIN TRANSACTION;
+            LET $tx_ids   = $b->has_transaction->transaction.id;
+            LET $item_ids = $b->has_transaction->transaction->has_item->checklist_item.id;
+            LET $doc_ids  = $b->has_transaction->transaction->has_document->document.id;
+            LET $user_ids = $b<-works_at<-user.id;
+
+            DELETE comment WHERE target IN $tx_ids OR target IN $item_ids;
+
+            DELETE for_item   WHERE in IN $doc_ids;
+            DELETE version_of WHERE in IN $doc_ids OR out IN $doc_ids;
+            DELETE uploaded   WHERE out IN $doc_ids;
+            DELETE has_document WHERE out IN $doc_ids;
+            DELETE document   WHERE id IN $doc_ids;
+
+            DELETE has_item WHERE out IN $item_ids;
+            DELETE checklist_item WHERE id IN $item_ids;
+
+            DELETE has_transaction WHERE out IN $tx_ids;
+            DELETE owns            WHERE out IN $tx_ids;
+            DELETE transaction     WHERE id IN $tx_ids;
+
+            DELETE invitation WHERE brokerage = $b;
+            DELETE pending_upload WHERE brokerage = $b;
+            DELETE export_chunk   WHERE job IN (SELECT VALUE id FROM export_job WHERE brokerage = $b);
+            DELETE export_job     WHERE brokerage = $b;
+            DELETE passkey        WHERE user IN $user_ids;
+            UPDATE feedback SET user = NONE WHERE user IN $user_ids;
+
+            DELETE works_at WHERE out = $b;
+            DELETE user     WHERE id IN $user_ids;
+
+            DELETE brokerage WHERE id = $b;
+            COMMIT TRANSACTION;
+            "#,
+        )
+        .bind(("b", brokerage_id.clone()))
+        .await?;
+
+    Ok(summary)
 }

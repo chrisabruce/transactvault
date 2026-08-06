@@ -194,6 +194,11 @@ pub fn build(state: AppState) -> Router {
         .route("/admin/brokerages", get(admin::brokerages))
         .route("/admin/brokerages/{key}", get(admin::brokerage_detail))
         .route(
+            "/admin/brokerages/{key}/delete",
+            post(admin::delete_brokerage),
+        )
+        .route("/admin/users/{key}/delete", post(admin::delete_user))
+        .route(
             "/admin/brokerages/{key}/comp",
             post(admin::toggle_brokerage_comp),
         )
@@ -252,6 +257,11 @@ pub fn build(state: AppState) -> Router {
         .route("/admin/ops", get(ops::page))
         .route("/admin/ops/maintenance", post(ops::set_maintenance))
         .route("/admin/ops/notice", post(ops::set_notice))
+        .route("/admin/backups", get(ops::backups_page))
+        .route("/admin/backups/settings", post(ops::backups_save_settings))
+        .route("/admin/backups/run", post(ops::backups_run_now))
+        .route("/admin/backups/{key}/delete", post(ops::backups_delete))
+        .route("/admin/backups/{key}/restore", post(ops::backups_restore))
         .route("/admin/storage", get(ops::storage_page))
         .route("/admin/storage/delete", post(ops::storage_delete_one))
         .route("/admin/storage/delete-all", post(ops::storage_delete_all));

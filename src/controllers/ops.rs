@@ -105,6 +105,13 @@ pub struct OpsQuery {
     /// does nothing about the social-engineering half.
     #[serde(default)]
     pub flash: Option<String>,
+    /// Failure text from a backup operation. Unlike `flash` this IS
+    /// free text, because the useful content is whatever the database or
+    /// object store said. It renders inside an error alert, never a
+    /// success one, so it cannot be dressed up as the app's own
+    /// reassurance the way a fake success message could.
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 /// Map a flash code to the text shown. Unknown codes render nothing.
@@ -119,6 +126,14 @@ pub fn flash_message(code: Option<&str>) -> Option<&'static str> {
         "not_orphan" => {
             Some("Nothing deleted: that object is no longer an orphan, or is already gone.")
         }
+        "backup_settings" => Some("Backup schedule saved."),
+        "backup_done" => Some("Backup complete. It's in the list below."),
+        "backup_removed" => Some("Backup deleted."),
+        "backup_restored" => {
+            Some("Restore finished. Check the app, then turn maintenance mode off.")
+        }
+        "user_deleted" => Some("User deleted."),
+        "brokerage_deleted" => Some("Brokerage deleted, along with its documents."),
         _ => None,
     }
 }
@@ -583,4 +598,238 @@ pub async fn storage_delete_one(
 
     let code = if deleted > 0 { "deleted" } else { "not_orphan" };
     Ok(Redirect::to(&format!("/admin/storage?flash={code}")).into_response())
+}
+
+/// Percent-encode a message for a redirect query string.
+fn urlencode(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            other => format!("%{other:02X}"),
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Backups
+// ---------------------------------------------------------------------------
+
+/// `GET /admin/backups` — schedule, stored backups, restore.
+pub async fn backups_page(
+    State(state): State<AppState>,
+    SuperAdmin(user): SuperAdmin,
+    axum::extract::Query(q): axum::extract::Query<OpsQuery>,
+) -> Result<Html<String>, AppError> {
+    let settings = crate::backup::load_settings(&state).await;
+    let mut rows_q = state
+        .db
+        .query("SELECT * FROM backup ORDER BY created_at DESC LIMIT 200")
+        .await?;
+    let rows: Vec<crate::backup::Backup> = rows_q.take(0).unwrap_or_default();
+
+    let views: Vec<BackupView> = rows
+        .iter()
+        .map(|b| BackupView {
+            key: b.key(),
+            filename: b.filename.clone(),
+            taken: b.created_at.format("%b %-d, %Y at %H:%M UTC").to_string(),
+            size: format_size(b.size_bytes.max(0) as u64, DECIMAL),
+            manual: b.is_manual(),
+        })
+        .collect();
+
+    let header = crate::controllers::common::build_app_header(&state, &user, "admin").await;
+    render(&crate::templates::AdminBackupsPage {
+        app_name: &state.config.app_name,
+        base_url: &state.config.base_url,
+        signed_in: true,
+        header,
+        enabled: settings.backup_enabled,
+        every_hours: settings.backup_every_hours,
+        keep_days: settings.backup_keep_days,
+        last_run: settings
+            .backup_last_run_at
+            .map(|t| t.format("%b %-d, %Y at %H:%M UTC").to_string()),
+        backups: views,
+        maintenance_on: state.ops.maintenance_on(),
+        flash: flash_message(q.flash.as_deref()),
+        error: q.error,
+    })
+}
+
+/// Pre-formatted backup row for the admin table.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BackupView {
+    pub key: String,
+    pub filename: String,
+    pub taken: String,
+    pub size: String,
+    pub manual: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BackupSettingsForm {
+    #[serde(default)]
+    pub enabled: Option<String>,
+    #[serde(default)]
+    pub every_hours: i64,
+    #[serde(default)]
+    pub keep_days: i64,
+}
+
+/// `POST /admin/backups/settings` — save the schedule.
+pub async fn backups_save_settings(
+    State(state): State<AppState>,
+    SuperAdmin(user): SuperAdmin,
+    Form(form): Form<BackupSettingsForm>,
+) -> Result<Response, AppError> {
+    let enabled = form.enabled.as_deref() == Some("on");
+    // Clamped rather than rejected: the form is a couple of numbers and
+    // bouncing an admin back to retype them serves nobody. An hour is
+    // the floor because a backup takes real work; a year is past the
+    // point where "retention" means anything useful.
+    let every_hours = form.every_hours.clamp(1, 24 * 14);
+    let keep_days = form.keep_days.clamp(1, 365);
+
+    state
+        .db
+        .query(
+            "UPSERT $id SET backup_enabled = $on, backup_every_hours = $every, \
+             backup_keep_days = $keep",
+        )
+        .bind(("id", setting_id()))
+        .bind(("on", enabled))
+        .bind(("every", every_hours))
+        .bind(("keep", keep_days))
+        .await?;
+
+    audit::record(
+        &state.db,
+        "backup_settings_changed",
+        Some(user.user_id.clone()),
+        Some(user.email.clone()),
+        None,
+        None,
+        Some(format!(
+            "enabled={enabled} every={every_hours}h keep={keep_days}d"
+        )),
+    )
+    .await;
+
+    Ok(Redirect::to("/admin/backups?flash=backup_settings").into_response())
+}
+
+/// `POST /admin/backups/run` — take one right now.
+pub async fn backups_run_now(
+    State(state): State<AppState>,
+    SuperAdmin(user): SuperAdmin,
+) -> Result<Response, AppError> {
+    match crate::backup::run_backup(&state, "manual").await {
+        Ok(b) => {
+            audit::record(
+                &state.db,
+                "backup_created",
+                Some(user.user_id.clone()),
+                Some(user.email.clone()),
+                None,
+                None,
+                Some(format!("{} ({} bytes)", b.filename, b.size_bytes)),
+            )
+            .await;
+            Ok(Redirect::to("/admin/backups?flash=backup_done").into_response())
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "manual backup failed");
+            Ok(Redirect::to(&format!(
+                "/admin/backups?error={}",
+                urlencode(&e.to_string())
+            ))
+            .into_response())
+        }
+    }
+}
+
+/// `POST /admin/backups/{key}/delete`
+pub async fn backups_delete(
+    State(state): State<AppState>,
+    SuperAdmin(user): SuperAdmin,
+    axum::extract::Path(key): axum::extract::Path<String>,
+) -> Result<Response, AppError> {
+    match crate::backup::delete_backup(&state, &key).await {
+        Ok(b) => {
+            audit::record(
+                &state.db,
+                "backup_deleted",
+                Some(user.user_id.clone()),
+                Some(user.email.clone()),
+                None,
+                None,
+                Some(b.filename),
+            )
+            .await;
+            Ok(Redirect::to("/admin/backups?flash=backup_removed").into_response())
+        }
+        Err(e) => Ok(Redirect::to(&format!(
+            "/admin/backups?error={}",
+            urlencode(&e.to_string())
+        ))
+        .into_response()),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RestoreForm {
+    #[serde(default)]
+    pub confirm: String,
+}
+
+/// `POST /admin/backups/{key}/restore` — replay a backup into the live
+/// database.
+///
+/// Two gates, both deliberate. Maintenance mode must already be on, so
+/// nothing is writing while the import runs and no user watches their
+/// data change under them. And the admin types RESTORE, because no
+/// misclick should be able to do this.
+pub async fn backups_restore(
+    State(state): State<AppState>,
+    SuperAdmin(user): SuperAdmin,
+    axum::extract::Path(key): axum::extract::Path<String>,
+    Form(form): Form<RestoreForm>,
+) -> Result<Response, AppError> {
+    if !state.ops.maintenance_on() {
+        return Ok(Redirect::to("/admin/backups?error=needs_maintenance").into_response());
+    }
+    if !form.confirm.trim().eq_ignore_ascii_case("RESTORE") {
+        return Ok(Redirect::to("/admin/backups?error=needs_confirm").into_response());
+    }
+
+    // Audit BEFORE: if the import wedges the database, the record of who
+    // asked for it is already written.
+    audit::record(
+        &state.db,
+        "backup_restored",
+        Some(user.user_id.clone()),
+        Some(user.email.clone()),
+        None,
+        None,
+        Some(format!("restore requested: backup:{key}")),
+    )
+    .await;
+
+    match crate::backup::restore_backup(&state, &key).await {
+        Ok(b) => {
+            tracing::warn!(actor = %user.email, filename = %b.filename, "database restored from backup");
+            Ok(Redirect::to("/admin/backups?flash=backup_restored").into_response())
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "restore failed");
+            Ok(Redirect::to(&format!(
+                "/admin/backups?error={}",
+                urlencode(&e.to_string())
+            ))
+            .into_response())
+        }
+    }
 }
