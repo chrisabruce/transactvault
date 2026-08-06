@@ -405,9 +405,21 @@ a.btn {
     gap: var(--sp-5);
 }
 .compare-strip h3 { color: #fff; margin: 0 0 var(--sp-2); font-size: var(--fs-md); }
-.compare-strip p  { color: #cbd5e1; font-size: var(--fs-sm); margin: 0; }
-.compare-strip .cross  { color: #fca5a5; font-weight: 700; margin-inline-end: 0.35rem; }
-.compare-strip .check { color: #86efac; font-weight: 700; margin-inline-end: 0.35rem; }
+/* Icon and text are separate flex boxes so a point that wraps continues
+   under its own first word (hanging indent), not under the icon. */
+.compare-strip p {
+    color: #cbd5e1;
+    font-size: var(--fs-sm);
+    margin: 0 0 var(--sp-2);
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+}
+.compare-strip p:last-child { margin-bottom: 0; }
+.compare-strip .cross,
+.compare-strip .check { flex: none; font-weight: 700; }
+.compare-strip .cross { color: #fca5a5; }
+.compare-strip .check { color: #86efac; }
 
 /* Testimonials — speech bubbles with a tail pointing at the speaker.
    Even-numbered bubbles switch to the brand tint via custom properties;

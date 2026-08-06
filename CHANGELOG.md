@@ -8,6 +8,13 @@ the bottom-right of every page.
 
 ## August 2026
 
+### v0.8.3: Tidier comparison points
+
+- **The homepage comparison bullets keep their shape.** In the "Better
+  than SkySlope" strip, a point that ran onto a second line used to
+  start that line all the way back under the check mark. Wrapped lines
+  now continue neatly under the words instead.
+
 ### v0.8.2: The homepage now sounds like us
 
 - **Plainer talk about why brokerages switch.** We rewrote the "Why
