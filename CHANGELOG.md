@@ -8,21 +8,28 @@ the bottom-right of every page.
 
 ## August 2026
 
-### v0.8.1 — Updates now look right immediately
+### v0.8.2: The homepage now sounds like us
+
+- **Plainer talk about why brokerages switch.** We rewrote the "Why
+  brokerages are switching" cards so they read the way we actually
+  speak: fewer buzzwords, more specifics, and the Fort Knox joke
+  survived editing. The facts underneath didn't change.
+
+### v0.8.1: Updates now look right immediately
 
 - **No more "half-updated" pages.** After we shipped an update, your
   browser could keep using the previous visual styling for a while,
-  which made new pages look plain or oddly arranged — the new homepage
-  below, for example, could appear without its speech bubbles. Every
-  release now tells your browser to fetch the latest styling
-  automatically. (If a page still looks plain right now, refresh it
-  once while holding Shift and you're set.)
+  which made new pages look plain or oddly arranged. The new homepage,
+  for example, could appear without its speech bubbles. Every release
+  now tells your browser to fetch the latest styling automatically.
+  (If a page still looks plain right now, refresh it once while
+  holding Shift and you're set.)
 
-### v0.8.0 — A clearer front door, with familiar faces
+### v0.8.0: A clearer front door, with familiar faces
 
 - **Real voices on the homepage.** Six of our earliest partners across
-  the Antelope Valley — from Century 21 Doug Anderson, The Real Estate
-  Place, and LeFebvre's East Valley Real Estate — now share how
+  the Antelope Valley, from Century 21 Doug Anderson, The Real Estate
+  Place, and LeFebvre's East Valley Real Estate, now share how
   TransactVault changed their workflow, photos and all, in a fresh
   speech-bubble design. Thank you Glenda, Kirk, Maria, Amanda,
   Christie, and Jason.
@@ -43,7 +50,7 @@ the bottom-right of every page.
 
 ## July 2026
 
-### v0.7.0 — Whole-brokerage exports that actually finish
+### v0.7.0: Whole-brokerage exports that actually finish
 
 - **Export everything, no matter how big.** The old "Download brokerage
   ZIP" button built one giant file while you waited, and anything past
@@ -71,7 +78,7 @@ the bottom-right of every page.
   for 7 days and are then cleaned up automatically, and every export
   and download is recorded in the audit log.
 
-### v0.6.1 — Comments are conversation, not alarms
+### v0.6.1: Comments are conversation, not alarms
 
 - **Leaving a comment no longer flags the transaction for review.**
   Previously every comment moved the deal onto the other person's
@@ -84,7 +91,7 @@ the bottom-right of every page.
   upload cleared it from your own review queue even though you hadn't
   reviewed it yet.
 
-### v0.6.0 — A faster, clearer upload experience
+### v0.6.0: A faster, clearer upload experience
 
 - **Large uploads no longer stall at a frozen percentage.** Two hidden
   ceilings were killing them: every request had to finish within 60
@@ -117,7 +124,7 @@ the bottom-right of every page.
   allowed. Web-page formats are excluded deliberately: they can carry
   scripts into the document preview.
 
-### v0.5.5 — Trial banner is broker-only
+### v0.5.5: Trial banner is broker-only
 
 - **Invited teammates no longer see the green subscription bar.** The
   "pick a plan" nudge and the free-trial countdown are about billing,
@@ -129,7 +136,7 @@ the bottom-right of every page.
   wind-down — still show for everyone, because they explain why saving
   a change is being refused.
 
-### v0.5.3 — Subscription banner and a Stripe re-link button
+### v0.5.3: Subscription banner and a Stripe re-link button
 
 - **The "pick a plan" bar no longer lingers after you subscribe.**
   Entering a card sent you straight back to the dashboard, but the app
@@ -168,7 +175,7 @@ the bottom-right of every page.
   repoints every plan at them. Super-admins only, it asks for
   confirmation first, and existing subscriptions are unaffected.
 
-### v0.5.2 — Signup fixes and a deploy fix
+### v0.5.2: Signup fixes and a deploy fix
 
 - **Creating an account is no longer a waiting game.** The signup form
   runs a small puzzle in your browser to prove you're not a bot, and the
@@ -204,7 +211,7 @@ the bottom-right of every page.
   hosted service without touching the app. Setup instructions live in
   DEPLOY.md.
 
-### v0.5.1 — Fixes for the v0.5.0 hardening
+### v0.5.1: Fixes for the v0.5.0 hardening
 
 The browser-hardening rules added in v0.5.0 turned out to be too strict
 in three places, each of which quietly broke something. Those are fixed,
@@ -243,7 +250,7 @@ along with two older bugs found while chasing them:
   dropdown selections — still in place. The same applies when editing
   an existing transaction, and when a plan limit blocks the save.
 
-### v0.5.0 — Security hardening, password reset, and the 500s fix
+### v0.5.0: Security hardening, password reset, and the 500s fix
 
 - **Fixed the intermittent "something went wrong" errors (500s).**
   Root cause: SurrealDB's v3 driver changed what cloning the client
@@ -366,7 +373,7 @@ inject anything into a page, and these further issues:
   fingerprint, so a change at the CDN can't alter what runs in your
   browser.
 
-### v0.4.0 — Live search, real-time fixes, team exports, and the full CAR catalog
+### v0.4.0: Live search, real-time fixes, team exports, and the full CAR catalog
 
 - **New "Referral" transaction type.** Referral-fee deals no longer
   have to masquerade as Residential with a 60-item property checklist.
@@ -489,7 +496,7 @@ inject anything into a page, and these further issues:
 
 ## June 2026
 
-### v0.3.4 — Fix: deleting a single form
+### v0.3.4: Fix: deleting a single form
 
 Deleting an individual form from the admin forms library now works.
 The Delete button was mis-wired (two buttons sharing a table cell
@@ -497,7 +504,7 @@ confused the browser, so the click hit the wrong action); it now
 deletes exactly the form you clicked, after its own confirmation
 prompt. Deactivate in the same row is unaffected.
 
-### v0.3.3 — Fixes: live dashboard, team list, and member removal
+### v0.3.3: Fixes: live dashboard, team list, and member removal
 
 - **Live dashboard updates work again.** The real-time stat cards
   depended on a script that was loading from a broken URL (a 404). The
@@ -512,7 +519,7 @@ prompt. Deactivate in the same row is unaffected.
   else is listed alphabetically, and the role dropdowns no longer get
   squeezed — the columns line up properly now.
 
-### v0.3.2 — Full control over the forms library (admin)
+### v0.3.2: Full control over the forms library (admin)
 
 Super-admins can now fully manage the forms library from
 **Admin → Forms → (a library)**:
@@ -533,7 +540,7 @@ Super-admins can now fully manage the forms library from
 Per-form **edit** (name, order, required flag, and applicability) was
 already available and is unchanged.
 
-### v0.3.1 — Switched email provider to Postmark
+### v0.3.1: Switched email provider to Postmark
 
 We've moved transactional email — verification links, welcome notes,
 team invites, price-change notifications, and trial-ending reminders —
@@ -548,7 +555,7 @@ consistently better in our testing).
 optional `POSTMARK_MESSAGE_STREAM` (defaults to `outbound`). See the
 README for the full set.
 
-### v0.3.0 — New pricing model with worked examples
+### v0.3.0: New pricing model with worked examples
 
 We've introduced a **three-tier pricing model** built around a simple
 principle: every plan includes **unlimited team members**. Most competitors
@@ -577,7 +584,7 @@ of the previous 15%.
 Existing brokerages on a custom plan are unaffected — these defaults
 only seed on a fresh install.
 
-### v0.2.1 — Changelog in the admin area
+### v0.2.1: Changelog in the admin area
 
 Super-admins now have a **Changelog** page under `/admin/changelog`. It shows
 the running build version prominently at the top and renders the full release
@@ -586,7 +593,7 @@ have to leave the admin area to see what shipped when. The "Changelog" tab
 is in the admin sub-navigation alongside Users, Brokerages, Tiers, Forms, and
 Audit log.
 
-### v0.2.0 — Real-time dashboard
+### v0.2.0: Real-time dashboard
 
 The numbers at the top of your dashboard (Total, **Needs Attention**, Active,
 Pending, Sold) now update **the instant** something changes — no more waiting
