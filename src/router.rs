@@ -520,9 +520,20 @@ async fn reject_cross_site_writes(
 /// - `frame-ancestors` / `X-Frame-Options` stop clickjacking, which was
 ///   wide open: a hostile page could frame the app and trick a signed-in
 ///   broker into clicking Approve or Delete.
-/// - `form-action 'self'` stops an injected form from posting the user's
-///   data off-site; `base-uri 'self'` stops `<base>` hijacking of every
+/// - `form-action` stops an injected form from posting the user's data
+///   off-site; `base-uri 'self'` stops `<base>` hijacking of every
 ///   relative URL on the page.
+///
+///   `checkout.stripe.com` is listed because browsers apply
+///   `form-action` to the REDIRECT TARGET of a form submission, not just
+///   the immediate action URL. `POST /app/subscribe/{slug}` answers 303
+///   to a Stripe Checkout URL, and with `'self'` alone the browser
+///   refuses that navigation silently: the server logs a normal 303, no
+///   error reaches the user, and the button simply appears dead. That is
+///   exactly how it failed in production once the subscribe step became
+///   a form (it had been a plain link, and `form-action` does not govern
+///   link navigations). Anything else that redirects a FORM off-site
+///   needs its host added here too.
 /// - HSTS is emitted **only** when BASE_URL is https, because the header
 ///   is sticky in browsers — shipping it from a local http build would
 ///   poison the developer's browser for that host.
@@ -589,7 +600,7 @@ async fn security_headers(
              font-src 'self'; \
              object-src 'none'; \
              base-uri 'self'; \
-             form-action 'self'; \
+             form-action 'self' https://checkout.stripe.com; \
              frame-ancestors 'none'"
         );
         headers.insert(

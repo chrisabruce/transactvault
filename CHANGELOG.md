@@ -8,6 +8,14 @@ the bottom-right of every page.
 
 ## August 2026
 
+### v0.14.4: "Continue to payment" works again
+
+- **Fixed: the payment button did nothing.** After confirming a plan,
+  the browser was quietly refusing to hand you over to Stripe because of
+  one of our own security rules, which was written before that step
+  became a confirmation page. Choosing a plan now takes you to the
+  payment page as it should.
+
 ### v0.14.3: Billing notifications accepted again
 
 - **Fixed: Stripe billing messages were being rejected.** While a

@@ -6871,3 +6871,53 @@ fn webhook_accepts_any_offered_signature_not_just_the_last() {
             .is_err()
     );
 }
+
+/// `form-action` governs where a form submission may end up, INCLUDING
+/// after a redirect. The subscribe step is a form that answers 303 to
+/// Stripe Checkout, so omitting Stripe's host makes the browser refuse
+/// the navigation with no error anywhere the server can see: the button
+/// just does nothing. That shipped once; this keeps it from shipping
+/// again.
+#[tokio::test]
+async fn csp_allows_form_redirects_to_stripe_checkout() {
+    let app = make_app().await;
+    let response = app
+        .router
+        .clone()
+        .oneshot({
+            let mut req = Request::builder()
+                .uri("/pricing")
+                .body(Body::empty())
+                .unwrap();
+            req.extensions_mut()
+                .insert(axum::extract::ConnectInfo::<std::net::SocketAddr>(
+                    "127.0.0.1:0".parse().unwrap(),
+                ));
+            req
+        })
+        .await
+        .expect("oneshot");
+
+    let csp = response
+        .headers()
+        .get("content-security-policy")
+        .and_then(|v| v.to_str().ok())
+        .expect("CSP header present");
+
+    let form_action = csp
+        .split(';')
+        .map(str::trim)
+        .find(|d| d.starts_with("form-action"))
+        .expect("form-action directive present");
+
+    assert!(
+        form_action.contains("https://checkout.stripe.com"),
+        "form-action must allow Stripe Checkout or the subscribe button dies silently; got: {form_action}"
+    );
+    // Still locked down otherwise: no wildcard crept in.
+    assert!(form_action.contains("'self'"));
+    assert!(
+        !form_action.contains('*'),
+        "form-action must not be wildcarded"
+    );
+}
