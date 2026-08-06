@@ -6118,3 +6118,31 @@ async fn robots_and_sitemap_serve_and_survive_maintenance() {
         );
     }
 }
+
+/// Reflected-text guard: the admin flash parameter is a CODE, never
+/// free text. An attacker-supplied string must render nothing at all,
+/// so a mailed link can't make the app display an attacker's sentence
+/// inside its own success banner.
+#[tokio::test]
+async fn admin_flash_param_cannot_inject_arbitrary_text() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "HQ").await;
+    let admin = seed_user(&app.state, "admin@test").await;
+    join(&app.state, &admin, &b, "broker").await;
+
+    let (status, body) = authed_get(
+        &app,
+        &admin,
+        "/admin/ops?flash=Your+session+expired,+re-enter+your+password+at+evil.example",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !body.contains("evil.example"),
+        "attacker-controlled flash text must never reach the page"
+    );
+
+    // A known code still works.
+    let (_, body) = authed_get(&app, &admin, "/admin/ops?flash=maintenance_off").await;
+    assert!(body.contains("The app is live again."));
+}

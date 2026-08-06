@@ -27,6 +27,64 @@ pub struct StoredObject {
     pub last_modified: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+/// What an unauthenticated stranger can get from the bucket. Produced
+/// by [`Storage::probe_public_access`].
+#[derive(Debug, Clone)]
+pub struct PublicAccessProbe {
+    /// The browser-facing bucket URL that was probed.
+    pub endpoint: String,
+    /// `Some(true)` = anonymous key enumeration works (critical).
+    /// `Some(false)` = refused (healthy). `None` = probe inconclusive.
+    pub listable: Option<bool>,
+    /// Same tri-state for anonymous download of a real object.
+    pub readable: Option<bool>,
+    /// Why the probe couldn't run, when applicable.
+    pub note: Option<String>,
+}
+
+impl PublicAccessProbe {
+    /// Placeholder for paths that bailed before the probe could run
+    /// (e.g. the bucket listing itself failed).
+    pub fn inconclusive() -> Self {
+        Self::unknown("The scan stopped before this check could run.".to_string())
+    }
+
+    fn unknown(note: String) -> Self {
+        Self {
+            endpoint: String::new(),
+            listable: None,
+            readable: None,
+            note: Some(note),
+        }
+    }
+
+    /// True when either probe came back open. Drives the red banner.
+    pub fn is_exposed(&self) -> bool {
+        self.listable == Some(true) || self.readable == Some(true)
+    }
+
+    /// True only when both probes ran AND both were refused.
+    pub fn is_confirmed_private(&self) -> bool {
+        self.listable == Some(false) && self.readable == Some(false)
+    }
+
+    pub fn listing_label(&self) -> &'static str {
+        match self.listable {
+            Some(true) => "OPEN — anyone can list every file",
+            Some(false) => "Refused",
+            None => "Could not check",
+        }
+    }
+
+    pub fn read_label(&self) -> &'static str {
+        match self.readable {
+            Some(true) => "OPEN — anyone with a URL can download",
+            Some(false) => "Refused",
+            None => "Could not check",
+        }
+    }
+}
+
 /// How long a presigned upload URL stays valid. This bounds when the
 /// PUT may *start* — signatures are checked at request start, so a
 /// slow transfer that began in time may run as long as the provider
@@ -46,6 +104,10 @@ pub struct Storage {
     /// URL signed for the app's internal endpoint would be rejected
     /// the moment the browser sends it to the public one.
     presign_bucket: Box<Bucket>,
+    /// Browser-facing endpoint origin (public if configured, else the
+    /// app's own). Used by [`Storage::probe_public_access`] to ask what
+    /// an unauthenticated outsider can see.
+    public_base: String,
 }
 
 impl Storage {
@@ -68,6 +130,7 @@ impl Storage {
         Self {
             presign_bucket: bucket.clone(),
             bucket,
+            public_base: "http://127.0.0.1:1".into(),
         }
     }
 
@@ -116,9 +179,14 @@ impl Storage {
             None => bucket.clone(),
         };
 
+        let public_base = cfg
+            .public_endpoint
+            .clone()
+            .unwrap_or_else(|| cfg.endpoint.clone());
         let storage = Self {
             bucket,
             presign_bucket,
+            public_base,
         };
         if cfg.auto_create_bucket {
             storage
@@ -308,6 +376,71 @@ impl Storage {
             }
         }
         Ok(deleted)
+    }
+
+    /// Probe the bucket for anonymous (unsigned) access.
+    ///
+    /// Every object here is a client's confidential transaction file, so
+    /// "is the bucket private?" must be answered by observation, not by
+    /// trusting that whoever created it ticked the right box in a
+    /// provider console. This sends two UNSIGNED requests to the
+    /// browser-facing endpoint — the same address an outsider would
+    /// reach — and reports what a stranger gets back:
+    ///
+    /// - `GET {endpoint}/{bucket}?list-type=2` → anonymous LISTING.
+    ///   A 200 here means anyone can enumerate every key in the vault.
+    /// - `GET {endpoint}/{bucket}/{probe_key}` → anonymous READ of a
+    ///   real object. A 200 means anyone holding (or guessing) a key
+    ///   can download the document without a signature.
+    ///
+    /// Anything other than 200 (403/401/404) is the healthy answer.
+    /// Network failure is reported as unknown rather than "safe": a
+    /// probe that never arrived proves nothing.
+    pub async fn probe_public_access(&self, probe_key: Option<&str>) -> PublicAccessProbe {
+        let base = format!(
+            "{}/{}",
+            self.public_base.trim_end_matches('/'),
+            self.bucket.name()
+        );
+        let client = match reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                return PublicAccessProbe::unknown(format!("could not build probe client: {e}"));
+            }
+        };
+
+        let list_url = format!("{base}?list-type=2&max-keys=1");
+        let listable = match client.get(&list_url).send().await {
+            Ok(r) => Some(r.status().is_success()),
+            Err(e) => {
+                tracing::warn!(error = %e, "anonymous list probe failed to reach storage");
+                None
+            }
+        };
+
+        let readable = match probe_key {
+            Some(key) => {
+                let object_url = format!("{base}/{key}");
+                match client.get(&object_url).send().await {
+                    Ok(r) => Some(r.status().is_success()),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "anonymous object probe failed to reach storage");
+                        None
+                    }
+                }
+            }
+            None => None,
+        };
+
+        PublicAccessProbe {
+            endpoint: base,
+            listable,
+            readable,
+            note: None,
+        }
     }
 
     /// Every object in the bucket: key, size, and last-modified time.

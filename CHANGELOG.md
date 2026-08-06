@@ -8,6 +8,19 @@ the bottom-right of every page.
 
 ## August 2026
 
+### v0.11.2: Storage privacy check
+
+- **The app now checks its own file storage from the outside.** Admin →
+  Storage asks the storage service, with no password, whether a stranger
+  could list or download your files. It reports what it found: a green
+  "refused both" line is the healthy answer, and anything else is called
+  out in red with what to change. Nothing about how files are served
+  changed; this is a standing check that it stays that way.
+
+- **Two small hardenings.** The batch download-links file is now marked
+  never-cache, matching every other document response, and admin status
+  messages can no longer be written by whoever sends you a link.
+
 ### v0.11.1: Easier for search engines to find us
 
 - **The site now introduces itself to search engines properly.** We

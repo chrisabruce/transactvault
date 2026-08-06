@@ -33,6 +33,38 @@
         <p class="alert error" role="alert">{{ err }}</p>
     {% when None %}{% endmatch %}
 
+    {% if scan.probe.is_exposed() %}
+        <section class="alert error storage-exposed" role="alert">
+            <h2>Your storage bucket is reachable without a password.</h2>
+            <p>
+                We asked <code>{{ scan.probe.endpoint }}</code> the way an outsider would,
+                with no credentials, and it answered.
+            </p>
+            <ul>
+                <li>Listing every file: <strong>{{ scan.probe.listing_label() }}</strong></li>
+                <li>Downloading a file: <strong>{{ scan.probe.read_label() }}</strong></li>
+            </ul>
+            <p>
+                Every client document is exposed until this is fixed. In your storage
+                provider's console, set the bucket to private and remove any policy
+                granting <code>s3:ListBucket</code> or <code>s3:GetObject</code> to
+                anonymous users. The app never needs public access: uploads and
+                downloads use short-lived signed URLs.
+            </p>
+        </section>
+    {% else if scan.probe.is_confirmed_private() %}
+        <p class="alert success storage-private" role="status">
+            Checked just now: the bucket refused both anonymous listing and anonymous
+            download. Files are reachable only through this app or a signed link.
+        </p>
+    {% else %}
+        <p class="alert info" role="status">
+            Could not confirm whether the bucket is private
+            {%- match scan.probe.note %}{% when Some with (n) %} ({{ n }}){% when None %}{% endmatch -%}
+            . Verify manually in your storage provider's console.
+        </p>
+    {% endif %}
+
     <section class="storage-stats" aria-label="Storage summary">
         <article class="storage-stat">
             <strong>{{ scan.total_objects }}</strong>

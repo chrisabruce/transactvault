@@ -90,15 +90,37 @@ pub async fn page(
         header,
         maintenance_on: state.ops.maintenance_on(),
         notice: state.ops.notice().unwrap_or_default(),
-        flash: q.flash,
+        flash: flash_message(q.flash.as_deref()),
         env_forced: state.config.maintenance_mode,
     })
 }
 
 #[derive(Debug, Deserialize)]
 pub struct OpsQuery {
+    /// A CODE, never free text. The message the admin sees is looked up
+    /// from [`flash_message`] — otherwise anyone could mail a
+    /// super-admin a link like `?flash=Session+expired,+re-enter+your+
+    /// password+at+evil.example` and have the app render it as its own
+    /// green success banner. Askama escaping stops that being XSS; it
+    /// does nothing about the social-engineering half.
     #[serde(default)]
     pub flash: Option<String>,
+}
+
+/// Map a flash code to the text shown. Unknown codes render nothing.
+pub fn flash_message(code: Option<&str>) -> Option<&'static str> {
+    match code? {
+        "maintenance_on" => Some("Maintenance mode is ON. Visitors now see the maintenance page."),
+        "maintenance_off" => Some("Maintenance mode is off. The app is live again."),
+        "notice_saved" => Some("Notice saved. Signed-in users will see it on every page."),
+        "notice_cleared" => Some("Notice cleared."),
+        "swept" => Some("Orphaned files deleted. The counts above are from a fresh scan."),
+        "deleted" => Some("Deleted. That object is gone from storage."),
+        "not_orphan" => {
+            Some("Nothing deleted: that object is no longer an orphan, or is already gone.")
+        }
+        _ => None,
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -134,12 +156,12 @@ pub async fn set_maintenance(
     .await;
     tracing::warn!(on, actor = %user.email, "maintenance mode toggled");
 
-    let flash = if on {
-        "Maintenance mode is ON. Visitors now see the maintenance page."
+    let code = if on {
+        "maintenance_on"
     } else {
-        "Maintenance mode is off. The app is live again."
+        "maintenance_off"
     };
-    Ok(Redirect::to(&format!("/admin/ops?flash={}", urlencode(flash))).into_response())
+    Ok(Redirect::to(&format!("/admin/ops?flash={code}")).into_response())
 }
 
 #[derive(Debug, Deserialize)]
@@ -162,13 +184,13 @@ pub async fn set_notice(
         ));
     }
 
-    let (value, kind, flash) = if trimmed.is_empty() {
-        (None, "maintenance_notice_cleared", "Notice cleared.")
+    let (value, kind, code) = if trimmed.is_empty() {
+        (None, "maintenance_notice_cleared", "notice_cleared")
     } else {
         (
             Some(crate::sanitize::scrub_line(trimmed, 300)),
             "maintenance_notice_set",
-            "Notice saved. Signed-in users will see it on every page.",
+            "notice_saved",
         )
     };
 
@@ -186,20 +208,7 @@ pub async fn set_notice(
     )
     .await;
 
-    Ok(Redirect::to(&format!("/admin/ops?flash={}", urlencode(flash))).into_response())
-}
-
-/// Minimal percent-encoding for the flash messages above — they are
-/// static strings, so only spaces and punctuation actually occur.
-fn urlencode(s: &str) -> String {
-    s.bytes()
-        .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                (b as char).to_string()
-            }
-            other => format!("%{other:02X}"),
-        })
-        .collect()
+    Ok(Redirect::to(&format!("/admin/ops?flash={code}")).into_response())
 }
 
 // ---------------------------------------------------------------------------
@@ -230,6 +239,8 @@ pub struct OrphanView {
 }
 
 pub struct StorageScan {
+    /// Result of asking the bucket what an anonymous stranger can see.
+    pub probe: crate::storage::PublicAccessProbe,
     pub total_objects: usize,
     pub total_size: String,
     pub referenced: usize,
@@ -364,6 +375,7 @@ async fn scan_storage(state: &AppState) -> StorageScan {
         Ok(objs) => objs,
         Err(e) => {
             return StorageScan {
+                probe: crate::storage::PublicAccessProbe::inconclusive(),
                 total_objects: 0,
                 total_size: "0 B".into(),
                 referenced: 0,
@@ -376,10 +388,26 @@ async fn scan_storage(state: &AppState) -> StorageScan {
         }
     };
 
+    // Probe with a REAL key: "403 on a key that doesn't exist" would be
+    // indistinguishable from a correctly-locked bucket on some providers.
+    let probe = state
+        .storage
+        .probe_public_access(objects.first().map(|o| o.key.as_str()))
+        .await;
+    if probe.is_exposed() {
+        tracing::error!(
+            endpoint = %probe.endpoint,
+            listable = ?probe.listable,
+            readable = ?probe.readable,
+            "STORAGE BUCKET IS PUBLICLY ACCESSIBLE — client documents are exposed"
+        );
+    }
+
     let (referenced, inflight) = match referenced_keys(state).await {
         Ok(r) => r,
         Err(e) => {
             return StorageScan {
+                probe: crate::storage::PublicAccessProbe::inconclusive(),
                 total_objects: objects.len(),
                 total_size: format_size(objects.iter().map(|o| o.size).sum::<u64>(), DECIMAL),
                 referenced: 0,
@@ -432,6 +460,7 @@ async fn scan_storage(state: &AppState) -> StorageScan {
     orphans.sort_by_key(|o| std::cmp::Reverse(o.size_bytes));
 
     StorageScan {
+        probe,
         total_objects,
         total_size: format_size(total_bytes, DECIMAL),
         referenced: referenced_count,
@@ -457,7 +486,7 @@ pub async fn storage_page(
         signed_in: true,
         header,
         scan,
-        flash: q.flash,
+        flash: flash_message(q.flash.as_deref()),
     })
 }
 
@@ -519,18 +548,7 @@ pub async fn storage_delete_all(
     .await;
     tracing::info!(deleted, failed, bytes, actor = %user.email, "orphaned storage objects deleted");
 
-    let flash = if failed == 0 {
-        format!(
-            "Deleted {deleted} orphaned object(s), reclaiming {}.",
-            format_size(bytes, DECIMAL)
-        )
-    } else {
-        format!(
-            "Deleted {deleted} orphaned object(s) ({}); {failed} failed — see the logs.",
-            format_size(bytes, DECIMAL)
-        )
-    };
-    Ok(Redirect::to(&format!("/admin/storage?flash={}", urlencode(&flash))).into_response())
+    Ok(Redirect::to("/admin/storage?flash=swept").into_response())
 }
 
 #[derive(Debug, Deserialize)]
@@ -563,10 +581,6 @@ pub async fn storage_delete_one(
         .await;
     }
 
-    let flash = if deleted > 0 {
-        format!("Deleted. Reclaimed {}.", format_size(bytes, DECIMAL))
-    } else {
-        "Nothing deleted: that object is no longer an orphan (or is already gone).".to_string()
-    };
-    Ok(Redirect::to(&format!("/admin/storage?flash={}", urlencode(&flash))).into_response())
+    let code = if deleted > 0 { "deleted" } else { "not_orphan" };
+    Ok(Redirect::to(&format!("/admin/storage?flash={code}")).into_response())
 }

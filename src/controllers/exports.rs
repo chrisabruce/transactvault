@@ -270,6 +270,10 @@ pub async fn urls_txt(
             header::CONTENT_DISPOSITION,
             "attachment; filename=\"urls.txt\"",
         )
+        // Every line is a live, signature-bearing URL to a whole-brokerage
+        // archive. Match what `documents::download` does rather than
+        // leaving it to heuristic caching.
+        .header(header::CACHE_CONTROL, "private, no-store")
         .body(body.into())
         .map_err(|e| AppError::Internal(anyhow::anyhow!("build urls.txt response: {e}")))
 }

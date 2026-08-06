@@ -1005,7 +1005,7 @@ pub struct AdminOpsPage<'a> {
     /// Current notice text, empty string when none is set (keeps the
     /// textarea binding simple).
     pub notice: String,
-    pub flash: Option<String>,
+    pub flash: Option<&'static str>,
     /// True when `MAINTENANCE_MODE=true` came from the environment —
     /// the page warns that turning the gate off here won't survive a
     /// restart until the env var is removed.
@@ -1022,7 +1022,7 @@ pub struct AdminStoragePage<'a> {
     pub signed_in: bool,
     pub header: AppHeader,
     pub scan: crate::controllers::ops::StorageScan,
-    pub flash: Option<String>,
+    pub flash: Option<&'static str>,
 }
 
 /// `/admin/feedback` — user-submitted notes, newest first.
