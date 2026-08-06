@@ -63,11 +63,10 @@ pub async fn stripe(State(state): State<AppState>, headers: HeaderMap, body: Byt
         Err(e) => {
             // Overwhelmingly this is a secret mismatch. Say so, rather
             // than leaving whoever reads /admin/errors to guess.
-            return reject(format!(
-                "signature verification failed ({e}) — check STRIPE_WEBHOOK_SECRET matches \
-                 the signing secret of THIS endpoint in the Stripe dashboard, and that it \
-                 is the live secret if the app is using live keys"
-            ));
+            // Name the specific likely cause instead of listing all of
+            // them; see `diagnose_webhook_failure`.
+            let hint = crate::stripe::diagnose_webhook_failure(&state.config.stripe, payload);
+            return reject(format!("signature verification failed ({e}). {hint}"));
         }
     };
 

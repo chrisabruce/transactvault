@@ -408,3 +408,67 @@ impl Stripe {
         Ok(())
     }
 }
+
+/// Pinpoint *why* a webhook signature failed.
+///
+/// "Signature invalid" has three realistic causes needing three
+/// different fixes, so guessing costs an afternoon. Two are identifiable
+/// from data already in hand:
+///
+/// - The payload states its own `livemode`. Comparing that against
+///   whether the API key is `sk_live_` catches the most common mistake:
+///   the test endpoint's signing secret pasted into a live deployment,
+///   or the reverse.
+/// - The secret's *shape* catches copy-paste damage: quotes captured
+///   from a `.env` line, stray whitespace, or an API key pasted where
+///   the signing secret belongs.
+///
+/// The payload is untrusted and used for nothing but this message. The
+/// signature check has already failed, so nothing downstream acts on it,
+/// and only the secret's shape is ever reported, never its value.
+pub fn diagnose_webhook_failure(cfg: &crate::config::StripeConfig, payload: &str) -> &'static str {
+    let secret = cfg.webhook_secret.as_str();
+
+    if secret.is_empty() {
+        return "STRIPE_WEBHOOK_SECRET is not set on this deployment.";
+    }
+    if secret.trim() != secret {
+        return "STRIPE_WEBHOOK_SECRET has leading or trailing whitespace. Re-paste it \
+                without spaces or newlines.";
+    }
+    if secret.starts_with('"') || secret.starts_with('\'') {
+        return "STRIPE_WEBHOOK_SECRET includes quote characters. Paste the value alone, \
+                without surrounding quotes.";
+    }
+    if secret.starts_with("sk_") || secret.starts_with("pk_") {
+        return "STRIPE_WEBHOOK_SECRET looks like an API key, not a signing secret. The \
+                signing secret starts with `whsec_` and comes from the webhook endpoint's \
+                own page in the dashboard.";
+    }
+    if !secret.starts_with("whsec_") {
+        return "STRIPE_WEBHOOK_SECRET does not start with `whsec_`, so it is not a webhook \
+                signing secret.";
+    }
+
+    let event_is_live =
+        payload.contains("\"livemode\":true") || payload.contains("\"livemode\": true");
+    let key_is_live = cfg.secret_key.starts_with("sk_live_");
+    match (event_is_live, key_is_live) {
+        (true, false) => {
+            "This event came from Stripe LIVE mode, but this deployment is configured with a \
+             TEST API key. Switch the dashboard to Live mode and copy that endpoint's signing \
+             secret, or point the app at live keys."
+        }
+        (false, true) => {
+            "This event came from Stripe TEST mode (or the Stripe CLI), but this deployment \
+             uses LIVE API keys. The signing secret you need is the one on the LIVE endpoint's \
+             page; test endpoints and `stripe listen` each have their own."
+        }
+        _ => {
+            "The secret is well-formed and the mode matches, so it is most likely from a \
+             DIFFERENT endpoint. Each endpoint has its own signing secret: copy the one \
+             belonging to the endpoint pointing at this app. If you changed it recently, the \
+             app must be redeployed to pick up a new environment value."
+        }
+    }
+}

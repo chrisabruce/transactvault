@@ -6739,3 +6739,51 @@ async fn backup_produces_a_restorable_dump_containing_real_data() {
         "dump should carry row data"
     );
 }
+
+/// The webhook diagnostic must name the specific cause, because
+/// "signature invalid" alone sends you checking the wrong things.
+#[test]
+fn webhook_diagnostic_names_the_actual_cause() {
+    use crate::config::StripeConfig;
+    let cfg = |secret: &str, key: &str| StripeConfig {
+        secret_key: key.into(),
+        webhook_secret: secret.into(),
+        trial_days: 14,
+    };
+    let live_event = r#"{"id":"evt_1","livemode":true}"#;
+    let test_event = r#"{"id":"evt_1","livemode":false}"#;
+
+    // Shape problems are caught before anything else.
+    assert!(
+        crate::stripe::diagnose_webhook_failure(&cfg("", "sk_live_x"), live_event)
+            .contains("not set")
+    );
+    assert!(
+        crate::stripe::diagnose_webhook_failure(&cfg("whsec_abc ", "sk_live_x"), live_event)
+            .contains("whitespace")
+    );
+    assert!(
+        crate::stripe::diagnose_webhook_failure(&cfg("\"whsec_abc\"", "sk_live_x"), live_event)
+            .contains("quote")
+    );
+    assert!(
+        crate::stripe::diagnose_webhook_failure(&cfg("sk_live_oops", "sk_live_x"), live_event)
+            .contains("API key")
+    );
+
+    // Mode mismatch, both directions.
+    assert!(
+        crate::stripe::diagnose_webhook_failure(&cfg("whsec_abc", "sk_test_x"), live_event)
+            .contains("LIVE mode")
+    );
+    assert!(
+        crate::stripe::diagnose_webhook_failure(&cfg("whsec_abc", "sk_live_x"), test_event)
+            .contains("TEST mode")
+    );
+
+    // Well-formed and matching mode: point at the other likely cause.
+    let same_mode =
+        crate::stripe::diagnose_webhook_failure(&cfg("whsec_abc", "sk_live_x"), live_event);
+    assert!(same_mode.contains("DIFFERENT endpoint"));
+    assert!(same_mode.contains("redeployed"));
+}

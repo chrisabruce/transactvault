@@ -8,6 +8,13 @@ the bottom-right of every page.
 
 ## August 2026
 
+### v0.14.2: Clearer billing diagnostics
+
+- **When Stripe rejects a message, we now say why.** A rejected billing
+  notification used to report only that the signature didn't match,
+  which is true of several different causes. Admin → Errors now names
+  the likely one: wrong mode, wrong endpoint, or a mis-pasted value.
+
 ### v0.14.1: Backups actually run now
 
 - **Fixed: "Back up now" failed with a connection error.** The database
