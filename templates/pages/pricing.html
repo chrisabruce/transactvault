@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Pricing — {{ app_name }}{% endblock %}
+{% block title %}Pricing | {{ app_name }}{% endblock %}
 {% block description %}Transparent monthly pricing for every brokerage size. Three years of compliant storage is included on every plan.{% endblock %}
 {% block canonical %}{{ base_url }}/pricing{% endblock %}
 {% block og_url %}{{ base_url }}/pricing{% endblock %}
@@ -50,6 +50,27 @@
                         </header>
                         <p class="price">{{ view.tier.price_display() }}<small>/month</small></p>
                         <p class="plan-limit">{{ view.tier.transaction_limit_display() }}{% if view.tier.user_limit < 0 %} · Unlimited users{% else %} · {{ view.tier.user_limit_display() }} users{% endif %}</p>
+
+                        {#- What happens past the included transactions, stated on
+                            the card rather than folded into the expandable below.
+                            Two possible answers and they are materially different:
+                            keep working and get billed, or be stopped until next
+                            month. Nobody should have to open a disclosure to learn
+                            which one they bought. -#}
+                        {% if view.tier.transaction_limit >= 0 %}
+                            {% if let Some(rate) = view.overage_per_tx_display %}
+                                <p class="plan-overage">
+                                    <strong>Go over?</strong> Keep working. Extra transactions
+                                    are {{ rate }} each, added to that month's invoice.
+                                </p>
+                            {% else %}
+                                <p class="plan-overage capped">
+                                    <strong>Go over?</strong> New transactions are paused until
+                                    the next billing month, or until you move up a plan. Nothing
+                                    is ever charged without you choosing it.
+                                </p>
+                            {% endif %}
+                        {% endif %}
                         <ul class="plan-features" role="list">
                             {% for bullet in view.tier.feature_bullets %}
                                 <li>{{ bullet }}</li>
@@ -78,7 +99,7 @@
                                     <p class="scenario-note">{{ note }}</p>
                                 {% endif %}
                                 {% if let Some(rate) = view.overage_per_tx_display %}
-                                    <p class="scenario-fineprint">Overage billed at the end of each month at {{ rate }} per transaction past the included limit.</p>
+                                    <p class="scenario-fineprint">Extra transactions are metered as you create them and billed at {{ rate }} each on that month's invoice. Nothing is charged up front, and the count resets when the billing month does.</p>
                                 {% endif %}
                             </details>
                         {% endif %}

@@ -28,6 +28,7 @@ pub fn build(state: AppState) -> Router {
         .route("/", get(marketing::landing))
         .route("/pricing", get(marketing::pricing))
         .route("/brand", get(marketing::brand))
+        .route("/real-estate-transaction-management", get(marketing::guide))
         // Public contact form. The token endpoint is what "opening the
         // form" means server-side; see `feedback::contact_token`.
         .route("/contact", post(feedback::contact_submit))
@@ -174,7 +175,10 @@ pub fn build(state: AppState) -> Router {
         // Registered BEFORE the `{slug}` route so "return" is matched
         // literally rather than being read as a tier slug.
         .route("/app/subscribe/return", get(subscribe::checkout_return))
-        .route("/app/subscribe/{slug}", get(subscribe::subscribe))
+        .route(
+            "/app/subscribe/{slug}",
+            get(subscribe::review).post(subscribe::subscribe),
+        )
         .route("/app/billing/portal", get(subscribe::portal))
         .route("/app/no-brokerage", get(orphan::landing))
         .route("/app/invites/{token}/accept", post(orphan::accept))
@@ -647,6 +651,7 @@ async fn maintenance_gate(
             | "/healthcheck"
             | "/robots.txt"
             | "/sitemap.xml"
+            | "/real-estate-transaction-management"
     ) || path.starts_with("/static/")
         || path == "/admin"
         || path.starts_with("/admin/");

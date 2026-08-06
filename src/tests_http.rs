@@ -6327,3 +6327,122 @@ async fn contact_token_endpoint_issues_usable_tokens() {
         token
     ));
 }
+
+// ---------------------------------------------------------------------------
+// Guide page + subscribe review
+// ---------------------------------------------------------------------------
+
+/// The guide is public, self-canonicalizing, and carries the structured
+/// data that makes it eligible for rich results.
+#[tokio::test]
+async fn guide_page_is_public_and_carries_schema() {
+    let app = make_app().await;
+    let (status, body) = send(
+        &app,
+        Request::builder()
+            .uri("/real-estate-transaction-management")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("What is real estate transaction management?"));
+    assert!(
+        body.contains("\"@type\": \"FAQPage\""),
+        "FAQ schema missing"
+    );
+    assert!(
+        body.contains("\"@type\": \"Article\""),
+        "Article schema missing"
+    );
+    assert!(
+        body.contains("canonical\" href=\"http://test.local/real-estate-transaction-management\""),
+        "canonical must point at itself"
+    );
+
+    // And it's listed for crawlers.
+    let (_, sitemap) = send(
+        &app,
+        Request::builder()
+            .uri("/sitemap.xml")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert!(sitemap.contains("/real-estate-transaction-management"));
+}
+
+/// Seed a tier with a chosen limit + overage config.
+async fn seed_tier(app: &TestApp, slug: &str, limit: i64, overage_cents: Option<i64>) {
+    #[derive(serde::Serialize, SurrealValue)]
+    struct NewT {
+        slug: String,
+        name: String,
+        price_cents: i64,
+        transaction_limit: i64,
+        overage_fee_cents_per_tx: Option<i64>,
+        stripe_price_id: Option<String>,
+    }
+    let _: Option<crate::models::Tier> = app
+        .state
+        .db
+        .create("tier")
+        .content(NewT {
+            slug: slug.into(),
+            name: format!("{slug} plan"),
+            price_cents: 24900,
+            transaction_limit: limit,
+            overage_fee_cents_per_tx: overage_cents,
+            stripe_price_id: Some("price_test".into()),
+        })
+        .await
+        .expect("create tier");
+}
+
+/// The review step must state the consequence that matches the tier's
+/// actual configuration: metered tiers say "you keep working and pay",
+/// hard-cap tiers say "new transactions pause". Getting this backwards
+/// would be a billing surprise, so it's pinned.
+#[tokio::test]
+async fn subscribe_review_states_the_matching_overage_consequence() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "HQ").await;
+    let broker = seed_user(&app.state, "broker@x.test").await;
+    join(&app.state, &broker, &b, "broker").await;
+    // The seed helper marks brokerages complimentary, which short-circuits
+    // the review page; clear it so the real path runs.
+    app.state
+        .db
+        .query("UPDATE $b SET is_complimentary = false")
+        .bind(("b", b.clone()))
+        .await
+        .expect("clear comp");
+
+    seed_tier(&app, "metered", 75, Some(300)).await;
+    seed_tier(&app, "capped", 15, None).await;
+
+    let (status, body) = authed_get(&app, &broker, "/app/subscribe/metered").await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert!(body.contains("$3.00 each"), "metered rate missing: {body}");
+    assert!(body.contains("Nothing stops and nothing is blocked"));
+    assert!(!body.contains("pauses until"));
+
+    let (status, body) = authed_get(&app, &broker, "/app/subscribe/capped").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("pauses until"), "hard cap wording missing");
+    assert!(body.contains("charged more than the monthly price on this plan"));
+}
+
+/// Reviewing a plan is a billing action: broker only, and it must not
+/// create anything by itself.
+#[tokio::test]
+async fn subscribe_review_is_broker_only() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "HQ").await;
+    let agent = seed_user(&app.state, "agent@x.test").await;
+    join(&app.state, &agent, &b, "agent").await;
+    seed_tier(&app, "metered", 75, Some(300)).await;
+
+    let (status, _) = authed_get(&app, &agent, "/app/subscribe/metered").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}

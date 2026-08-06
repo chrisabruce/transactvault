@@ -1,0 +1,378 @@
+{% extends "base.html" %}
+
+{% block title %}What Is Real Estate Transaction Management? A Plain Guide | {{ app_name }}{% endblock %}
+{% block description %}Real estate transaction management is the work of getting a deal from accepted offer to closed file: deadlines, disclosures, signatures, and a complete record. Here's how it works, who does it, and what California brokerages have to keep.{% endblock %}
+{% block canonical %}{{ base_url }}/real-estate-transaction-management{% endblock %}
+{% block og_url %}{{ base_url }}/real-estate-transaction-management{% endblock %}
+{% block og_title %}What is real estate transaction management?{% endblock %}
+{% block og_description %}The work of getting a deal from accepted offer to closed file, explained without jargon: the stages, who does what, and what a California broker has to keep on file.{% endblock %}
+
+{% block head %}
+<script type="application/ld+json">
+{
+    "@context": "https://schema.org",
+    "@type": "Article",
+    "headline": "What is real estate transaction management?",
+    "description": "A plain-English guide to real estate transaction management: what it covers, the stages of a deal, who does the work, and what California brokerages are required to keep.",
+    "author": { "@type": "Organization", "name": "TransactVault, LLC" },
+    "publisher": {
+        "@type": "Organization",
+        "name": "TransactVault, LLC",
+        "logo": { "@type": "ImageObject", "url": "{{ base_url }}/static/images/logo.svg" }
+    },
+    "mainEntityOfPage": "{{ base_url }}/real-estate-transaction-management"
+}
+</script>
+<script type="application/ld+json">
+{
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+        {
+            "@type": "Question",
+            "name": "What is real estate transaction management?",
+            "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "Real estate transaction management is the work of moving a deal from accepted offer to closed file: tracking contract deadlines, collecting the required disclosures and signatures, keeping every document in one organized place, and leaving a record the brokerage can produce later if it is audited."
+            }
+        },
+        {
+            "@type": "Question",
+            "name": "What does a transaction coordinator do?",
+            "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "A transaction coordinator keeps the paperwork and the calendar straight after an offer is accepted. They open the file, chase missing signatures and disclosures, watch contingency and closing dates, and coordinate between the agent, escrow, title, and lender so the agent can keep selling."
+            }
+        },
+        {
+            "@type": "Question",
+            "name": "How long must a California brokerage keep transaction records?",
+            "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "California Business and Professions Code section 10148 requires a broker to retain listings, deposit receipts, canceled checks, trust records, and other documents executed or obtained in connection with a transaction for three years. The California Department of Real Estate can ask to inspect them during that window."
+            }
+        },
+        {
+            "@type": "Question",
+            "name": "Do I need transaction management software?",
+            "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "Not for one or two deals a year. Software earns its place when several people touch the same file, when the broker needs to see the state of every deal without asking, and when the brokerage has to produce a complete file years later. Below that, a careful folder structure works."
+            }
+        }
+    ]
+}
+</script>
+{% endblock %}
+
+{% block body %}
+{% include "components/public_header.html" %}
+
+<main class="guide">
+    <header class="guide-hero">
+        <div class="wrap">
+            <span class="eyebrow">Guide</span>
+            <h1>What is real estate transaction management?</h1>
+            <p class="lede">
+                Real estate transaction management is the work of moving a deal from
+                accepted offer to closed file: tracking contract deadlines, collecting
+                the disclosures and signatures the deal requires, keeping every document
+                in one place, and leaving a record your brokerage can produce years later
+                if someone asks for it.
+            </p>
+            <p class="guide-meta">Written for California brokerages. About a seven minute read.</p>
+        </div>
+    </header>
+
+    <div class="guide-body">
+        <nav class="guide-toc" aria-label="On this page">
+            <h2>On this page</h2>
+            <ol>
+                <li><a href="#stages">The stages of a deal</a></li>
+                <li><a href="#who">Who actually does this work</a></li>
+                <li><a href="#wrong">Where it goes wrong</a></li>
+                <li><a href="#records">What California requires you to keep</a></li>
+                <li><a href="#software">What software is supposed to fix</a></li>
+                <li><a href="#transactvault">Where TransactVault fits</a></li>
+                <li><a href="#faq">Common questions</a></li>
+            </ol>
+        </nav>
+
+        <article class="guide-article">
+            <p>
+                Every closed sale leaves behind a paper trail. Somebody has to build that
+                trail while the deal is still moving, and somebody has to be able to find
+                it again long after everyone has moved on. That is the whole job.
+            </p>
+            <p>
+                It sounds administrative because it is. It is also where deals fall apart
+                and where brokerages get into trouble, which is why offices that run a lot
+                of volume treat it as a real discipline rather than something an agent does
+                between showings.
+            </p>
+
+            <section id="stages">
+                <h2>The stages of a deal</h2>
+                <p>
+                    A residential transaction in California moves through four rough
+                    phases. The names vary by office; the work does not.
+                </p>
+
+                <ol class="guide-steps">
+                    <li>
+                        <h3>Listing or offer</h3>
+                        <p>
+                            Before anything is signed, the agency relationship has to be
+                            disclosed and the listing or purchase agreement has to be
+                            executed. In California that usually means CAR forms: the
+                            Residential Purchase Agreement, the Agency Disclosure, and the
+                            listing agreement on the other side. Get this wrong and
+                            everything downstream inherits the mistake.
+                        </p>
+                    </li>
+                    <li>
+                        <h3>Acceptance and opening escrow</h3>
+                        <p>
+                            The clock starts on acceptance. Escrow opens, the deposit goes
+                            in, and a set of dates comes to life at once: inspection,
+                            appraisal, loan, and the contingency removals that hang off
+                            them. This is the point where a file either gets organized or
+                            quietly stops being organized for the rest of its life.
+                        </p>
+                    </li>
+                    <li>
+                        <h3>Contingencies and disclosures</h3>
+                        <p>
+                            The heaviest stretch. Transfer disclosure, natural hazard
+                            report, seller questionnaire, HOA documents if there are any,
+                            inspection reports, requests for repair, counter offers, and
+                            the signed acknowledgment for each one. Most of what a
+                            transaction coordinator does happens here, and most of what an
+                            auditor later asks about does too.
+                        </p>
+                    </li>
+                    <li>
+                        <h3>Closing and the file after it</h3>
+                        <p>
+                            Signing, funding, recording, commission. Then the part nobody
+                            celebrates: the file has to be complete and it has to stay
+                            reachable. A closed transaction is not finished business for
+                            the broker. It is three years of retained records.
+                        </p>
+                    </li>
+                </ol>
+            </section>
+
+            <section id="who">
+                <h2>Who actually does this work</h2>
+                <p>
+                    Three roles, and the friction usually lives between them.
+                </p>
+                <dl class="guide-roles">
+                    <dt>The agent</dt>
+                    <dd>
+                        Wins the client and negotiates the deal. Every hour spent chasing
+                        a missing signature is an hour not spent doing that, which is
+                        exactly why paperwork slips.
+                    </dd>
+                    <dt>The transaction coordinator</dt>
+                    <dd>
+                        Takes the file after acceptance and runs it: opens it, chases what
+                        is missing, watches the dates, and talks to escrow, title, and the
+                        lender. A good TC is the reason a busy agent can carry ten deals at
+                        once.
+                    </dd>
+                    <dt>The broker</dt>
+                    <dd>
+                        Carries the license the whole office operates under, and therefore
+                        the liability. The broker's real question is never "how is that
+                        deal going." It is "if the DRE walked in on Monday, which of these
+                        files would embarrass me."
+                    </dd>
+                </dl>
+            </section>
+
+            <section id="wrong">
+                <h2>Where it goes wrong</h2>
+                <p>
+                    Almost never in a dramatic way. It goes wrong like this:
+                </p>
+                <ul class="guide-list">
+                    <li>
+                        The current version of a counter offer lives in someone's email,
+                        and the copy in the folder is two revisions old.
+                    </li>
+                    <li>
+                        A disclosure was signed but never filed, so the file looks
+                        incomplete even though the deal was handled correctly.
+                    </li>
+                    <li>
+                        An agent leaves, and their transactions leave with them: in their
+                        inbox, on their laptop, under their personal cloud account.
+                    </li>
+                    <li>
+                        The broker has no way to see the state of thirty files without
+                        opening thirty folders, so nobody checks until something forces it.
+                    </li>
+                </ul>
+                <p>
+                    None of these are exotic. They are what happens when a file is spread
+                    across email, a shared drive, and a signature service that each know
+                    about a different part of the deal.
+                </p>
+            </section>
+
+            <section id="records">
+                <h2>What California requires you to keep</h2>
+                <p>
+                    This is the part that turns organization into obligation. Under
+                    California Business and Professions Code section 10148, a broker has to
+                    retain the documents executed or obtained in connection with a
+                    transaction for <strong>three years</strong>, and the Department of Real
+                    Estate can ask to inspect them during that window.
+                </p>
+                <p>
+                    That covers listings, deposit receipts, canceled checks, and trust
+                    records, among others. The retention clock runs from closing, or from
+                    the listing date when a deal never closed. An audit is not usually a
+                    disaster; being unable to produce a file is.
+                </p>
+                <aside class="guide-callout">
+                    <p>
+                        <strong>The practical version:</strong> if a deal closed in the last
+                        three years, you should be able to produce its complete file
+                        without calling anyone who no longer works for you.
+                    </p>
+                </aside>
+                <p class="guide-fineprint">
+                    This is a plain-language summary, not legal advice. Check the current
+                    statute or ask your attorney for your specific situation.
+                </p>
+            </section>
+
+            <section id="software">
+                <h2>What software is supposed to fix</h2>
+                <p>
+                    Transaction management software exists to hold the file in one place
+                    and tell you what is missing. Strip away the feature lists and the
+                    useful ones do four things:
+                </p>
+                <ul class="guide-list">
+                    <li>
+                        <strong>One home per deal.</strong> Documents attached to the
+                        transaction, not scattered across the people who touched it.
+                    </li>
+                    <li>
+                        <strong>A checklist that knows the deal type.</strong> A probate
+                        sale needs different paperwork than a standard residential
+                        purchase, and the software should already know that.
+                    </li>
+                    <li>
+                        <strong>Version history.</strong> Three counter offers means three
+                        documents, with the current one obvious.
+                    </li>
+                    <li>
+                        <strong>An export you can hand to an auditor.</strong> The real
+                        test. If producing a file means assembling it by hand, the system
+                        did not do its job.
+                    </li>
+                </ul>
+                <p>
+                    Everything else, and there is a lot of everything else in this
+                    category, is convenience layered on top of those four.
+                </p>
+            </section>
+
+            <section id="transactvault">
+                <h2>Where TransactVault fits</h2>
+                <p>
+                    We built TransactVault for California brokerages, with California
+                    brokerages. The default checklists follow California transaction
+                    standards because the offices that shaped the product are in the
+                    Antelope Valley, not because we localized someone else's product after
+                    the fact.
+                </p>
+                <p>
+                    Three things make it different from what most offices are switching
+                    away from:
+                </p>
+                <ul class="guide-list">
+                    <li>
+                        <strong>Flat pricing with unlimited team members.</strong> Most
+                        competitors charge per seat, which quietly punishes you for putting
+                        your TC and your compliance officer on the system. Those are the
+                        people who most need to be on it.
+                    </li>
+                    <li>
+                        <strong>Three years of storage included.</strong> Not an add-on.
+                        The number matches the retention window above, which is the only
+                        reason it is three.
+                    </li>
+                    <li>
+                        <strong>A compliance score on every deal.</strong> When the
+                        checklist turns green, the file is audit-ready, and the broker can
+                        see the whole office at a glance instead of opening folders.
+                    </li>
+                </ul>
+                <p>
+                    We are also not going to pretend it is for everyone. If you close a
+                    handful of deals a year and your folder system works, keep it. This
+                    starts paying off when more than one person touches a file.
+                </p>
+                <div class="guide-cta">
+                    <a class="btn" href="/signup">Start a free 14-day trial</a>
+                    <a class="btn secondary" href="/pricing">See what it costs</a>
+                    <p>No credit card, no sales call.</p>
+                </div>
+            </section>
+
+            <section id="faq">
+                <h2>Common questions</h2>
+                <dl class="guide-faq">
+                    <dt>What does a transaction coordinator do?</dt>
+                    <dd>
+                        Takes over the paperwork and the calendar once an offer is
+                        accepted: opening the file, chasing signatures and disclosures,
+                        watching contingency and closing dates, and coordinating with
+                        escrow, title, and the lender.
+                    </dd>
+
+                    <dt>Is transaction management the same as a CRM?</dt>
+                    <dd>
+                        No, and using one for the other is a common mistake. A CRM manages
+                        people you hope to do business with. Transaction management handles
+                        the deal after it exists, and it answers to a records requirement
+                        that a CRM was never built for.
+                    </dd>
+
+                    <dt>How long must a California brokerage keep transaction records?</dt>
+                    <dd>
+                        Three years, under Business and Professions Code section 10148,
+                        measured from closing or from the listing date when the deal did
+                        not close.
+                    </dd>
+
+                    <dt>Do small brokerages need this?</dt>
+                    <dd>
+                        Not always. One agent closing a few deals a year can run a careful
+                        folder system. The moment a second person needs to find something
+                        in a file, or a broker needs to answer for files they did not
+                        personally handle, the folder system starts costing more than it
+                        saves.
+                    </dd>
+
+                    <dt>What happens to our files if we leave?</dt>
+                    <dd>
+                        Ours export in full, organized by property and form code with a
+                        manifest, and you keep a 60-day window after cancellation to pull
+                        everything out. Ask any vendor this question before you sign up.
+                        The answer tells you a lot.
+                    </dd>
+                </dl>
+            </section>
+        </article>
+    </div>
+</main>
+
+{% include "components/public_footer.html" %}
+{% endblock %}

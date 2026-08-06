@@ -8,7 +8,9 @@ use crate::controllers::render;
 use crate::error::AppError;
 use crate::models::Tier;
 use crate::state::AppState;
-use crate::templates::{BrandPage, LandingPage, PricingPage, PricingScenario, PricingTierView};
+use crate::templates::{
+    BrandPage, GuidePage, LandingPage, PricingPage, PricingScenario, PricingTierView,
+};
 
 pub async fn landing(
     State(state): State<AppState>,
@@ -210,6 +212,21 @@ pub async fn brand(
     })
 }
 
+/// `GET /real-estate-transaction-management` — the explainer that
+/// targets the informational query, keeping the homepage free to target
+/// the commercial one ("...software", "for brokerages"). Two pages
+/// aiming at the same phrase would compete with each other.
+pub async fn guide(
+    State(state): State<AppState>,
+    MaybeCurrentUser(user): MaybeCurrentUser,
+) -> Result<Html<String>, AppError> {
+    render(&GuidePage {
+        app_name: &state.config.app_name,
+        base_url: &state.config.base_url,
+        signed_in: user.is_some(),
+    })
+}
+
 /// `GET /robots.txt` — crawl policy plus the sitemap pointer.
 ///
 /// The app area and the token-carrying auth links are off limits;
@@ -238,7 +255,12 @@ pub async fn robots_txt(State(state): State<AppState>) -> impl axum::response::I
 /// static date is worse than none.
 pub async fn sitemap_xml(State(state): State<AppState>) -> impl axum::response::IntoResponse {
     let base = state.config.base_url.trim_end_matches('/').to_string();
-    let urls: [&str; 3] = ["/", "/pricing", "/signup"];
+    let urls: [&str; 4] = [
+        "/",
+        "/real-estate-transaction-management",
+        "/pricing",
+        "/signup",
+    ];
     let entries: String = urls
         .iter()
         .map(|path| format!("  <url><loc>{base}{path}</loc></url>\n"))

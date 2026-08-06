@@ -90,6 +90,36 @@ pub struct PricingScenario {
     pub qualifier: &'static str,
 }
 
+/// `/app/subscribe/{slug}` — the review step shown before Stripe.
+#[derive(Template)]
+#[template(path = "pages/subscribe_review.html")]
+pub struct SubscribeReviewPage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+    pub signed_in: bool,
+    pub header: AppHeader,
+    pub slug: String,
+    pub tier_name: String,
+    pub price: String,
+    /// e.g. "75 transactions/month" — preformatted by the tier model.
+    pub transactions: String,
+    pub users: String,
+    pub unlimited_transactions: bool,
+    /// `Some("$3.00")` when the tier meters past its cap; `None` when it
+    /// stops instead. Drives which paragraph the page shows.
+    pub overage_display: Option<String>,
+    pub trial_days: u32,
+}
+
+/// `/real-estate-transaction-management` — the informational guide.
+#[derive(Template)]
+#[template(path = "pages/guide.html")]
+pub struct GuidePage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+    pub signed_in: bool,
+}
+
 /// Public brand book at `/brand` — the canonical guide for designers,
 /// vendors, and the internal team. Renders the same content as the
 /// downloadable PDF kept at `/static/brand/transactvault-brand-book.pdf`.

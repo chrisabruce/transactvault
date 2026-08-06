@@ -19,6 +19,73 @@ use crate::error::AppError;
 use crate::models::{Brokerage, Tier};
 use crate::state::AppState;
 
+/// `GET /app/subscribe/{slug}` — the review step.
+///
+/// Between "pick a plan" and "hand over a card" there used to be
+/// nothing: the old GET handler built a Checkout Session and redirected
+/// to Stripe on the spot. So the one number that decides whether a plan
+/// fits, and what happens the month you exceed it, was never stated
+/// where the decision is actually made. This page says it, then posts to
+/// the handler below.
+pub async fn review(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(slug): Path<String>,
+) -> Result<Response, AppError> {
+    if !user.role.is_broker() {
+        return Err(AppError::Forbidden);
+    }
+
+    let mut q = state
+        .db
+        .query("SELECT * FROM tier WHERE slug = $s LIMIT 1")
+        .bind(("s", slug.clone()))
+        .await?;
+    let tier: Option<Tier> = q.take(0)?;
+    let tier = tier.ok_or(AppError::NotFound)?;
+    if !tier.is_active || tier.is_archived {
+        return Err(AppError::invalid("That plan isn't available right now."));
+    }
+
+    let brokerage: Option<Brokerage> = state.db.select(user.brokerage_id.clone()).await?;
+    let brokerage = brokerage.ok_or(AppError::NotFound)?;
+    if brokerage.is_complimentary {
+        return Ok(Redirect::to("/app?flash=complimentary").into_response());
+    }
+    if matches!(
+        brokerage.subscription_status.as_deref(),
+        Some("trialing" | "active" | "past_due" | "canceling")
+    ) {
+        return Ok(Redirect::to("/app?flash=already_subscribed").into_response());
+    }
+
+    // Same two-branch truth the enforcement code applies: a tier with an
+    // overage fee meters past the cap, one without stops at it.
+    let overage_display = tier
+        .overage_fee_cents_per_tx
+        .map(|cents| format!("${:.2}", cents as f64 / 100.0));
+
+    let header = crate::controllers::common::build_app_header(&state, &user, "").await;
+    let page = crate::templates::SubscribeReviewPage {
+        app_name: &state.config.app_name,
+        base_url: &state.config.base_url,
+        signed_in: true,
+        header,
+        slug: slug.clone(),
+        tier_name: tier.name.clone(),
+        price: tier.price_display(),
+        transactions: tier.transaction_limit_display(),
+        users: tier.user_limit_display(),
+        unlimited_transactions: tier.transaction_limit < 0,
+        overage_display,
+        trial_days: state.config.stripe.trial_days,
+    };
+    Ok(crate::controllers::render(&page)?.into_response())
+}
+
+/// `POST /app/subscribe/{slug}` — create the Checkout Session and send
+/// the browser to Stripe. Re-runs every gate the review page ran; the
+/// review page is disclosure, not authorization.
 pub async fn subscribe(
     State(state): State<AppState>,
     user: CurrentUser,

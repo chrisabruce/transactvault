@@ -8,6 +8,22 @@ the bottom-right of every page.
 
 ## August 2026
 
+### v0.13.0: A plain guide, and no surprises about limits
+
+- **A new Guide page.** "What is real estate transaction management?"
+  now lives in the top nav: the stages of a deal, who does what, what
+  California requires you to keep for three years, and an honest note on
+  when software is worth it and when your folders are fine. Written for
+  someone who has never heard of us, which is rather the point.
+
+- **What happens if you go over your transactions is now stated up
+  front.** Every pricing card says it in one line, and there's a new
+  confirmation step before payment that spells it out again: on plans
+  with per-transaction pricing you keep working and the extras appear on
+  that month's invoice, and on plans without it new transactions simply
+  pause until the next month. Either way you see it before you enter a
+  card, not after.
+
 ### v0.12.2: Fixes for yesterday's contact form
 
 - **Links on the public site work again.** The new contact panel was
