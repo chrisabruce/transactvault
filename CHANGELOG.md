@@ -8,6 +8,16 @@ the bottom-right of every page.
 
 ## August 2026
 
+### v0.12.2: Fixes for yesterday's contact form
+
+- **Links on the public site work again.** The new contact panel was
+  leaving an invisible layer over the marketing pages, so clicks landed
+  on nothing. Sorry about that — it's gone, and the "Send us a message"
+  button opens the form properly.
+
+- **Testimonials read more clearly.** Each person's role and their
+  brokerage now sit on their own lines under their name.
+
 ### v0.12.0: Write to us without opening your email
 
 - **A contact form instead of an email address.** "Send us a message"

@@ -75,6 +75,16 @@
    -------------------------------------------------------------------------- */
 *, *::before, *::after { box-sizing: border-box; }
 
+/* The `hidden` attribute must beat any author `display` rule.
+   Browsers implement `hidden` as a UA-stylesheet `display: none`, which
+   an author rule as ordinary as `.panel { display: flex }` silently
+   overrides — so the element stays laid out, and if it is
+   `position: fixed; inset: 0` it swallows every click on the page while
+   remaining invisible. That is exactly how the contact sheet made the
+   whole marketing site unclickable. `!important` is the documented fix
+   for this and belongs here, not scattered per component. */
+[hidden] { display: none !important; }
+
 html { scroll-behavior: smooth; }
 
 body {
@@ -492,6 +502,11 @@ a.btn {
     line-height: 1.35;
 }
 .testimonial cite strong { color: var(--color-ink); display: block; }
+/* Role and brokerage each get their own line — a name, what they do,
+   and where they do it read as three facts, not one run-on string. */
+.testimonial cite .testimonial-role,
+.testimonial cite .testimonial-org { display: block; }
+.testimonial cite .testimonial-org { color: var(--color-mute-soft); }
 
 /* Bubbles drift up as they scroll into view; static everywhere the
    scroll-driven-animation API or motion itself is unwelcome. */
