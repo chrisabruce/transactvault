@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+
+{% block title %}Back in a few minutes — {{ app_name }}{% endblock %}
+{% block description %}TransactVault is offline briefly for routine maintenance. Your transactions and documents are safe.{% endblock %}
+
+{% block head %}
+{#- The page reloads itself once a minute, so when the work finishes
+    people simply land back in the app without touching anything. -#}
+<meta http-equiv="refresh" content="60">
+<meta name="robots" content="noindex">
+{% endblock %}
+
+{% block body %}
+<main class="maintenance-page">
+    <section class="maintenance-card">
+        <span class="maintenance-mark" aria-hidden="true">
+            <img src="/static/images/logo.svg" alt="" width="56" height="56">
+        </span>
+        <p class="maintenance-eyebrow">Routine maintenance</p>
+        <h1>We're doing a bit of housekeeping.</h1>
+        <p class="maintenance-lede">
+            TransactVault is offline for a short while so we can keep everything
+            fast, safe, and backed up. Your transactions and documents are exactly
+            where you left them, and nothing is required from you.
+        </p>
+        <p class="maintenance-sub">
+            This page checks back on its own every minute. Mid-deadline and need a
+            document right now? Email
+            <a href="mailto:hello@transactvault.app">hello@transactvault.app</a>
+            and a human will dig it out for you.
+        </p>
+    </section>
+</main>
+{% endblock %}

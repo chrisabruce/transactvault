@@ -61,4 +61,5 @@ pub async fn build_app_header(
     .with_super_admin(super::is_super_admin(state, user))
     .with_avatar(crate::db::record_key(&user.user_id), user.has_avatar)
     .with_banner(info.banner)
+    .with_notice(state.ops.notice())
 }

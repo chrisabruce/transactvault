@@ -238,6 +238,9 @@ POSTMARK_MESSAGE_STREAM=outbound
 STRIPE_SECRET_KEY=
 STRIPE_WEBHOOK_SECRET=
 
+# --- operations (optional) --------------------------------------------
+# MAINTENANCE_MODE=true              # boot straight into maintenance; see §8
+
 # --- MUST NOT BE SET --------------------------------------------------
 # DEV_RESET_ON_BOOT
 ```
@@ -304,3 +307,33 @@ surreal export --endpoint "$SURREAL_URL" --user "$SURREAL_USER" \
 Documents live in object storage and are **not** covered by that — enable
 versioning or a lifecycle policy on the bucket if you want protection
 against deletion.
+
+---
+
+## 8. Maintenance mode
+
+While maintenance mode is on, every app route answers `503` with a calm
+"back in a few minutes" page (plus `Retry-After`, so search engines treat
+it as temporary). The marketing pages, `/login`, `/healthcheck`, and
+`/admin/*` stay reachable — the last two so the platform keeps the
+container alive and a super-admin can reach the switch. Everything that
+writes (the app, signup, verify/reset/invite links, Stripe webhooks) is
+gated; Stripe retries 5xx for days, so webhook events queue up instead of
+landing in a database that is mid-restore.
+
+Two ways to turn it on:
+
+- **Planned, app stays up** (database restore in place): flip the switch
+  at `/admin/ops`. It takes effect immediately, is written to
+  `system_setting:main` so a restart with a healthy database resumes in
+  maintenance, and is audited.
+- **Server move / database unreachable**: set `MAINTENANCE_MODE=true` in
+  the environment and (re)start. The gate never touches the database, so
+  the page serves even with no database behind the app. Remove the
+  variable once done — while it is set, every boot re-enters maintenance
+  regardless of the admin switch.
+
+**Restore runbook:** announce it first with the notice banner
+(`/admin/ops`, a day ahead) → flip maintenance on → take the backup /
+restore / move → verify → flip it off. The notice banner is separate from
+the gate, so you can announce without gating and gate without announcing.

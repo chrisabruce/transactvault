@@ -524,7 +524,12 @@ DEFINE FIELD OVERWRITE kind ON audit_event TYPE string
         "brokerage_comp_granted", "brokerage_comp_revoked",
         "error_log_cleared",
         "export_requested", "export_canceled", "export_deleted",
-        "export_downloaded"
+        "export_downloaded",
+        "feedback_submitted", "feedback_blocked_honeypot",
+        "feedback_blocked_rate_limit",
+        "feedback_resolved", "feedback_reopened", "feedback_deleted",
+        "maintenance_enabled", "maintenance_disabled",
+        "maintenance_notice_set", "maintenance_notice_cleared"
     ];
 DEFINE FIELD OVERWRITE actor_email ON audit_event TYPE option<string>;
 DEFINE FIELD OVERWRITE actor       ON audit_event TYPE option<record<user>>;
@@ -535,3 +540,33 @@ DEFINE FIELD OVERWRITE at          ON audit_event TYPE datetime DEFAULT time::no
 DEFINE INDEX OVERWRITE idx_audit_at   ON audit_event FIELDS at;
 DEFINE INDEX OVERWRITE idx_audit_kind ON audit_event FIELDS kind;
 DEFINE INDEX OVERWRITE idx_audit_ip   ON audit_event FIELDS ip;
+
+-- ---------------------------------------------------------------------------
+-- Feedback — short notes signed-in users leave via the floating widget.
+-- Name/email are denormalized so a note survives its author leaving.
+-- ---------------------------------------------------------------------------
+DEFINE TABLE OVERWRITE feedback SCHEMAFULL;
+DEFINE FIELD OVERWRITE user        ON feedback TYPE option<record<user>>;
+DEFINE FIELD OVERWRITE user_name   ON feedback TYPE string;
+DEFINE FIELD OVERWRITE user_email  ON feedback TYPE string;
+DEFINE FIELD OVERWRITE brokerage_name ON feedback TYPE option<string>;
+DEFINE FIELD OVERWRITE body        ON feedback TYPE string
+    ASSERT string::len($value) >= 1 AND string::len($value) <= 2000;
+-- Path the note was sent from (Referer), for "which screen were they on".
+DEFINE FIELD OVERWRITE page        ON feedback TYPE option<string>;
+DEFINE FIELD OVERWRITE status      ON feedback TYPE string DEFAULT "open"
+    ASSERT $value IN ["open", "resolved"];
+DEFINE FIELD OVERWRITE resolved_by ON feedback TYPE option<string>;
+DEFINE FIELD OVERWRITE resolved_at ON feedback TYPE option<datetime>;
+DEFINE FIELD OVERWRITE created_at  ON feedback TYPE datetime DEFAULT time::now();
+DEFINE INDEX OVERWRITE idx_feedback_status ON feedback FIELDS status;
+DEFINE INDEX OVERWRITE idx_feedback_at     ON feedback FIELDS created_at;
+
+-- ---------------------------------------------------------------------------
+-- System settings — one well-known row (system_setting:main) so operational
+-- state survives a restart. Read once at boot into AppState.ops; the admin
+-- Ops handlers keep row and cache in step.
+-- ---------------------------------------------------------------------------
+DEFINE TABLE OVERWRITE system_setting SCHEMAFULL;
+DEFINE FIELD OVERWRITE maintenance_mode   ON system_setting TYPE bool DEFAULT false;
+DEFINE FIELD OVERWRITE maintenance_notice ON system_setting TYPE option<string>;

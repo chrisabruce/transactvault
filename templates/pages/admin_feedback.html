@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+
+{% block title %}Feedback — Admin — {{ app_name }}{% endblock %}
+{% block body_class %}page-app page-admin{% endblock %}
+
+{% block body %}
+{% include "components/app_header.html" %}
+
+<main class="app-main">
+    <header class="page-title">
+        <section>
+            <h1>Admin · Feedback</h1>
+            <p class="subtitle">Notes people send from the widget in the corner of the app. Read them the way they were written: quickly, and in good faith.</p>
+        </section>
+        <nav class="admin-subnav" aria-label="Admin sections">
+            <a href="/admin">Users</a>
+            <a href="/admin/brokerages">Brokerages</a>
+            <a href="/admin/tiers">Tiers</a>
+            <a href="/admin/forms">Forms</a>
+            <a href="/admin/feedback" class="active" aria-current="page">Feedback</a>
+            <a href="/admin/audit">Audit log</a>
+            <a href="/admin/errors">Errors</a>
+            <a href="/admin/ops">Ops</a>
+            <a href="/admin/changelog">Changelog</a>
+        </nav>
+    </header>
+
+    {% match flash %}{% when Some with (msg) %}
+        <p class="alert success" role="status">{{ msg }}</p>
+    {% when None %}{% endmatch %}
+
+    <nav class="filter-bar feedback-tabs" aria-label="Feedback filters">
+        <a href="/admin/feedback" {% if show == "open" %}class="active" aria-current="page"{% endif %}>Open ({{ open_count }})</a>
+        <a href="/admin/feedback?show=resolved" {% if show == "resolved" %}class="active" aria-current="page"{% endif %}>Resolved</a>
+        <a href="/admin/feedback?show=all" {% if show == "all" %}class="active" aria-current="page"{% endif %}>Everything</a>
+    </nav>
+
+    <section class="panel admin-table-wrap">
+        <table class="admin-table feedback-table">
+            <thead>
+                <tr>
+                    <th scope="col">When</th>
+                    <th scope="col">From</th>
+                    <th scope="col">Note</th>
+                    <th scope="col">Page</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for f in rows %}
+                    <tr>
+                        <td><time datetime="{{ f.created_at }}">{{ f.created_at.format("%b %-d %H:%M") }}</time></td>
+                        <td class="feedback-from">
+                            <a href="/admin?q={{ f.user_email }}" title="Open this user in Admin · Users">{{ f.user_name }}</a>
+                            <small>{% match f.brokerage_name %}{% when Some with (b) %}{{ b }}{% when None %}{{ f.user_email }}{% endmatch %}</small>
+                        </td>
+                        <td class="feedback-note">
+                            {% if f.body.len() > 160 %}
+                                <details>
+                                    <summary>{{ f.body.chars().take(160).collect::<String>() }}…</summary>
+                                    <p>{{ f.body }}</p>
+                                </details>
+                            {% else %}
+                                {{ f.body }}
+                            {% endif %}
+                        </td>
+                        <td>{% match f.page %}{% when Some with (p) %}<code>{{ p }}</code>{% when None %}—{% endmatch %}</td>
+                        <td>
+                            {% if f.is_resolved() %}
+                                <span class="audit-pill ok" {% match f.resolved_by %}{% when Some with (by) %}title="Resolved by {{ by }}"{% when None %}{% endmatch %}>Resolved</span>
+                            {% else %}
+                                <span class="audit-pill blocked">Open</span>
+                            {% endif %}
+                        </td>
+                        <td class="feedback-actions">
+                            <form method="post" action="/admin/feedback/{{ f.key() }}/resolve" class="inline-form">
+                                <button class="btn small secondary" type="submit">
+                                    {% if f.is_resolved() %}Reopen{% else %}Resolve{% endif %}
+                                </button>
+                            </form>
+                            <form method="post" action="/admin/feedback/{{ f.key() }}/delete" class="inline-form"
+                                  data-confirm="Delete this note from {{ f.user_name }}? It's gone for good.">
+                                <button class="btn small ghost danger" type="submit">Delete</button>
+                            </form>
+                        </td>
+                    </tr>
+                {% endfor %}
+                {% if rows.is_empty() %}
+                    <tr><td colspan="6" class="empty-row">
+                        {% if show == "open" %}Nothing open. Either everyone is happy or nobody has found the button yet.{% else %}Nothing here.{% endif %}
+                    </td></tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </section>
+</main>
+{% endblock %}

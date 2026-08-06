@@ -5542,3 +5542,332 @@ async fn applies_picker_is_parsed_alongside_its_form() {
     assert_eq!(f.applies_sides, vec!["listing"]);
     assert_eq!(f.applies_conditions, vec!["probate"]);
 }
+
+// ---------------------------------------------------------------------------
+// Maintenance mode + feedback widget
+// ---------------------------------------------------------------------------
+
+/// The gate answers app traffic with the friendly 503 while leaving the
+/// front door (marketing, login, health) open, and drops back to normal
+/// behaviour the moment the switch flips off.
+#[tokio::test]
+async fn maintenance_gates_the_app_but_not_the_front_door() {
+    let app = make_app().await;
+    app.state.ops.set_maintenance(true);
+
+    let (status, body) = send(
+        &app,
+        Request::builder().uri("/app").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(
+        body.contains("housekeeping"),
+        "503 should render the reassuring page, got: {}",
+        &body[..body.len().min(200)]
+    );
+
+    // Writes that would land mid-restore are gated too.
+    let (status, _) = send(
+        &app,
+        Request::builder()
+            .uri("/signup")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+
+    for path in ["/", "/pricing", "/login", "/healthcheck"] {
+        let (status, _) = send(
+            &app,
+            Request::builder().uri(path).body(Body::empty()).unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{path} should stay reachable");
+    }
+
+    app.state.ops.set_maintenance(false);
+    let (status, _) = send(
+        &app,
+        Request::builder().uri("/app").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_ne!(status, StatusCode::SERVICE_UNAVAILABLE);
+}
+
+/// The 503 must carry `Retry-After` (crawlers treat the outage as
+/// temporary) and `no-store` (nobody caches the maintenance page over
+/// the real app).
+#[tokio::test]
+async fn maintenance_503_carries_retry_after_and_no_store() {
+    let app = make_app().await;
+    app.state.ops.set_maintenance(true);
+
+    let response = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/app/transactions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("oneshot");
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        response
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok()),
+        Some("300")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("cache-control")
+            .and_then(|v| v.to_str().ok()),
+        Some("no-store")
+    );
+}
+
+/// A super-admin can sign in during maintenance, reach `/admin/ops`,
+/// and turn the gate off — the whole recovery path stays usable.
+#[tokio::test]
+async fn super_admin_can_turn_maintenance_off_from_admin_ops() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "HQ").await;
+    let admin = seed_user(&app.state, "admin@test").await;
+    join(&app.state, &admin, &b, "broker").await;
+
+    app.state.ops.set_maintenance(true);
+
+    let (status, body) = authed_get(&app, &admin, "/admin/ops").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Turn maintenance off"));
+
+    let (status, _) = authed_post(&app, &admin, "/admin/ops/maintenance", "set=off").await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert!(!app.state.ops.maintenance_on());
+
+    // And back on, via the same switch.
+    let (status, _) = authed_post(&app, &admin, "/admin/ops/maintenance", "set=on").await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert!(app.state.ops.maintenance_on());
+}
+
+/// The scheduled-maintenance notice set on `/admin/ops` appears in the
+/// header of every signed-in page, and clearing it removes the banner.
+#[tokio::test]
+async fn maintenance_notice_shows_for_users_and_clears() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "HQ").await;
+    let admin = seed_user(&app.state, "admin@test").await;
+    join(&app.state, &admin, &b, "broker").await;
+    let agent = seed_user(&app.state, "agent@x.test").await;
+    join(&app.state, &agent, &b, "agent").await;
+
+    let (status, _) = authed_post(
+        &app,
+        &admin,
+        "/admin/ops/notice",
+        "notice=Offline+Saturday+9+to+10+pm+Pacific.",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(
+        app.state.ops.notice().as_deref(),
+        Some("Offline Saturday 9 to 10 pm Pacific.")
+    );
+
+    let (status, body) = authed_get(&app, &agent, "/app").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Scheduled maintenance."));
+    assert!(body.contains("Offline Saturday 9 to 10 pm Pacific."));
+
+    let (status, _) = authed_post(&app, &admin, "/admin/ops/notice", "notice=").await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert!(app.state.ops.notice().is_none());
+
+    let (_, body) = authed_get(&app, &agent, "/app").await;
+    assert!(!body.contains("Scheduled maintenance."));
+}
+
+/// Feedback is for signed-in users only.
+#[tokio::test]
+async fn feedback_requires_sign_in() {
+    let app = make_app().await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/app/feedback")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from("body=hello"))
+        .unwrap();
+    let (status, _) = send(&app, req).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+/// A real note is stored with the author denormalized onto the row; a
+/// honeypot submission gets the same outward response and stores
+/// nothing.
+#[tokio::test]
+async fn feedback_stores_notes_and_honeypot_drops_silently() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Quartz Hill Realty").await;
+    let user = seed_user(&app.state, "maria@x.test").await;
+    join(&app.state, &user, &b, "coordinator").await;
+
+    let (status, _) = authed_post(
+        &app,
+        &user,
+        "/app/feedback",
+        "body=The+export+button+is+hard+to+find+on+mobile.&website=",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+
+    let mut q = app
+        .state
+        .db
+        .query("SELECT * FROM feedback")
+        .await
+        .expect("select feedback");
+    let rows: Vec<crate::models::Feedback> = q.take(0).unwrap_or_default();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].body, "The export button is hard to find on mobile.");
+    assert_eq!(rows[0].user_email, "maria@x.test");
+    assert_eq!(rows[0].status, "open");
+    assert_eq!(
+        rows[0].brokerage_name.as_deref(),
+        Some("Quartz Hill Realty")
+    );
+
+    // Honeypot filled: identical outward shape, nothing stored.
+    let (status, _) = authed_post(
+        &app,
+        &user,
+        "/app/feedback",
+        "body=buy+cheap+watches&website=http%3A%2F%2Fspam.example",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+
+    let mut q = app
+        .state
+        .db
+        .query("SELECT count() FROM feedback GROUP ALL")
+        .await
+        .expect("count feedback");
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct CountRow {
+        count: i64,
+    }
+    let count = q
+        .take::<Option<CountRow>>(0)
+        .ok()
+        .flatten()
+        .map(|c| c.count)
+        .unwrap_or(0);
+    assert_eq!(count, 1, "honeypot submission must not be stored");
+}
+
+/// Datastar submits get the in-place thank-you fragment instead of a
+/// redirect, so the widget morphs without a page reload.
+#[tokio::test]
+async fn feedback_datastar_submit_gets_fragment() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "HQ").await;
+    let user = seed_user(&app.state, "kirk@x.test").await;
+    join(&app.state, &user, &b, "agent").await;
+
+    let cookie = session_cookie(&app, &user);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/app/feedback")
+        .header("cookie", cookie)
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("datastar-request", "true")
+        .body(Body::from("body=Love+the+compliance+score.&website="))
+        .unwrap();
+    let (status, body) = send(&app, req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("id=\"feedback-body\""));
+    assert!(body.contains("Got it. Thank you."));
+}
+
+/// The admin list shows notes; resolve toggles both ways; delete is
+/// permanent. Regular users can't touch any of it.
+#[tokio::test]
+async fn admin_feedback_resolve_reopen_delete() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "HQ").await;
+    let admin = seed_user(&app.state, "admin@test").await;
+    join(&app.state, &admin, &b, "broker").await;
+    let agent = seed_user(&app.state, "amanda@x.test").await;
+    join(&app.state, &agent, &b, "agent").await;
+
+    let (status, _) = authed_post(
+        &app,
+        &agent,
+        "/app/feedback",
+        "body=Could+the+checklist+remember+my+collapsed+groups%3F&website=",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+
+    // The agent cannot open the admin list.
+    let (status, _) = authed_get(&app, &agent, "/admin/feedback").await;
+    assert_ne!(status, StatusCode::OK);
+
+    let (status, body) = authed_get(&app, &admin, "/admin/feedback").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Could the checklist remember my collapsed groups?"));
+    assert!(body.contains("/admin?q=amanda@x.test"));
+
+    let mut q = app
+        .state
+        .db
+        .query("SELECT * FROM feedback")
+        .await
+        .expect("select");
+    let rows: Vec<crate::models::Feedback> = q.take(0).unwrap_or_default();
+    let key = rows[0].key();
+
+    // Resolve.
+    let (status, _) =
+        authed_post(&app, &admin, &format!("/admin/feedback/{key}/resolve"), "").await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let row: Option<crate::models::Feedback> = app
+        .state
+        .db
+        .select(surrealdb::types::RecordId::new("feedback", key.as_str()))
+        .await
+        .expect("select one");
+    let row = row.expect("row still there");
+    assert!(row.is_resolved());
+    assert_eq!(row.resolved_by.as_deref(), Some("admin@test"));
+
+    // Reopen.
+    let (status, _) =
+        authed_post(&app, &admin, &format!("/admin/feedback/{key}/resolve"), "").await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let row: Option<crate::models::Feedback> = app
+        .state
+        .db
+        .select(surrealdb::types::RecordId::new("feedback", key.as_str()))
+        .await
+        .expect("select one");
+    assert!(!row.expect("row").is_resolved());
+
+    // Delete — and it's gone.
+    let (status, _) = authed_post(&app, &admin, &format!("/admin/feedback/{key}/delete"), "").await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let row: Option<crate::models::Feedback> = app
+        .state
+        .db
+        .select(surrealdb::types::RecordId::new("feedback", key.as_str()))
+        .await
+        .expect("select one");
+    assert!(row.is_none());
+}

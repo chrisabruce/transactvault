@@ -9,6 +9,7 @@ pub mod checklist;
 pub mod comment;
 pub mod document;
 pub mod export;
+pub mod feedback;
 pub mod invitation;
 pub mod tier;
 pub mod transaction;
@@ -23,6 +24,7 @@ pub use document::Document;
 pub use document::NewDocument;
 pub use document::{NewPendingUpload, PendingUpload};
 pub use export::{ExportChunk, ExportJob, ExportStatus, NewExportChunk, NewExportJob};
+pub use feedback::{Feedback, NewFeedback};
 pub use invitation::{Invitation, NewInvitation};
 #[allow(unused_imports)]
 pub use tier::NewTier;

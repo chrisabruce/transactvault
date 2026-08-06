@@ -1,6 +1,8 @@
 //! Shared application state passed to every Axum handler via `State`.
 
 use std::sync::Arc;
+use std::sync::RwLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
@@ -35,6 +37,54 @@ use crate::stripe::Stripe;
 /// signin / session variables).
 pub type Db = Arc<Surreal<Any>>;
 
+/// Live operational switches, shared across every request.
+///
+/// Deliberately NOT read from the database per request: the whole point
+/// of maintenance mode is to answer requests while the database is being
+/// restored or moved, so the gate must work when the database can't. The
+/// values live here in process memory; the admin Ops handlers mirror
+/// them into `system_setting:main` (best-effort) so a restart with a
+/// healthy database resumes in the same state, and `MAINTENANCE_MODE=true`
+/// in the environment forces the gate on at boot regardless of what the
+/// database says — that's the switch to set when migrating servers.
+#[derive(Clone, Default)]
+pub struct Ops {
+    inner: Arc<OpsInner>,
+}
+
+#[derive(Default)]
+struct OpsInner {
+    maintenance: AtomicBool,
+    /// Scheduled-maintenance heads-up shown as a banner on signed-in
+    /// pages. `None` = no banner. Guarded by a std RwLock; reads are
+    /// sync, never held across an await.
+    notice: RwLock<Option<String>>,
+}
+
+impl Ops {
+    pub fn maintenance_on(&self) -> bool {
+        self.inner.maintenance.load(Ordering::Relaxed)
+    }
+
+    pub fn set_maintenance(&self, on: bool) {
+        self.inner.maintenance.store(on, Ordering::Relaxed);
+    }
+
+    pub fn notice(&self) -> Option<String> {
+        self.inner
+            .notice
+            .read()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
+
+    pub fn set_notice(&self, notice: Option<String>) {
+        if let Ok(mut guard) = self.inner.notice.write() {
+            *guard = notice;
+        }
+    }
+}
+
 /// Clonable handle to the live database, object storage, email transport,
 /// and configuration. Cheap to clone — every member is reference-counted.
 #[derive(Clone)]
@@ -55,6 +105,8 @@ pub struct AppState {
     /// [`crate::events::Event::UserMembershipChanged`] so the target
     /// user's live streams drop and reconnect with their new role.
     pub events: Events,
+    /// Maintenance switch + scheduled-maintenance notice. See [`Ops`].
+    pub ops: Ops,
 }
 
 impl AppState {
@@ -67,6 +119,7 @@ impl AppState {
             config: Arc::new(config),
             rate_limiter: RateLimiter::new(),
             events: Events::new(),
+            ops: Ops::default(),
         }
     }
 
@@ -92,6 +145,7 @@ impl AppState {
             config: Arc::new(config),
             rate_limiter: RateLimiter::new(),
             events: Events::new(),
+            ops: Ops::default(),
         }
     }
 }

@@ -169,6 +169,8 @@ pub async fn reset_schema(db: &Surreal<Any>) -> anyhow::Result<()> {
         REMOVE TABLE IF EXISTS invitation;
         REMOVE TABLE IF EXISTS audit_event;
         REMOVE TABLE IF EXISTS error_event;
+        REMOVE TABLE IF EXISTS feedback;
+        REMOVE TABLE IF EXISTS system_setting;
         REMOVE TABLE IF EXISTS tier;
         REMOVE TABLE IF EXISTS form;
         REMOVE TABLE IF EXISTS form_group;

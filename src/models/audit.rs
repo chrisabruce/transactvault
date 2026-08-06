@@ -111,6 +111,16 @@ impl AuditEvent {
             "tier_updated" => "Tier updated",
             "brokerage_comp_granted" => "Comp access granted",
             "brokerage_comp_revoked" => "Comp access revoked",
+            "feedback_submitted" => "Feedback submitted",
+            "feedback_blocked_honeypot" => "Feedback blocked — honeypot",
+            "feedback_blocked_rate_limit" => "Feedback blocked — rate limit",
+            "feedback_resolved" => "Feedback resolved",
+            "feedback_reopened" => "Feedback reopened",
+            "feedback_deleted" => "Feedback deleted",
+            "maintenance_enabled" => "Maintenance mode ON",
+            "maintenance_disabled" => "Maintenance mode off",
+            "maintenance_notice_set" => "Maintenance notice set",
+            "maintenance_notice_cleared" => "Maintenance notice cleared",
             _ => "Event",
         }
     }
@@ -118,7 +128,13 @@ impl AuditEvent {
     /// CSS hook — green for OK, amber for blocked, red for failures.
     pub fn kind_class(&self) -> &'static str {
         match self.kind.as_str() {
-            "verify_success" | "login_success" | "invite_accepted" | "signup_pending" => "ok",
+            "verify_success"
+            | "login_success"
+            | "invite_accepted"
+            | "signup_pending"
+            | "feedback_submitted"
+            | "feedback_resolved"
+            | "maintenance_disabled" => "ok",
             "logout"
             | "invite_sent"
             | "invite_resent"

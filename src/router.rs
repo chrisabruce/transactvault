@@ -5,6 +5,7 @@
 
 use std::time::Duration;
 
+use askama::Template;
 use axum::Router;
 use axum::extract::Request;
 use axum::middleware::{Next, from_fn};
@@ -17,8 +18,8 @@ use tower_http::trace::{DefaultOnFailure, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 
 use crate::controllers::{
-    admin, auth, checklists, comments, documents, exports, forms, health, marketing, members,
-    orphan, profile, subscribe, tiers, transactions, webhooks,
+    admin, auth, checklists, comments, documents, exports, feedback, forms, health, marketing,
+    members, ops, orphan, profile, subscribe, tiers, transactions, webhooks,
 };
 use crate::state::AppState;
 
@@ -159,6 +160,7 @@ pub fn build(state: AppState) -> Router {
         .route("/app/no-brokerage", get(orphan::landing))
         .route("/app/invites/{token}/accept", post(orphan::accept))
         .route("/app/invites/{token}/decline", post(orphan::decline))
+        .route("/app/feedback", post(feedback::submit))
         .route("/app/forms", get(forms::broker_forms))
         .route("/app/forms/locality", post(forms::set_locality))
         .route("/app/forms/hide/{key}", post(forms::toggle_hide))
@@ -217,7 +219,16 @@ pub fn build(state: AppState) -> Router {
         .route("/admin/audit", get(admin::audit_log))
         .route("/admin/errors", get(admin::error_log))
         .route("/admin/errors/clear", post(admin::clear_error_log))
-        .route("/admin/changelog", get(admin::changelog));
+        .route("/admin/changelog", get(admin::changelog))
+        .route("/admin/feedback", get(feedback::admin_list))
+        .route(
+            "/admin/feedback/{key}/resolve",
+            post(feedback::toggle_resolved),
+        )
+        .route("/admin/feedback/{key}/delete", post(feedback::delete))
+        .route("/admin/ops", get(ops::page))
+        .route("/admin/ops/maintenance", post(ops::set_maintenance))
+        .route("/admin/ops/notice", post(ops::set_notice));
 
     let base = Router::new()
         .merge(public)
@@ -260,6 +271,13 @@ pub fn build(state: AppState) -> Router {
         // the login screen, not a bare 401 error page. See the fn doc
         // for why only NAVIGATIONS are rewritten.
         .layer(from_fn(redirect_unauthenticated))
+        // Maintenance gate. Answers 503 with the friendly "back soon"
+        // page while a restore or migration is running. MUST stay a
+        // DB-free code path — see `maintenance_gate`.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            maintenance_gate,
+        ))
         // CSRF: reject state-changing requests a browser reports as
         // coming from another site. Sits above the handlers so it runs
         // before any extractor or DB work.
@@ -562,6 +580,67 @@ async fn security_headers(
         );
     }
     response
+}
+
+/// While maintenance mode is on, answer almost everything with the
+/// reassuring 503 page instead of letting requests reach handlers that
+/// need a healthy database.
+///
+/// Allowlist, not blocklist: during a restore the safe default for a
+/// path nobody thought about is "wait", not "write". What stays open:
+///
+/// - `/healthcheck` — the deploy platform must keep believing in us.
+/// - `/static/*` — the 503 page's own stylesheet.
+/// - `/`, `/pricing`, `/brand` — marketing pages, no database writes.
+/// - `/login` + `/logout` — so a super-admin can sign in and reach
+///   `/admin/ops` to turn the gate off once the database is back.
+/// - `/admin/*` — gated to super-admins by their own extractor.
+///
+/// Everything else (the app, signup, verify/reset/invite links, Stripe
+/// webhooks) gets the 503. That's deliberate for the webhook too:
+/// Stripe retries on 5xx for days, so events queue up instead of
+/// landing in a database that's mid-restore.
+///
+/// This function must never touch the database: it exists precisely for
+/// the windows when there isn't one. The page renders from config alone
+/// and carries `Retry-After` so crawlers treat the outage as temporary.
+async fn maintenance_gate(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    req: Request,
+    next: Next,
+) -> Response {
+    if !state.ops.maintenance_on() {
+        return next.run(req).await;
+    }
+
+    let path = req.uri().path();
+    let open = matches!(
+        path,
+        "/" | "/pricing" | "/brand" | "/login" | "/logout" | "/healthcheck"
+    ) || path.starts_with("/static/")
+        || path == "/admin"
+        || path.starts_with("/admin/");
+    if open {
+        return next.run(req).await;
+    }
+
+    let html = crate::templates::MaintenancePage {
+        app_name: &state.config.app_name,
+        base_url: &state.config.base_url,
+    }
+    .render()
+    .unwrap_or_else(|_| {
+        "<!doctype html><title>Back soon</title><h1>Down for maintenance</h1>\
+         <p>We'll be back shortly. Your data is safe.</p>"
+            .to_string()
+    });
+
+    (
+        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+        [("retry-after", "300"), ("cache-control", "no-store")],
+        axum::response::Html(html),
+    )
+        .into_response()
 }
 
 /// Turn a 401 on an `/app/*` or `/admin/*` BROWSER NAVIGATION into a

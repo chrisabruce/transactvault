@@ -68,6 +68,14 @@ pub struct Config {
     /// is exposed directly and forwarding headers are ignored.
     pub trusted_proxy_hops: usize,
 
+    /// Boot straight into maintenance mode (`MAINTENANCE_MODE=true`).
+    /// The switch for server migrations and database restores: the gate
+    /// works without touching the database, so the app can answer with
+    /// the friendly 503 page while there is nothing behind it. Runtime
+    /// state lives in [`crate::state::Ops`]; a super-admin can also flip
+    /// it from `/admin/ops` without a restart.
+    pub maintenance_mode: bool,
+
     pub rustfs: RustFsConfig,
     pub email: EmailConfig,
     pub stripe: StripeConfig,
@@ -179,6 +187,7 @@ impl Config {
             login_rate_per_quarter_hour: 1000,
             dev_reset_on_boot: false,
             trusted_proxy_hops: 0,
+            maintenance_mode: false,
             rustfs: RustFsConfig {
                 endpoint: "http://127.0.0.1:1".into(),
                 public_endpoint: None,
@@ -260,6 +269,12 @@ impl Config {
             trusted_proxy_hops: env_or("TRUSTED_PROXY_HOPS", "1")
                 .parse()
                 .context("TRUSTED_PROXY_HOPS must be a non-negative integer")?,
+            maintenance_mode: matches!(
+                env_or("MAINTENANCE_MODE", "false")
+                    .to_ascii_lowercase()
+                    .as_str(),
+                "true" | "1" | "yes" | "on"
+            ),
 
             rustfs: RustFsConfig {
                 endpoint: env_either("S3_ENDPOINT", "RUSTFS_ENDPOINT", "http://127.0.0.1:37421"),

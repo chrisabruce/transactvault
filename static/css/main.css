@@ -3866,3 +3866,180 @@ a.external {
     .brand-section { page-break-inside: avoid; }
     .brand-hero { padding: 1.5rem 0; }
 }
+
+/* --------------------------------------------------------------------------
+   Ops: maintenance page, scheduled-maintenance notice, feedback widget
+   -------------------------------------------------------------------------- */
+
+/* Scheduled-maintenance heads-up. Sits above the subscription banner;
+   deliberately calm — brand tint, not warning amber, because the whole
+   point of announcing early is that nothing is wrong. */
+.app-banner.notice {
+    background: var(--color-brand-soft);
+    color: var(--color-brand-ink);
+}
+.app-banner.notice .notice-dot {
+    display: inline-block;
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 50%;
+    background: var(--color-brand);
+    margin-inline-end: 0.5rem;
+    vertical-align: 0.05rem;
+}
+@media (prefers-reduced-motion: no-preference) {
+    .app-banner.notice .notice-dot { animation: notice-pulse 2.4s ease-in-out infinite; }
+}
+@keyframes notice-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.35; }
+}
+
+/* The maintenance (503) page. One calm card, nothing to click except
+   the email link — the page refreshes itself. */
+.maintenance-page {
+    min-height: 100dvh;
+    display: grid;
+    place-items: center;
+    padding: var(--sp-6);
+    background:
+        radial-gradient(ellipse at top, var(--color-brand-tint) 0%, transparent 60%),
+        linear-gradient(180deg, #fff 0%, var(--color-bg) 100%);
+}
+.maintenance-card {
+    max-width: 34rem;
+    text-align: center;
+    background: var(--color-surface);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-xl);
+    padding: var(--sp-8) var(--sp-7);
+    box-shadow: var(--shadow-lg);
+}
+.maintenance-mark { display: inline-block; margin-bottom: var(--sp-5); }
+@media (prefers-reduced-motion: no-preference) {
+    .maintenance-mark { animation: mark-breathe 3.2s ease-in-out infinite; }
+}
+@keyframes mark-breathe {
+    0%, 100% { transform: scale(1); }
+    50%      { transform: scale(1.06); }
+}
+.maintenance-eyebrow {
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-brand);
+    margin-bottom: var(--sp-3);
+}
+.maintenance-card h1 {
+    font-size: var(--fs-2xl);
+    letter-spacing: -0.02em;
+    margin-bottom: var(--sp-4);
+}
+.maintenance-lede { color: var(--color-body); margin-bottom: var(--sp-4); }
+.maintenance-sub  { color: var(--color-muted); font-size: var(--fs-sm); margin: 0; }
+
+/* Feedback widget: a fixed tab that opens a small card. The <details>
+   is the state machine; CSS does the rest. */
+.feedback-fab {
+    position: fixed;
+    right: var(--sp-5);
+    bottom: var(--sp-5);
+    z-index: 40;
+}
+.feedback-tab {
+    list-style: none;
+    cursor: pointer;
+    user-select: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: var(--color-brand);
+    color: #fff;
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    padding: 0.55rem 1rem;
+    border-radius: 999px;
+    box-shadow: var(--shadow);
+    transition: transform var(--transition), box-shadow var(--transition),
+                background var(--transition);
+}
+.feedback-tab::-webkit-details-marker { display: none; }
+.feedback-tab:hover { background: var(--color-brand-ink); transform: translateY(-2px); box-shadow: var(--shadow-lg); }
+.feedback-fab[open] .feedback-tab { background: var(--color-brand-ink); }
+.feedback-panel {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 0.75rem);
+    width: min(22rem, calc(100vw - 2 * var(--sp-5)));
+    background: var(--color-surface);
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    padding: var(--sp-5);
+}
+@media (prefers-reduced-motion: no-preference) {
+    .feedback-fab[open] .feedback-panel { animation: feedback-in 160ms cubic-bezier(.3, .7, .3, 1); }
+}
+@keyframes feedback-in {
+    from { opacity: 0; transform: translateY(8px) scale(0.98); }
+}
+.feedback-head h2 { font-size: var(--fs-md); margin-bottom: var(--sp-1); }
+.feedback-head p  { color: var(--color-muted); font-size: var(--fs-sm); margin-bottom: var(--sp-4); }
+.feedback-body textarea {
+    width: 100%;
+    resize: vertical;
+    margin-bottom: var(--sp-3);
+}
+/* Honeypot: parked far off-canvas, not display:none — some bots skip
+   fields the layout engine dropped entirely. */
+.hp-field {
+    position: absolute;
+    left: -9999px;
+    top: auto;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+}
+.feedback-thanks { margin-bottom: var(--sp-2); color: var(--color-ink); }
+.feedback-thanks-sub { color: var(--color-muted); font-size: var(--fs-sm); margin: 0; }
+
+/* Admin: ops + feedback pages */
+.ops-panel { margin-bottom: var(--sp-5); padding: var(--sp-6); }
+.ops-panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--sp-3);
+    flex-wrap: wrap;
+    margin-bottom: var(--sp-3);
+}
+.ops-panel-head h2 { font-size: var(--fs-lg); margin: 0; }
+.ops-panel > p { color: var(--color-muted); max-width: 60ch; }
+.ops-notice-form textarea { width: 100%; resize: vertical; }
+.ops-notice-actions { display: flex; gap: var(--sp-3); margin-top: var(--sp-3); }
+
+.feedback-tabs { display: flex; gap: var(--sp-2); margin-bottom: var(--sp-4); }
+.feedback-tabs a {
+    padding: 0.4rem 0.9rem;
+    border-radius: 999px;
+    font-size: var(--fs-sm);
+    color: var(--color-muted);
+    text-decoration: none;
+    border: 1px solid var(--color-line);
+    background: var(--color-surface);
+}
+.feedback-tabs a.active {
+    background: var(--color-brand-soft);
+    border-color: var(--color-brand-soft);
+    color: var(--color-brand-ink);
+    font-weight: 600;
+}
+.feedback-from a { font-weight: 600; }
+.feedback-from small { display: block; color: var(--color-muted); }
+.feedback-note { max-width: 26rem; }
+.feedback-note details summary { cursor: pointer; }
+.feedback-note details p { margin: var(--sp-2) 0 0; white-space: pre-wrap; }
+.feedback-actions { white-space: nowrap; }
+.feedback-actions .inline-form { display: inline-block; margin-inline-end: var(--sp-2); }

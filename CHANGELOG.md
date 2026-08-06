@@ -8,6 +8,23 @@ the bottom-right of every page.
 
 ## August 2026
 
+### v0.9.0: A feedback button, and calmer maintenance
+
+- **Tell us what to fix.** There's now a small Feedback tab in the
+  bottom corner of every signed-in page. Type a note the way you'd text
+  a friend and send it. A real person reads every one, usually within a
+  day, and if it needs a reply we'll email you.
+
+- **Maintenance without the mystery.** When we take TransactVault
+  offline briefly for upkeep, you'll now see a calm "back in a few
+  minutes" page instead of errors. It checks back on its own and drops
+  you back into the app the moment we're done. Your transactions and
+  documents are never touched by this.
+
+- **Advance warning, too.** When maintenance is planned, a banner
+  appears at the top of the app a day or two ahead saying when and for
+  how long, so nobody gets caught mid-file.
+
 ### v0.8.3: Tidier comparison points
 
 - **The homepage comparison bullets keep their shape.** In the "Better

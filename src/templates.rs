@@ -276,6 +276,9 @@ pub struct AppHeader {
     /// `wind_down`. Rendered above the page header by the partial in
     /// `components/app_header.html`.
     pub banner: Option<crate::billing::SubscriptionBanner>,
+    /// Scheduled-maintenance heads-up set from `/admin/ops`. Rendered
+    /// as its own strip above the subscription banner so both can show.
+    pub maintenance_notice: Option<String>,
 }
 
 impl AppHeader {
@@ -298,6 +301,7 @@ impl AppHeader {
             user_key: String::new(),
             has_avatar: false,
             banner: None,
+            maintenance_notice: None,
         }
     }
 
@@ -323,6 +327,13 @@ impl AppHeader {
     /// "card failed / canceling / wind-down" strip.
     pub fn with_banner(mut self, banner: Option<crate::billing::SubscriptionBanner>) -> Self {
         self.banner = banner;
+        self
+    }
+
+    /// Attach the scheduled-maintenance notice from
+    /// [`crate::state::Ops`]. `None` renders nothing.
+    pub fn with_notice(mut self, notice: Option<String>) -> Self {
+        self.maintenance_notice = notice;
         self
     }
 }
@@ -968,6 +979,51 @@ pub struct AdminErrorsPage<'a> {
     /// "Cleared 12 error events." Built in the controller so the
     /// template carries no pluralisation logic.
     pub cleared: Option<String>,
+}
+
+/// The "back soon" page the maintenance gate serves with a 503. Renders
+/// from config alone — no database, no session — because it exists for
+/// exactly the windows when those are unavailable.
+#[derive(Template)]
+#[template(path = "pages/maintenance.html")]
+pub struct MaintenancePage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+}
+
+/// `/admin/ops` — the maintenance switch and notice editor.
+#[derive(Template)]
+#[template(path = "pages/admin_ops.html")]
+pub struct AdminOpsPage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+    pub signed_in: bool,
+    pub header: AppHeader,
+    pub maintenance_on: bool,
+    /// Current notice text, empty string when none is set (keeps the
+    /// textarea binding simple).
+    pub notice: String,
+    pub flash: Option<String>,
+    /// True when `MAINTENANCE_MODE=true` came from the environment —
+    /// the page warns that turning the gate off here won't survive a
+    /// restart until the env var is removed.
+    pub env_forced: bool,
+}
+
+/// `/admin/feedback` — user-submitted notes, newest first.
+#[derive(Template)]
+#[template(path = "pages/admin_feedback.html")]
+pub struct AdminFeedbackPage<'a> {
+    pub app_name: &'a str,
+    pub base_url: &'a str,
+    pub signed_in: bool,
+    pub header: AppHeader,
+    pub rows: Vec<crate::models::Feedback>,
+    /// `open` | `resolved` | `all` — which slice is displayed.
+    pub show: String,
+    /// Open-note count across the whole table regardless of filter.
+    pub open_count: usize,
+    pub flash: Option<String>,
 }
 
 #[derive(Template)]

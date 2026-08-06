@@ -129,6 +129,12 @@ async fn main() -> anyhow::Result<()> {
 
     let state = AppState::new(db, storage, mailer, stripe_client, config.clone());
 
+    // Operational switches (maintenance gate + notice banner): resume
+    // whatever the last admin toggle persisted, with MAINTENANCE_MODE=true
+    // in the environment winning outright. Best-effort on purpose — this
+    // must not stop boot when the database is the thing being worked on.
+    controllers::ops::bootstrap(&state).await;
+
     // Background export builder: claims queued `export_job` rows and
     // assembles chunked brokerage archives into object storage. One
     // job at a time; sequential chunks; see `export_worker` for the

@@ -1,3 +1,9 @@
+{% match header.maintenance_notice %}{% when Some with (notice) %}
+<aside class="app-banner notice" role="status">
+    <p><span class="notice-dot" aria-hidden="true"></span><strong>Scheduled maintenance.</strong> {{ notice }}</p>
+</aside>
+{% when None %}{% endmatch %}
+
 {% match header.banner %}{% when Some with (b) %}
 <aside class="app-banner {{ b.level.as_css() }}" role="status">
     <p>{{ b.message }}</p>
@@ -70,22 +76,58 @@
     </nav>
 </header>
 
+{#- Feedback widget: a fixed tab in the corner of every signed-in page.
+    A plain <details> so it works with zero JS; the form is a real form
+    so it still submits (full-page fallback) if Datastar never runs.
+    With Datastar, the submit posts in place and the thank-you fragment
+    morphs into #feedback-body. The unlabeled "website" input is a
+    honeypot — humans never see it, naive bots fill it, the server
+    quietly drops those. -#}
+<details class="feedback-fab">
+    <summary class="feedback-tab" aria-label="Send feedback">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 20h9"/>
+            <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>
+        </svg>
+        Feedback
+    </summary>
+    <section class="feedback-panel" aria-label="Send feedback">
+        <header class="feedback-head">
+            <h2>What should we fix?</h2>
+            <p>Rough edges, missing features, small wins. It all helps, and a real person reads every note.</p>
+        </header>
+        <section id="feedback-body" class="feedback-body">
+            <form method="post" action="/app/feedback"
+                  data-on:submit__prevent="@post('/app/feedback', {contentType: 'form'})">
+                <label class="visually-hidden" for="feedback-note">Your note</label>
+                <textarea id="feedback-note" name="body" rows="5" required maxlength="2000"
+                          placeholder="Type it like a text message."></textarea>
+                <input class="hp-field" type="text" name="website" tabindex="-1"
+                       autocomplete="off" aria-hidden="true">
+                <button class="btn small" type="submit">Send it over</button>
+            </form>
+        </section>
+    </section>
+</details>
+
 <script>
-// Close the account-menu <details> when the user clicks outside it.
-// Native <details> only toggles via the <summary> click — without this
-// the menu would stay open until they explicitly clicked the summary
-// again, which feels broken next to standard SaaS menus.
+// Close the account-menu and feedback <details> when the user clicks
+// outside them. Native <details> only toggles via the <summary> click —
+// without this they'd stay open until explicitly re-clicked, which
+// feels broken next to standard SaaS menus.
 (function () {
-    var menu = document.querySelector("details.user-menu");
-    if (!menu) return;
+    var closers = document.querySelectorAll("details.user-menu, details.feedback-fab");
+    if (!closers.length) return;
     document.addEventListener("click", function (e) {
-        if (menu.open && !menu.contains(e.target)) {
-            menu.open = false;
-        }
+        closers.forEach(function (d) {
+            if (d.open && !d.contains(e.target)) d.open = false;
+        });
     });
     // Close on ESC for keyboard parity.
     document.addEventListener("keydown", function (e) {
-        if (e.key === "Escape" && menu.open) menu.open = false;
+        if (e.key !== "Escape") return;
+        closers.forEach(function (d) { if (d.open) d.open = false; });
     });
 })();
 </script>

@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+
+{% block title %}Ops — Admin — {{ app_name }}{% endblock %}
+{% block body_class %}page-app page-admin{% endblock %}
+
+{% block body %}
+{% include "components/app_header.html" %}
+
+<main class="app-main">
+    <header class="page-title">
+        <section>
+            <h1>Admin · Ops</h1>
+            <p class="subtitle">Maintenance mode and the heads-up banner. The switches here take effect immediately, for everyone.</p>
+        </section>
+        <nav class="admin-subnav" aria-label="Admin sections">
+            <a href="/admin">Users</a>
+            <a href="/admin/brokerages">Brokerages</a>
+            <a href="/admin/tiers">Tiers</a>
+            <a href="/admin/forms">Forms</a>
+            <a href="/admin/feedback">Feedback</a>
+            <a href="/admin/audit">Audit log</a>
+            <a href="/admin/errors">Errors</a>
+            <a href="/admin/ops" class="active" aria-current="page">Ops</a>
+            <a href="/admin/changelog">Changelog</a>
+        </nav>
+    </header>
+
+    {% match flash %}{% when Some with (msg) %}
+        <p class="alert success" role="status">{{ msg }}</p>
+    {% when None %}{% endmatch %}
+
+    <section class="panel ops-panel">
+        <header class="ops-panel-head">
+            <h2>Maintenance mode</h2>
+            {% if maintenance_on %}
+                <span class="audit-pill fail">ON — visitors see the maintenance page</span>
+            {% else %}
+                <span class="audit-pill ok">Off — app is live</span>
+            {% endif %}
+        </header>
+        <p>
+            Flip this on before a database restore or a server move. Everyone gets a
+            calm "back in a few minutes" page instead of errors, search engines are
+            told it's temporary, and nothing can write to the database mid-restore.
+            The marketing site, the login page, and this admin area stay reachable
+            so you can turn it back off when you're done.
+        </p>
+        {% if env_forced %}
+            <p class="alert info">
+                Heads up: <code>MAINTENANCE_MODE=true</code> is set in the environment,
+                so the app will boot back into maintenance on every restart until that
+                variable is removed. The switch below still works for the current run.
+            </p>
+        {% endif %}
+        {% if maintenance_on %}
+            <form method="post" action="/admin/ops/maintenance" class="inline-form">
+                <input type="hidden" name="set" value="off">
+                <button class="btn" type="submit">Turn maintenance off</button>
+            </form>
+        {% else %}
+            <form method="post" action="/admin/ops/maintenance" class="inline-form"
+                  data-confirm="Put the app into maintenance mode? Every signed-in user will immediately see the maintenance page instead of their work.">
+                <input type="hidden" name="set" value="on">
+                <button class="btn danger" type="submit">Turn maintenance on</button>
+            </form>
+        {% endif %}
+    </section>
+
+    <section class="panel ops-panel">
+        <header class="ops-panel-head">
+            <h2>Scheduled-maintenance notice</h2>
+            {% if !notice.is_empty() %}
+                <span class="audit-pill blocked">Showing to all signed-in users</span>
+            {% endif %}
+        </header>
+        <p>
+            A banner shown at the top of every signed-in page. Use it a day or two
+            ahead of planned work so nobody is surprised. Keep it short and say when,
+            for how long, and that no action is needed. For example: "TransactVault
+            will be offline Saturday from 9 to 10 pm Pacific for scheduled
+            maintenance. Nothing is required from you."
+        </p>
+        <form method="post" action="/admin/ops/notice" id="ops-notice-form" class="ops-notice-form">
+            <label class="visually-hidden" for="ops-notice">Notice text</label>
+            <textarea id="ops-notice" name="notice" rows="3" maxlength="300"
+                      placeholder="TransactVault will be offline Saturday from 9 to 10 pm Pacific for scheduled maintenance. Nothing is required from you.">{{ notice }}</textarea>
+        </form>
+        {#- Clearing posts an empty notice from its own form so the
+            textarea's content can't ride along and un-clear it. -#}
+        <form method="post" action="/admin/ops/notice" id="ops-clear-form" class="visually-hidden" aria-hidden="true">
+            <input type="hidden" name="notice" value="">
+        </form>
+        <footer class="ops-notice-actions">
+            <button class="btn" type="submit" form="ops-notice-form">Save notice</button>
+            {% if !notice.is_empty() %}
+                <button class="btn secondary" type="submit" form="ops-clear-form">Clear notice</button>
+            {% endif %}
+        </footer>
+    </section>
+</main>
+{% endblock %}

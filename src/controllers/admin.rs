@@ -497,6 +497,16 @@ const AUDIT_KIND_OPTIONS: &[&str] = &[
     "brokerage_comp_granted",
     "brokerage_comp_revoked",
     "error_log_cleared",
+    "feedback_submitted",
+    "feedback_blocked_honeypot",
+    "feedback_blocked_rate_limit",
+    "feedback_resolved",
+    "feedback_reopened",
+    "feedback_deleted",
+    "maintenance_enabled",
+    "maintenance_disabled",
+    "maintenance_notice_set",
+    "maintenance_notice_cleared",
 ];
 
 /// `POST /admin/errors/clear` — permanently delete every captured error.
