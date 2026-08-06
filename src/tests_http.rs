@@ -6787,3 +6787,87 @@ fn webhook_diagnostic_names_the_actual_cause() {
     assert!(same_mode.contains("DIFFERENT endpoint"));
     assert!(same_mode.contains("redeployed"));
 }
+
+/// Stripe sends several `v1` signatures whenever an endpoint has more
+/// than one active secret, which is what happens while a signing secret
+/// is being rolled. The crate's own helper parses the header into a
+/// HashMap and keeps only the last, so a delivery whose matching
+/// signature is not last fails against a perfectly correct secret.
+///
+/// Asserts we accept a match in ANY position, and that nothing else got
+/// looser in the process.
+#[test]
+fn webhook_accepts_any_offered_signature_not_just_the_last() {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    let secret = "whsec_test_secret_value";
+    let client = crate::stripe::Stripe::new(&crate::config::StripeConfig {
+        secret_key: "sk_test_x".into(),
+        webhook_secret: secret.into(),
+        trial_days: 14,
+    });
+
+    let payload = r#"{"id":"evt_test","object":"event"}"#;
+    let timestamp = chrono::Utc::now().timestamp();
+    let sign = |ts: i64, body: &str| {
+        let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(format!("{ts}.{body}").as_bytes());
+        hex::encode(mac.finalize().into_bytes())
+    };
+    let good = sign(timestamp, payload);
+    let decoy = "0".repeat(good.len());
+
+    // Matching signature LAST — the only case the crate handled.
+    let header = format!("t={timestamp},v1={decoy},v1={good}");
+    assert!(client.verify_signature(payload, &header).is_ok());
+
+    // Matching signature FIRST — the delivery that was being rejected
+    // while the configured secret was correct.
+    let header = format!("t={timestamp},v1={good},v1={decoy}");
+    assert!(
+        client.verify_signature(payload, &header).is_ok(),
+        "a match in first position must be accepted"
+    );
+
+    // Single correct signature still works.
+    assert!(
+        client
+            .verify_signature(payload, &format!("t={timestamp},v1={good}"))
+            .is_ok()
+    );
+
+    // No match anywhere is still rejected: this must not become a
+    // rubber stamp for anything that shows up with a header.
+    let err = client
+        .verify_signature(payload, &format!("t={timestamp},v1={decoy}"))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("none of the 1 offered"), "got: {err}");
+
+    // A tampered payload with an otherwise-valid signature is rejected.
+    assert!(
+        client
+            .verify_signature(
+                r#"{"id":"evt_evil","object":"event"}"#,
+                &format!("t={timestamp},v1={good}")
+            )
+            .is_err()
+    );
+
+    // Replay window still enforced after the signature verifies.
+    let old = timestamp - 4000;
+    let err = client
+        .verify_signature(payload, &format!("t={old},v1={}", sign(old, payload)))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("clock"), "got: {err}");
+
+    // Malformed headers are refused rather than panicking.
+    assert!(client.verify_signature(payload, "nonsense").is_err());
+    assert!(
+        client
+            .verify_signature(payload, &format!("t={timestamp}"))
+            .is_err()
+    );
+}

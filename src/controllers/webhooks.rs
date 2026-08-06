@@ -66,7 +66,10 @@ pub async fn stripe(State(state): State<AppState>, headers: HeaderMap, body: Byt
             // Name the specific likely cause instead of listing all of
             // them; see `diagnose_webhook_failure`.
             let hint = crate::stripe::diagnose_webhook_failure(&state.config.stripe, payload);
-            return reject(format!("signature verification failed ({e}). {hint}"));
+            let offered = crate::stripe::Stripe::offered_signature_count(sig);
+            return reject(format!(
+                "signature verification failed ({e}; {offered} signature(s) offered). {hint}"
+            ));
         }
     };
 

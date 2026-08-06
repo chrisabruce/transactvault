@@ -8,6 +8,14 @@ the bottom-right of every page.
 
 ## August 2026
 
+### v0.14.3: Billing notifications accepted again
+
+- **Fixed: Stripe billing messages were being rejected.** While a
+  signing secret is being rotated, Stripe signs each message more than
+  once. We were only ever checking one of those signatures, so valid
+  messages were turned away and subscription changes stopped arriving.
+  We now check them all, as Stripe intends.
+
 ### v0.14.2: Clearer billing diagnostics
 
 - **When Stripe rejects a message, we now say why.** A rejected billing

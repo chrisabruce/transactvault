@@ -62,12 +62,78 @@ impl Stripe {
     /// `STRIPE_WEBHOOK_SECRET` and parse it as a Stripe `Event`. The
     /// `payload` MUST be the raw request body — re-serializing the
     /// JSON would change the bytes and break the HMAC.
+    /// Verify a webhook delivery and decode the event.
+    ///
+    /// Implemented here rather than via `stripe::Webhook::construct_event`
+    /// because that helper parses the `Stripe-Signature` header into a
+    /// `HashMap`, so a header carrying more than one `v1=` signature
+    /// keeps only the last and silently discards the rest. Stripe sends
+    /// several signatures whenever an endpoint has more than one active
+    /// secret, which is precisely what happens while a signing secret is
+    /// being rolled. The result is "error comparing signatures" against a
+    /// completely correct secret, which sends whoever is debugging it to
+    /// check the one thing that isn't wrong.
+    ///
+    /// So: accept the delivery when ANY offered `v1` matches, which is
+    /// what Stripe's own documentation tells integrators to do.
     pub fn parse_webhook(&self, payload: &str, signature: &str) -> anyhow::Result<stripe::Event> {
+        self.verify_signature(payload, signature)?;
+        serde_json::from_str(payload)
+            .map_err(|e| anyhow::anyhow!("webhook payload not an Event: {e}"))
+    }
+
+    /// Signature + replay-window check, with no dependency on the event
+    /// body decoding. Separated so it can be tested against a payload
+    /// that doesn't have to satisfy every field of a typed Stripe
+    /// object, and so a decode failure can never be mistaken for a
+    /// rejected signature.
+    pub fn verify_signature(&self, payload: &str, signature: &str) -> anyhow::Result<()> {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+
         if self.webhook_secret.is_empty() {
             anyhow::bail!("STRIPE_WEBHOOK_SECRET unset — refusing to trust webhook");
         }
-        stripe::Webhook::construct_event(payload, signature, &self.webhook_secret)
-            .map_err(|e| anyhow::anyhow!("webhook signature invalid: {e}"))
+
+        let parsed = WebhookSignature::parse(signature)?;
+        let signed_payload = format!("{}.{}", parsed.timestamp, payload);
+
+        let matched = parsed.v1.iter().any(|candidate| {
+            let Ok(expected) = hex::decode(candidate) else {
+                return false;
+            };
+            let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(self.webhook_secret.as_bytes()) else {
+                return false;
+            };
+            mac.update(signed_payload.as_bytes());
+            // Constant-time comparison, per RustCrypto's verify_slice.
+            mac.verify_slice(&expected).is_ok()
+        });
+        if !matched {
+            anyhow::bail!(
+                "webhook signature invalid: none of the {} offered signature(s) matched \
+                 the configured secret",
+                parsed.v1.len()
+            );
+        }
+
+        // Replay window, checked only after the signature is trusted.
+        let skew = (chrono::Utc::now().timestamp() - parsed.timestamp).abs();
+        if skew > 300 {
+            anyhow::bail!(
+                "webhook timestamp is {skew}s away from this server's clock (limit 300s) — \
+                 check the host clock, or this is a replayed delivery"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Number of `v1` signatures the caller offered, for diagnostics.
+    pub fn offered_signature_count(signature: &str) -> usize {
+        WebhookSignature::parse(signature)
+            .map(|s| s.v1.len())
+            .unwrap_or(0)
     }
 
     /// Ensure a Stripe Product + recurring Price exist for the given
@@ -470,5 +536,38 @@ pub fn diagnose_webhook_failure(cfg: &crate::config::StripeConfig, payload: &str
              belonging to the endpoint pointing at this app. If you changed it recently, the \
              app must be redeployed to pick up a new environment value."
         }
+    }
+}
+
+/// A parsed `Stripe-Signature` header.
+///
+/// Keeps EVERY `v1` signature rather than collapsing them, which is the
+/// whole point of parsing it ourselves. See [`Stripe::parse_webhook`].
+#[derive(Debug)]
+struct WebhookSignature {
+    timestamp: i64,
+    v1: Vec<String>,
+}
+
+impl WebhookSignature {
+    fn parse(raw: &str) -> anyhow::Result<Self> {
+        let mut timestamp = None;
+        let mut v1 = Vec::new();
+        for part in raw.split(',') {
+            let Some((key, value)) = part.split_once('=') else {
+                continue;
+            };
+            match key.trim() {
+                "t" => timestamp = value.trim().parse::<i64>().ok(),
+                "v1" => v1.push(value.trim().to_string()),
+                _ => {}
+            }
+        }
+        let timestamp =
+            timestamp.ok_or_else(|| anyhow::anyhow!("Stripe-Signature header had no timestamp"))?;
+        if v1.is_empty() {
+            anyhow::bail!("Stripe-Signature header carried no v1 signature");
+        }
+        Ok(Self { timestamp, v1 })
     }
 }
