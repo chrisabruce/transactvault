@@ -1,4 +1,4 @@
-.PHONY: dev build run fmt check clippy test services services-down db-surql backup restore clean
+.PHONY: dev build run fmt check clippy test release-check services services-down db-surql backup restore clean
 
 # SurrealDB connection for CLI tooling. Override on the command line,
 # e.g. `make backup SURREAL_ENDPOINT=http://localhost:37422`.
@@ -29,6 +29,23 @@ clippy:
 
 test:
 	cargo test
+
+# Run before tagging a release. `--locked` is exactly what the Dockerfile
+# uses, so this catches the one failure that only shows up in production:
+# bumping the version in Cargo.toml without regenerating Cargo.lock, which
+# builds fine locally and then dies in the Docker build with "cannot update
+# the lock file ... because --locked was passed".
+release-check:
+	@cargo check --locked --offline --all-targets 2>/dev/null \
+		|| { echo ""; \
+		     echo "Cargo.lock is out of sync with Cargo.toml."; \
+		     echo "Usually: the version was bumped without rebuilding."; \
+		     echo "Fix: run 'cargo check', then commit Cargo.lock."; \
+		     exit 1; }
+	cargo fmt --all --check
+	cargo clippy --all-targets -- -D warnings
+	cargo test
+	@echo "release-check passed — safe to tag"
 
 services:
 	docker compose up -d

@@ -5776,7 +5776,7 @@ dependencies = [
 
 [[package]]
 name = "transactvault"
-version = "0.11.2"
+version = "0.12.1"
 dependencies = [
  "anyhow",
  "argon2",
