@@ -122,6 +122,10 @@ impl AuditEvent {
             "maintenance_notice_set" => "Maintenance notice set",
             "maintenance_notice_cleared" => "Maintenance notice cleared",
             "storage_orphans_deleted" => "Orphaned storage deleted",
+            "contact_submitted" => "Contact form message",
+            "contact_blocked_honeypot" => "Contact blocked — honeypot",
+            "contact_blocked_rate_limit" => "Contact blocked — rate limit",
+            "contact_blocked_token" => "Contact blocked — bad form token",
             _ => "Event",
         }
     }
@@ -134,6 +138,7 @@ impl AuditEvent {
             | "invite_accepted"
             | "signup_pending"
             | "feedback_submitted"
+            | "contact_submitted"
             | "feedback_resolved"
             | "maintenance_disabled" => "ok",
             "logout"

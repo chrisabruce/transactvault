@@ -549,6 +549,81 @@ fn html_escape(s: &str) -> String {
         .replace('\'', "&#39;")
 }
 
+impl Mailer {
+    /// Tell the team a message arrived — from the in-app feedback
+    /// widget or the public contact form.
+    ///
+    /// `Reply-To` is the sender's own address, so hitting Reply in the
+    /// inbox answers the person directly instead of the app's no-reply
+    /// mailbox. That is the whole point of routing contact through the
+    /// app rather than a `mailto:` link: the message is stored, triaged,
+    /// and still replyable in one keystroke.
+    ///
+    /// Recipients come from `NOTIFY_EMAILS`; an empty list makes this a
+    /// no-op. Sends are best-effort — a message is already safely stored
+    /// before this runs, so a mail outage must never fail the request.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_inbound_message(
+        &self,
+        recipients: &[String],
+        kind_label: &str,
+        sender_name: &str,
+        sender_email: &str,
+        brokerage: Option<&str>,
+        page: Option<&str>,
+        body: &str,
+        admin_url: &str,
+    ) {
+        if recipients.is_empty() {
+            return;
+        }
+        let context = match (brokerage, page) {
+            (Some(b), Some(p)) => format!("{b} · sent from {p}"),
+            (Some(b), None) => b.to_string(),
+            (None, Some(p)) => format!("sent from {p}"),
+            (None, None) => "no account — public contact form".to_string(),
+        };
+        let subject = format!("[{kind_label}] {sender_name} <{sender_email}>");
+
+        let html = format!(
+            "<!doctype html><html><body style=\"font-family:system-ui,sans-serif;color:#0f172a\">\
+               <p style=\"color:#64748b;margin:0 0 4px\">New {kind} via TransactVault</p>\
+               <p style=\"margin:0 0 2px\"><strong>{name}</strong> &lt;{email}&gt;</p>\
+               <p style=\"color:#64748b;margin:0 0 16px\">{context}</p>\
+               <blockquote style=\"margin:0;padding:12px 16px;background:#f8fafc;\
+                                  border-left:3px solid #0f766e;white-space:pre-wrap\">{body}</blockquote>\
+               <p style=\"margin-top:20px\">Reply to this email to answer {name} directly, \
+                  or <a href=\"{admin_url}\">open it in the admin panel</a>.</p>\
+             </body></html>",
+            kind = html_escape(&kind_label.to_ascii_lowercase()),
+            name = html_escape(sender_name),
+            email = html_escape(sender_email),
+            context = html_escape(&context),
+            body = html_escape(body),
+            admin_url = admin_url,
+        );
+        let text = format!(
+            "New {kind} via TransactVault\n\n\
+             From: {name} <{email}>\n\
+             {context}\n\n\
+             {body}\n\n\
+             Reply to this email to answer {name} directly, or open it in the \
+             admin panel: {admin_url}\n",
+            kind = kind_label.to_ascii_lowercase(),
+            name = sender_name,
+            email = sender_email,
+            context = context,
+            body = body,
+            admin_url = admin_url,
+        );
+
+        for to in recipients {
+            self.send_with_reply(to, sender_email, &subject, html.clone(), text.clone())
+                .await;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! The mailer's network paths can't be exercised without a live

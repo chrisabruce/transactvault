@@ -508,6 +508,10 @@ const AUDIT_KIND_OPTIONS: &[&str] = &[
     "maintenance_notice_set",
     "maintenance_notice_cleared",
     "storage_orphans_deleted",
+    "contact_submitted",
+    "contact_blocked_honeypot",
+    "contact_blocked_rate_limit",
+    "contact_blocked_token",
 ];
 
 /// `POST /admin/errors/clear` — permanently delete every captured error.

@@ -6146,3 +6146,184 @@ async fn admin_flash_param_cannot_inject_arbitrary_text() {
     let (_, body) = authed_get(&app, &admin, "/admin/ops?flash=maintenance_off").await;
     assert!(body.contains("The app is live again."));
 }
+
+// ---------------------------------------------------------------------------
+// Public contact form
+// ---------------------------------------------------------------------------
+
+/// Helper: a token old enough to pass the "too fast" check, minted the
+/// way the endpoint does.
+fn aged_form_token(app: &TestApp) -> String {
+    crate::security::issue_form_token_at(
+        &app.state.config.jwt_secret,
+        chrono::Utc::now().timestamp() as u64 - 10,
+    )
+    .expect("token")
+}
+
+async fn post_contact(app: &TestApp, body: &str) -> (StatusCode, String) {
+    let req = Request::builder()
+        .method("POST")
+        .uri("/contact")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    send(app, req).await
+}
+
+/// An anonymous visitor can send a message; it lands in the same table
+/// as feedback, tagged as a contact, with the sender's own details.
+#[tokio::test]
+async fn anonymous_contact_is_stored_as_contact_kind() {
+    let app = make_app().await;
+    let token = aged_form_token(&app);
+
+    let (status, body) = post_contact(
+        &app,
+        &format!(
+            "name=Dana+Reyes&email=dana%40example.test&message=Do+you+handle+probate+sales%3F&token={token}&website="
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+
+    let mut q = app
+        .state
+        .db
+        .query("SELECT * FROM feedback")
+        .await
+        .expect("select");
+    let rows: Vec<crate::models::Feedback> = q.take(0).unwrap_or_default();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].kind, "contact");
+    assert_eq!(rows[0].user_name, "Dana Reyes");
+    assert_eq!(rows[0].user_email, "dana@example.test");
+    assert!(rows[0].user.is_none(), "anonymous contact has no account");
+    assert!(rows[0].ip.is_some(), "anonymous contact records an IP");
+}
+
+/// A signed-in sender's identity comes from the session — anything
+/// posted in the name/email fields is ignored, so a message can never
+/// be attributed to someone else.
+#[tokio::test]
+async fn signed_in_contact_uses_session_identity_not_form_fields() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Quartz Hill Realty").await;
+    let user = seed_user(&app.state, "real@x.test").await;
+    join(&app.state, &user, &b, "agent").await;
+    let token = aged_form_token(&app);
+
+    let cookie = session_cookie(&app, &user);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/contact")
+        .header("cookie", cookie)
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from(format!(
+            "name=Someone+Else&email=spoofed%40evil.test&message=Hello&token={token}&website="
+        )))
+        .unwrap();
+    let (status, _) = send(&app, req).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let mut q = app
+        .state
+        .db
+        .query("SELECT * FROM feedback")
+        .await
+        .expect("select");
+    let rows: Vec<crate::models::Feedback> = q.take(0).unwrap_or_default();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].user_email, "real@x.test");
+    assert_ne!(rows[0].user_email, "spoofed@evil.test");
+    assert!(rows[0].user.is_some());
+    assert_eq!(
+        rows[0].brokerage_name.as_deref(),
+        Some("Quartz Hill Realty")
+    );
+}
+
+/// The three anti-spam gates: honeypot swallows silently, a missing or
+/// too-fresh token is refused, and a bad email address is caught.
+#[tokio::test]
+async fn contact_form_antispam_gates() {
+    let app = make_app().await;
+    let token = aged_form_token(&app);
+
+    // Honeypot: looks successful, stores nothing.
+    let (status, _) = post_contact(
+        &app,
+        &format!("name=Bot&email=bot%40x.test&message=cheap+watches&token={token}&website=http%3A%2F%2Fspam.test"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // No token at all — a script POSTing straight at the endpoint.
+    let (status, body) = post_contact(
+        &app,
+        "name=Bot&email=bot%40x.test&message=hello&token=&website=",
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body.contains("Reload the page"), "body: {body}");
+
+    // Token minted just now — submitted implausibly fast.
+    let fresh = crate::security::issue_form_token(&app.state.config.jwt_secret).expect("token");
+    let (status, _) = post_contact(
+        &app,
+        &format!("name=Bot&email=bot%40x.test&message=hello&token={fresh}&website="),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Valid token, obviously-bad address.
+    let token = aged_form_token(&app);
+    let (status, body) = post_contact(
+        &app,
+        &format!("name=Dana&email=not-an-email&message=hello&token={token}&website="),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body.contains("doesn't look right"), "body: {body}");
+
+    let mut q = app
+        .state
+        .db
+        .query("SELECT count() FROM feedback GROUP ALL")
+        .await
+        .expect("count");
+    #[derive(serde::Deserialize, SurrealValue)]
+    struct CountRow {
+        count: i64,
+    }
+    let count = q
+        .take::<Option<CountRow>>(0)
+        .ok()
+        .flatten()
+        .map(|c| c.count)
+        .unwrap_or(0);
+    assert_eq!(count, 0, "no blocked submission may be stored");
+}
+
+/// The token endpoint hands out a token that verifies (once aged).
+#[tokio::test]
+async fn contact_token_endpoint_issues_usable_tokens() {
+    let app = make_app().await;
+    let (status, body) = send(
+        &app,
+        Request::builder()
+            .uri("/contact/token")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&body).expect("json");
+    let token = json["token"].as_str().expect("token string");
+    assert!(!token.is_empty());
+    // Fresh tokens are rejected as too fast; that's the point.
+    assert!(!crate::security::verify_form_token(
+        &app.state.config.jwt_secret,
+        token
+    ));
+}

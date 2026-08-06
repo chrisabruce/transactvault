@@ -531,7 +531,9 @@ DEFINE FIELD OVERWRITE kind ON audit_event TYPE string
         "maintenance_enabled", "maintenance_disabled",
         "maintenance_notice_set", "maintenance_notice_cleared",
         "passkey_registered", "passkey_removed",
-        "storage_orphans_deleted"
+        "storage_orphans_deleted",
+        "contact_submitted", "contact_blocked_honeypot",
+        "contact_blocked_rate_limit", "contact_blocked_token"
     ];
 DEFINE FIELD OVERWRITE actor_email ON audit_event TYPE option<string>;
 DEFINE FIELD OVERWRITE actor       ON audit_event TYPE option<record<user>>;
@@ -548,6 +550,10 @@ DEFINE INDEX OVERWRITE idx_audit_ip   ON audit_event FIELDS ip;
 -- Name/email are denormalized so a note survives its author leaving.
 -- ---------------------------------------------------------------------------
 DEFINE TABLE OVERWRITE feedback SCHEMAFULL;
+-- "feedback" = in-app widget (always signed in); "contact" = public
+-- contact form (may be anonymous). Same table so triage is one list.
+DEFINE FIELD OVERWRITE kind        ON feedback TYPE string DEFAULT "feedback"
+    ASSERT $value IN ["feedback", "contact"];
 DEFINE FIELD OVERWRITE user        ON feedback TYPE option<record<user>>;
 DEFINE FIELD OVERWRITE user_name   ON feedback TYPE string;
 DEFINE FIELD OVERWRITE user_email  ON feedback TYPE string;
@@ -560,8 +566,12 @@ DEFINE FIELD OVERWRITE status      ON feedback TYPE string DEFAULT "open"
     ASSERT $value IN ["open", "resolved"];
 DEFINE FIELD OVERWRITE resolved_by ON feedback TYPE option<string>;
 DEFINE FIELD OVERWRITE resolved_at ON feedback TYPE option<datetime>;
+-- Sender IP, recorded for anonymous contacts only — the abuse trail
+-- for a form anyone on the internet can reach.
+DEFINE FIELD OVERWRITE ip          ON feedback TYPE option<string>;
 DEFINE FIELD OVERWRITE created_at  ON feedback TYPE datetime DEFAULT time::now();
 DEFINE INDEX OVERWRITE idx_feedback_status ON feedback FIELDS status;
+DEFINE INDEX OVERWRITE idx_feedback_kind   ON feedback FIELDS kind;
 DEFINE INDEX OVERWRITE idx_feedback_at     ON feedback FIELDS created_at;
 
 -- ---------------------------------------------------------------------------

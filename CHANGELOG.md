@@ -8,6 +8,18 @@ the bottom-right of every page.
 
 ## August 2026
 
+### v0.12.0: Write to us without opening your email
+
+- **A contact form instead of an email address.** "Send us a message"
+  in the footer now slides up a short form. If you're signed in it just
+  asks what's on your mind; if you're not, it asks for your name and
+  email so we can reply. Messages land in the same place as in-app
+  feedback, and we get an email the moment one arrives, so nothing sits
+  unread.
+
+- **Replies come from a person, not a ticket robot.** When we hit
+  Reply, it goes straight back to you.
+
 ### v0.11.2: Storage privacy check
 
 - **The app now checks its own file storage from the outside.** Admin →

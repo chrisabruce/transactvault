@@ -40,7 +40,14 @@
                     Sheridan, WY 82801
                 </p>
                 <p>
-                    <a href="mailto:hello@transactvault.app">hello@transactvault.app</a>
+                    {#- Revealed by contact.js; the <noscript> address below is
+                        the fallback when the panel can't work. -#}
+                    <button type="button" class="link-button" data-contact-open hidden>
+                        Send us a message
+                    </button>
+                    <noscript>
+                        <a href="mailto:hello@transactvault.app">hello@transactvault.app</a>
+                    </noscript>
                 </p>
             </address>
         </section>
@@ -59,3 +66,56 @@
         </small>
     </div>
 </footer>
+
+{#- Slide-up contact panel. Lives in the footer so every public page
+    gets it from one place. Hidden until `contact.js` shows the triggers,
+    so a browser without JS never sees a button that can't submit — the
+    address in the brand book stays the fallback there.
+
+    Signed-in visitors don't retype who they are; the server takes their
+    identity from the session and ignores any name/email posted, so the
+    fields are simply not rendered for them. -#}
+<section class="contact-sheet" id="contact-sheet" hidden aria-hidden="true">
+    <div class="contact-scrim" data-contact-close></div>
+    <section class="contact-panel" role="dialog" aria-modal="true" aria-labelledby="contact-heading">
+        <header class="contact-head">
+            <h2 id="contact-heading">Talk to a human</h2>
+            <button type="button" class="contact-close" data-contact-close aria-label="Close">&times;</button>
+        </header>
+        <p class="contact-lede">
+            Questions about pricing, moving from another system, or whether we
+            handle a form you need? Ask away. We answer everything, usually
+            within a day.
+        </p>
+
+        <form id="contact-form" method="post" action="/contact">
+            {% if !signed_in %}
+                <label>
+                    <span>Your name</span>
+                    <input type="text" name="name" required maxlength="120" autocomplete="name">
+                </label>
+                <label>
+                    <span>Email</span>
+                    <input type="email" name="email" required maxlength="254" autocomplete="email">
+                </label>
+            {% endif %}
+            <label>
+                <span>Message</span>
+                <textarea name="message" rows="5" required maxlength="4000"
+                          placeholder="Tell us what you're trying to do."></textarea>
+            </label>
+            {#- Honeypot: off-canvas, out of tab order, unlabelled for humans. -#}
+            <input class="hp-field" type="text" name="website" tabindex="-1"
+                   autocomplete="off" aria-hidden="true">
+            <input type="hidden" name="token" value="">
+            <button type="submit" class="btn">Send message</button>
+            <p class="contact-error alert error" role="alert" hidden></p>
+        </form>
+
+        <section class="contact-done" hidden>
+            <p><strong>Thanks — that's with us.</strong></p>
+            <p>We reply to everything, usually within a day.</p>
+        </section>
+    </section>
+</section>
+<script src="/static/js/contact.js" defer></script>

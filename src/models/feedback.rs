@@ -12,6 +12,9 @@ use surrealdb::types::{RecordId, SurrealValue};
 #[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
 pub struct Feedback {
     pub id: RecordId,
+    /// `feedback` (in-app widget) or `contact` (public form).
+    #[serde(default = "default_kind")]
+    pub kind: String,
     pub user: Option<RecordId>,
     pub user_name: String,
     pub user_email: String,
@@ -22,6 +25,8 @@ pub struct Feedback {
     pub page: Option<String>,
     /// `open` | `resolved`.
     pub status: String,
+    /// Sender IP — populated for anonymous contacts only.
+    pub ip: Option<String>,
     pub resolved_by: Option<String>,
     pub resolved_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
@@ -29,15 +34,27 @@ pub struct Feedback {
 
 #[derive(Debug, Clone, Serialize, SurrealValue)]
 pub struct NewFeedback {
+    pub kind: String,
     pub user: Option<RecordId>,
     pub user_name: String,
     pub user_email: String,
     pub brokerage_name: Option<String>,
     pub body: String,
     pub page: Option<String>,
+    pub ip: Option<String>,
+}
+
+fn default_kind() -> String {
+    "feedback".to_string()
 }
 
 impl Feedback {
+    /// True for messages from the public contact form, which may have
+    /// no account behind them.
+    pub fn is_contact(&self) -> bool {
+        self.kind == "contact"
+    }
+
     /// URL-safe record key for building the resolve/delete action URLs.
     pub fn key(&self) -> String {
         crate::db::record_key(&self.id)

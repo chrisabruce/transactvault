@@ -4128,3 +4128,96 @@ a.external {
     white-space: nowrap;
     vertical-align: bottom;
 }
+
+/* --------------------------------------------------------------------------
+   Contact sheet — slides up from the bottom on any public page
+   -------------------------------------------------------------------------- */
+.link-button {
+    background: none;
+    border: 0;
+    padding: 0;
+    font: inherit;
+    color: var(--color-brand);
+    cursor: pointer;
+    text-align: start;
+}
+.link-button:hover { color: var(--color-brand-ink); text-decoration: underline; }
+
+.contact-sheet {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+}
+.contact-scrim {
+    position: absolute;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.45);
+    opacity: 0;
+    transition: opacity 200ms ease;
+}
+.contact-sheet.is-open .contact-scrim { opacity: 1; }
+.contact-panel {
+    position: relative;
+    /* `width: 100%` + `max-width` states the intent plainly: fill a
+       phone, cap on a desktop. `min-width: 0` opts out of the
+       min-content floor flex items get by default, so a long unbroken
+       string in the message can never widen the panel. */
+    width: 100%;
+    max-width: 32rem;
+    min-width: 0;
+    max-height: 90dvh;
+    overflow-y: auto;
+    background: var(--color-surface);
+    border: 1px solid var(--color-line);
+    border-bottom: 0;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    box-shadow: var(--shadow-lg);
+    padding: var(--sp-6);
+    transform: translateY(100%);
+    transition: transform 220ms cubic-bezier(.3, .7, .3, 1);
+}
+.contact-sheet.is-open .contact-panel { transform: translateY(0); }
+@media (prefers-reduced-motion: reduce) {
+    .contact-scrim, .contact-panel { transition: none; }
+}
+/* Roomier than a phone sheet once there's space for it. */
+@media (min-width: 40rem) {
+    .contact-sheet { align-items: center; }
+    .contact-panel {
+        border-bottom: 1px solid var(--color-line);
+        border-radius: var(--radius-xl);
+        margin-bottom: var(--sp-6);
+        transform: translateY(24px);
+        opacity: 0;
+        transition: transform 220ms cubic-bezier(.3, .7, .3, 1), opacity 180ms ease;
+    }
+    .contact-sheet.is-open .contact-panel { transform: translateY(0); opacity: 1; }
+}
+body.contact-open { overflow: hidden; }
+.contact-head {
+    display: flex;
+    align-items: start;
+    justify-content: space-between;
+    gap: var(--sp-3);
+}
+.contact-head h2 { font-size: var(--fs-xl); margin: 0; }
+.contact-close {
+    background: none;
+    border: 0;
+    font-size: 1.6rem;
+    line-height: 1;
+    color: var(--color-muted);
+    cursor: pointer;
+    padding: 0 0.25rem;
+}
+.contact-close:hover { color: var(--color-ink); }
+.contact-lede { color: var(--color-muted); font-size: var(--fs-sm); margin: var(--sp-2) 0 var(--sp-5); }
+#contact-form label { display: flex; flex-direction: column; gap: 0.3rem; margin-bottom: var(--sp-4); }
+#contact-form textarea { resize: vertical; }
+#contact-form .btn { width: 100%; }
+.contact-error { margin-top: var(--sp-3); }
+.contact-done p:first-child { color: var(--color-ink); }
+.contact-done p:last-child { color: var(--color-muted); margin: 0; }

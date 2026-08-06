@@ -68,6 +68,12 @@ pub struct Config {
     /// is exposed directly and forwarding headers are ignored.
     pub trusted_proxy_hops: usize,
 
+    /// Who gets an email when someone sends feedback or uses the
+    /// contact form. Comma-separated in `NOTIFY_EMAILS`; empty disables
+    /// the notification (the message is still stored and visible in
+    /// Admin → Feedback).
+    pub notify_emails: Vec<String>,
+
     /// Boot straight into maintenance mode (`MAINTENANCE_MODE=true`).
     /// The switch for server migrations and database restores: the gate
     /// works without touching the database, so the app can answer with
@@ -187,6 +193,7 @@ impl Config {
             login_rate_per_quarter_hour: 1000,
             dev_reset_on_boot: false,
             trusted_proxy_hops: 0,
+            notify_emails: vec!["ops@test".into()],
             maintenance_mode: false,
             rustfs: RustFsConfig {
                 endpoint: "http://127.0.0.1:1".into(),
@@ -269,6 +276,14 @@ impl Config {
             trusted_proxy_hops: env_or("TRUSTED_PROXY_HOPS", "1")
                 .parse()
                 .context("TRUSTED_PROXY_HOPS must be a non-negative integer")?,
+            notify_emails: env_or(
+                "NOTIFY_EMAILS",
+                "jason@transactvault.app,chris@transactvault.app",
+            )
+            .split(',')
+            .map(|s| s.trim().to_ascii_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect(),
             maintenance_mode: matches!(
                 env_or("MAINTENANCE_MODE", "false")
                     .to_ascii_lowercase()

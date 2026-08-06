@@ -238,6 +238,12 @@ POSTMARK_MESSAGE_STREAM=outbound
 STRIPE_SECRET_KEY=
 STRIPE_WEBHOOK_SECRET=
 
+# --- notifications ----------------------------------------------------
+# Who gets emailed when someone sends feedback or uses the contact form.
+# Comma-separated; empty disables the email (messages are still stored
+# and visible in Admin -> Feedback). Reply-To is set to the sender.
+NOTIFY_EMAILS=jason@transactvault.app,chris@transactvault.app
+
 # --- operations (optional) --------------------------------------------
 # MAINTENANCE_MODE=true              # boot straight into maintenance; see §8
 

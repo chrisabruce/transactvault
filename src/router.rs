@@ -28,6 +28,10 @@ pub fn build(state: AppState) -> Router {
         .route("/", get(marketing::landing))
         .route("/pricing", get(marketing::pricing))
         .route("/brand", get(marketing::brand))
+        // Public contact form. The token endpoint is what "opening the
+        // form" means server-side; see `feedback::contact_token`.
+        .route("/contact", post(feedback::contact_submit))
+        .route("/contact/token", get(feedback::contact_token))
         .route("/robots.txt", get(marketing::robots_txt))
         .route("/sitemap.xml", get(marketing::sitemap_xml))
         .route("/login", get(auth::login_form).post(auth::login))

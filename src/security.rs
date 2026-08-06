@@ -472,3 +472,97 @@ pub fn is_disposable_email(email: &str) -> bool {
     };
     DISPOSABLE_DOMAINS.iter().any(|&d| d == domain)
 }
+
+/// How long a contact-form token stays valid. Long enough to write a
+/// thoughtful message, short enough that a scraped token is useless
+/// tomorrow.
+const FORM_TOKEN_MAX_AGE_SECS: u64 = 2 * 60 * 60;
+/// Minimum time between fetching a token and submitting the form. A
+/// human needs seconds to type a message; a script POSTs instantly.
+const FORM_TOKEN_MIN_AGE_SECS: u64 = 3;
+
+/// Mint an HMAC-signed timestamp for a public form.
+///
+/// Same construction as the signup proof-of-work challenge, minus the
+/// hashing puzzle: the payload is just "when this form was opened",
+/// signed so it can't be forged or back-dated. Pairing it with the
+/// honeypot means a spam script has to fetch a token, wait, and leave
+/// the decoy field alone — which is most of the way to just being a
+/// browser.
+pub fn issue_form_token(jwt_secret: &str) -> anyhow::Result<String> {
+    issue_form_token_at(jwt_secret, chrono::Utc::now().timestamp() as u64)
+}
+
+/// [`issue_form_token`] with an explicit issue time. Exists so tests can
+/// produce a token that is already old enough to submit without
+/// sleeping through the real minimum age.
+pub fn issue_form_token_at(jwt_secret: &str, issued_at: u64) -> anyhow::Result<String> {
+    use rand::RngCore;
+
+    let now = issued_at;
+    let mut nonce = [0u8; 8];
+    rand::thread_rng().fill_bytes(&mut nonce);
+
+    let mut payload = Vec::with_capacity(16);
+    payload.extend_from_slice(&now.to_be_bytes());
+    payload.extend_from_slice(&nonce);
+
+    let mut mac = HmacSha256::new_from_slice(jwt_secret.as_bytes())
+        .map_err(|e| anyhow::anyhow!("HMAC init: {e}"))?;
+    mac.update(&payload);
+    let tag = mac.finalize().into_bytes();
+
+    let mut full = payload;
+    full.extend_from_slice(&tag);
+    Ok(hex::encode(&full))
+}
+
+/// Verify a token minted by [`issue_form_token`]: real signature, not
+/// stale, and not submitted implausibly fast.
+pub fn verify_form_token(jwt_secret: &str, token: &str) -> bool {
+    let bytes = match hex::decode(token) {
+        Ok(b) if b.len() == 8 + 8 + 32 => b,
+        _ => return false,
+    };
+    let (payload, tag) = bytes.split_at(16);
+
+    let mut mac = match HmacSha256::new_from_slice(jwt_secret.as_bytes()) {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+    mac.update(payload);
+    if mac.verify_slice(tag).is_err() {
+        return false;
+    }
+
+    let Ok(ts_bytes) = <[u8; 8]>::try_from(&payload[..8]) else {
+        return false;
+    };
+    let issued = u64::from_be_bytes(ts_bytes);
+    let now = chrono::Utc::now().timestamp() as u64;
+    let age = now.saturating_sub(issued);
+    (FORM_TOKEN_MIN_AGE_SECS..=FORM_TOKEN_MAX_AGE_SECS).contains(&age)
+}
+
+/// Cheap structural email check for the public contact form.
+///
+/// Deliberately permissive — the real proof an address works is that a
+/// reply reaches it, and over-strict regexes reject valid addresses.
+/// This only rejects the shapes that are certainly not addresses.
+pub fn looks_like_email(value: &str) -> bool {
+    let value = value.trim();
+    if value.len() < 6 || value.len() > 254 || value.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let Some((local, domain)) = value.split_once('@') else {
+        return false;
+    };
+    if local.is_empty() || domain.len() < 3 || value.matches('@').count() != 1 {
+        return false;
+    }
+    // Must have a dot-separated domain with a plausible final label.
+    match domain.rsplit_once('.') {
+        Some((host, tld)) => !host.is_empty() && tld.len() >= 2,
+        None => false,
+    }
+}
