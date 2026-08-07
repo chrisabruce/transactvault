@@ -209,10 +209,36 @@ impl Stripe {
 
         // Optional overage Price: metered, billed at the end of each
         // billing period based on usage records we POST.
+        //
+        // It gets its OWN Product rather than hanging off the tier's.
+        // Two reasons, both visible on the Stripe Checkout page:
+        //
+        // 1. Checkout lists one row per line item and labels each with
+        //    its product name. Sharing a product printed the tier name
+        //    twice ("Enterprise" / "Enterprise") and collapsed the
+        //    header to "Try Enterprise and 1 more", which reads like a
+        //    bug to anyone about to enter a card.
+        // 2. `unit_label` is a Product field, and it is what turns
+        //    "then $2.00 per unit" into "then $2.00 per transaction".
+        //    Setting it on the shared product would also relabel the
+        //    flat monthly line, which is not priced per anything.
         let overage_price_id = match overage_fee_cents_per_tx {
             Some(cents) if cents >= 0 => {
+                let overage_product = {
+                    let overage_name = format!("{name} extra transactions");
+                    let mut create = CreateProduct::new(&overage_name);
+                    create.description = Some(
+                        "Transactions beyond the monthly allowance included with the plan. \
+                         Charged only if you exceed it.",
+                    );
+                    create.unit_label = Some("transaction");
+                    Product::create(client, create)
+                        .await
+                        .context("Stripe Product::create (overage)")?
+                };
+
                 let mut overage = CreatePrice::new(Currency::USD);
-                overage.product = Some(IdOrCreate::Id(product.id.as_str()));
+                overage.product = Some(IdOrCreate::Id(overage_product.id.as_str()));
                 overage.unit_amount = Some(cents);
                 overage.recurring = Some(CreatePriceRecurring {
                     interval: CreatePriceRecurringInterval::Month,

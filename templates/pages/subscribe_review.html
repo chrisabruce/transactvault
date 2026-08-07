@@ -1,81 +1,118 @@
 {% extends "base.html" %}
-
-{% block title %}Confirm the {{ tier_name }} plan | {{ app_name }}{% endblock %}
-{% block body_class %}page-app{% endblock %}
-
+{% block title %}
+    Confirm the
+    {{ tier_name }}
+    plan |
+    {{ app_name }}
+{% endblock %}
+{% block body_class %}
+    page-app
+{% endblock %}
 {% block body %}
-{% include "components/app_header.html" %}
-
-<main class="app-main">
-    <section class="review-card">
-        <header class="review-head">
-            <p class="review-eyebrow">Before you pay</p>
-            <h1>The {{ tier_name }} plan</h1>
-            <p class="review-price">{{ price }}<small>/month</small></p>
-        </header>
-
-        <dl class="review-lines">
-            <div>
-                <dt>Included each month</dt>
-                <dd>{{ transactions }}</dd>
-            </div>
-            <div>
-                <dt>Team members</dt>
-                <dd>{{ users }}</dd>
-            </div>
-            {% if trial_days > 0 %}
+    {% include "components/app_header.html" %}
+    <main class="app-main">
+        <section class="review-card">
+            <header class="review-head">
+                <p class="review-eyebrow">Before you pay</p>
+                <h1>The {{ tier_name }} plan</h1>
+                <p class="review-price">
+                    {{ price }}
+                    <small>/month</small>
+                </p>
+            </header>
+            <dl class="review-lines">
                 <div>
-                    <dt>Free trial</dt>
-                    <dd>{{ trial_days }} days. Your card is not charged until the trial ends, and you can cancel before then.</dd>
+                    <dt>Included each month</dt>
+                    <dd>{{ transactions }}</dd>
                 </div>
-            {% endif %}
-        </dl>
-
-        {#- The point of this page. Which branch shows is decided by the
-            tier's own configuration, so it always matches what the limit
-            check will actually do. -#}
-        {% if !unlimited_transactions %}
-            {% match overage_display %}
-                {% when Some with (rate) %}
+                <div>
+                    <dt>Team members</dt>
+                    <dd>{{ users }}</dd>
+                </div>
+                {% if trial_days > 0 %}
+                    <div>
+                        <dt>Free trial</dt>
+                        <dd>
+                            {{ trial_days }}
+                            days. Your card is not charged until the trial ends,
+                            and you can cancel before then.
+                        </dd>
+                    </div>
+                {% endif %}
+            </dl>
+            {#-
+                The point of this page. Which branch shows is decided by the
+                tier's own configuration, so it always matches what the limit
+                check will actually do.
+            -#}
+            {% if !unlimited_transactions %}
+                {% match overage_display %}
+                    {% when Some with (rate) %}
                     <section class="review-overage">
-                        <h2>If you go over {{ transactions }}</h2>
+                        <h2>
+                            If you go over
+                            {{ transactions }}
+                        </h2>
                         <p>
-                            Nothing stops and nothing is blocked. Every transaction past
-                            the included amount is counted as you create it and added to
-                            that month's invoice at <strong>{{ rate }} each</strong>.
+                            Nothing stops and nothing is blocked. Every
+                            transaction past
+                                                        the included amount is
+                            counted as you create it and added to
+                                                        that month's invoice at
+                            <strong>{{ rate }} each</strong>
+                            .
                         </p>
                         <p>
-                            The count resets when your billing month does. If you find
-                            yourself over the limit most months, the next plan up is
-                            usually cheaper than paying per transaction, and you can move
-                            whenever you like.
+                            The count resets when your billing month does. If
+                            you find
+                                                        yourself over the limit
+                            most months, the next plan up is
+                                                        usually cheaper than
+                            paying per transaction, and you can move
+                                                        whenever you like.
                         </p>
                     </section>
-                {% when None %}
+                    {% when None %}
                     <section class="review-overage capped">
-                        <h2>If you reach {{ transactions }}</h2>
+                        <h2>
+                            If you reach
+                            {{ transactions }}
+                        </h2>
                         <p>
-                            Creating new transactions pauses until your next billing month
-                            starts, or until you move up a plan. <strong>You are never
-                            charged more than the monthly price on this plan.</strong>
+                            Creating new transactions pauses until your next
+                            billing month
+                                                        starts, or until you
+                            move up a plan.
+                            <strong>
+                                You are never
+                                                            charged more than
+                                the monthly price on this plan.
+                            </strong>
                         </p>
                         <p>
-                            Everything already in TransactVault stays fully usable while
-                            you wait: uploads, approvals, exports, and your whole history.
-                            Only creating new transactions is affected.
+                            Everything already in TransactVault stays fully
+                            usable while
+                                                        you wait: uploads,
+                            approvals, exports, and your whole history.
+                                                        Only creating new
+                            transactions is affected.
                         </p>
                     </section>
-            {% endmatch %}
-        {% endif %}
-
-        <form method="post" action="/app/subscribe/{{ slug }}" class="review-actions">
-            <button type="submit" class="btn">Continue to payment</button>
-            <a class="btn secondary" href="/pricing">Compare plans</a>
-        </form>
-        <p class="review-fineprint">
-            Payment is handled by Stripe. We never see your card number. You can change
-            plans or cancel any time from Manage subscription in your account menu.
-        </p>
-    </section>
-</main>
+                {% endmatch %}
+            {% endif %}
+            <form method="post" action="/app/subscribe/{{ slug }}" class="review-actions">
+                <button type="submit" class="btn">Continue to payment</button>
+                <a class="btn secondary" href="/pricing">Compare plans</a>
+            </form>
+            <p class="review-fineprint">
+                Payment is handled by Stripe. We never see your credit card
+                number. You can change
+                            plans or cancel any time from
+                &quot;
+                Manage subscription
+                &quot;
+                in your account menu.
+            </p>
+        </section>
+    </main>
 {% endblock %}

@@ -6372,6 +6372,17 @@ async fn guide_page_is_public_and_carries_schema() {
     assert!(sitemap.contains("/real-estate-transaction-management"));
 }
 
+/// Collapse whitespace so a prose assertion survives reformatting.
+///
+/// Template source gets rewrapped by editors and formatters, which
+/// silently breaks `body.contains("some sentence")` even though the
+/// rendered page is identical. HTML collapses whitespace anyway, so
+/// comparing collapsed text is what actually matches what a reader
+/// sees.
+fn squash(html: &str) -> String {
+    html.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Seed a tier with a chosen limit + overage config.
 async fn seed_tier(app: &TestApp, slug: &str, limit: i64, overage_cents: Option<i64>) {
     #[derive(serde::Serialize, SurrealValue)]
@@ -6423,14 +6434,16 @@ async fn subscribe_review_states_the_matching_overage_consequence() {
 
     let (status, body) = authed_get(&app, &broker, "/app/subscribe/metered").await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    assert!(body.contains("$3.00 each"), "metered rate missing: {body}");
-    assert!(body.contains("Nothing stops and nothing is blocked"));
-    assert!(!body.contains("pauses until"));
+    let text = squash(&body);
+    assert!(text.contains("$3.00 each"), "metered rate missing");
+    assert!(text.contains("Nothing stops and nothing is blocked"));
+    assert!(!text.contains("pauses until"));
 
     let (status, body) = authed_get(&app, &broker, "/app/subscribe/capped").await;
     assert_eq!(status, StatusCode::OK);
-    assert!(body.contains("pauses until"), "hard cap wording missing");
-    assert!(body.contains("charged more than the monthly price on this plan"));
+    let text = squash(&body);
+    assert!(text.contains("pauses until"), "hard cap wording missing");
+    assert!(text.contains("charged more than the monthly price on this plan"));
 }
 
 /// Reviewing a plan is a billing action: broker only, and it must not

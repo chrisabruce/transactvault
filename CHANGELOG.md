@@ -8,6 +8,16 @@ the bottom-right of every page.
 
 ## August 2026
 
+### v0.15.0: A clearer checkout page
+
+- **The payment page now says what you're actually buying.** Plans with
+  per-transaction pricing were listing the plan name twice and quoting
+  the extra charge as "per unit". The second line is now named for what
+  it is, extra transactions, and the price reads "per transaction".
+
+  Brokers already subscribed are unaffected. To apply this, use Re-link
+  to Stripe under Admin → Tiers.
+
 ### v0.14.4: "Continue to payment" works again
 
 - **Fixed: the payment button did nothing.** After confirming a plan,

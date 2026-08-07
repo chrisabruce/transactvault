@@ -99,9 +99,9 @@ impl Tier {
     /// Human label for the transaction-count limit.
     pub fn transaction_limit_display(&self) -> String {
         if self.transaction_limit < 0 {
-            "Unlimited / mo".into()
+            "Unlimited transactions/mo".into()
         } else {
-            format!("{} / mo", self.transaction_limit)
+            format!("{} transactions/mo", self.transaction_limit)
         }
     }
 }
