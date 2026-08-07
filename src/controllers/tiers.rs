@@ -88,6 +88,7 @@ pub async fn relink_stripe(
                 &tier.name,
                 &tier.description,
                 tier.price_cents,
+                tier.transaction_limit,
                 tier.overage_fee_cents_per_tx,
             )
             .await
@@ -228,6 +229,7 @@ pub async fn create(
             &parsed.name,
             &parsed.description,
             parsed.price_cents,
+            parsed.transaction_limit,
             parsed.overage_fee_cents_per_tx,
         )
         .await
@@ -316,6 +318,7 @@ pub async fn update(
                 &parsed.name,
                 &parsed.description,
                 parsed.price_cents,
+                parsed.transaction_limit,
                 parsed.overage_fee_cents_per_tx,
             )
             .await

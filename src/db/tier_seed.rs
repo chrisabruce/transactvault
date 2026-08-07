@@ -167,6 +167,7 @@ pub async fn seed_tiers(db: &Db, stripe: &Stripe) -> anyhow::Result<()> {
                 spec.name,
                 spec.description,
                 spec.price_cents,
+                spec.transaction_limit,
                 spec.overage_fee_cents_per_tx,
             )
             .await

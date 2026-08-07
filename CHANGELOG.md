@@ -8,6 +8,16 @@ the bottom-right of every page.
 
 ## August 2026
 
+### v0.16.1: The payment page states what you get
+
+- **Checkout now shows the transaction allowance and the overage rate.**
+  Under the price it reads, for example, "Includes 15 transactions a
+  month, then $4.00 per extra transaction", so nobody enters a card
+  without knowing both numbers. Plans without per-transaction pricing
+  say the allowance and that adding more waits for the next month.
+
+  Use Re-link to Stripe under Admin → Tiers to apply it.
+
 ### v0.16.0: Try it without a card, and edit your brokerage details
 
 - **No credit card to try TransactVault.** Sign up and look around for

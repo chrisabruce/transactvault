@@ -7123,3 +7123,38 @@ fn trial_state_transitions() {
     b.trial_started_at = Some(Utc::now() - Duration::days(13) - Duration::hours(23));
     assert!(matches!(trial_state(&b, 14), TrialState::Active { .. }));
 }
+
+/// What Stripe Checkout prints under the price. A buyer should not be
+/// able to enter a card without being told how many transactions the
+/// plan includes and what an extra one costs.
+#[test]
+fn checkout_description_states_allowance_and_overage() {
+    use crate::stripe::Stripe;
+
+    // Metered tier: allowance + rate.
+    let d = Stripe::checkout_description(
+        "Indie shops and new teams up to about 15 agents.",
+        15,
+        Some(400),
+    );
+    assert!(d.contains("Indie shops and new teams"));
+    assert!(d.contains("Includes 15 transactions a month"));
+    assert!(d.contains("$4.00 per extra transaction"), "got: {d}");
+
+    // Hard-cap tier: no invented overage price.
+    let d = Stripe::checkout_description("Small teams.", 15, None);
+    assert!(d.contains("Includes 15 transactions a month"));
+    assert!(!d.contains("per extra transaction"), "got: {d}");
+
+    // Unlimited tier says so rather than printing a negative number.
+    let d = Stripe::checkout_description("Big shops.", -1, Some(200));
+    assert!(d.contains("Unlimited transactions"), "got: {d}");
+    assert!(!d.contains("-1"), "got: {d}");
+
+    // A blank blurb still yields a usable sentence, and punctuation
+    // isn't doubled when the blurb already ends in a period.
+    let d = Stripe::checkout_description("", 40, Some(200));
+    assert!(d.starts_with("Includes 40 transactions"), "got: {d}");
+    let d = Stripe::checkout_description("Ends in a period.", 40, Some(200));
+    assert!(!d.contains(".."), "got: {d}");
+}

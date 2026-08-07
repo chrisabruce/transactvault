@@ -140,6 +140,47 @@ impl Stripe {
             .unwrap_or(0)
     }
 
+    /// Build the Product description Stripe Checkout renders beneath
+    /// the price.
+    ///
+    /// The tier's own blurb ("Indie shops and new teams…") says who the
+    /// plan is for but not what it includes, and Checkout shows nothing
+    /// else: a buyer could enter a card without ever being told how many
+    /// transactions they get or what an extra one costs. Both facts
+    /// belong on the page where the money is committed.
+    pub fn checkout_description(
+        base: &str,
+        transaction_limit: i64,
+        overage_fee_cents_per_tx: Option<i64>,
+    ) -> String {
+        let base = base.trim();
+        let allowance = if transaction_limit < 0 {
+            "Unlimited transactions each month.".to_string()
+        } else {
+            match overage_fee_cents_per_tx {
+                Some(cents) => format!(
+                    "Includes {transaction_limit} transactions a month, then ${:.2} per extra transaction.",
+                    cents as f64 / 100.0
+                ),
+                // A hard-cap tier: saying "then nothing" would be odd, so
+                // state the boundary as the plan's shape instead.
+                None => format!(
+                    "Includes {transaction_limit} transactions a month; adding more waits for the next month."
+                ),
+            }
+        };
+        let combined = if base.is_empty() {
+            allowance
+        } else if base.ends_with('.') {
+            format!("{base} {allowance}")
+        } else {
+            format!("{base}. {allowance}")
+        };
+        // Stripe rejects over-long descriptions; nothing we compose comes
+        // close, but truncate rather than fail a tier save.
+        crate::sanitize::truncate_chars(&combined, 500)
+    }
+
     /// Ensure a Stripe Product + recurring Price exist for the given
     /// tier definition, returning their IDs.
     ///
@@ -157,6 +198,7 @@ impl Stripe {
         name: &str,
         description: &str,
         price_cents: i64,
+        transaction_limit: i64,
         overage_fee_cents_per_tx: Option<i64>,
     ) -> anyhow::Result<TierSyncResult> {
         let Some(client) = self.client.as_ref() else {
@@ -168,7 +210,11 @@ impl Stripe {
         // `Empty strings are not allowed for parameter: description`.
         // Treat a blank textarea as "no description" and omit the
         // field entirely on the wire.
-        let description_opt = Some(description.trim()).filter(|s| !s.is_empty());
+        // What Checkout shows: the blurb plus the allowance and overage
+        // rate, so nobody enters a card without knowing either.
+        let full_description =
+            Self::checkout_description(description, transaction_limit, overage_fee_cents_per_tx);
+        let description_opt = Some(full_description.as_str()).filter(|s| !s.is_empty());
 
         // Product: create or update in place. We keep the same Product
         // across price changes so Stripe Dashboard shows continuous
