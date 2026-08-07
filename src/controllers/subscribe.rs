@@ -186,7 +186,6 @@ pub async fn subscribe(
         .create_subscription_checkout(
             &customer_id,
             price_id,
-            tier.stripe_overage_price_id.as_deref(),
             state.config.stripe.trial_days,
             &success_url,
             &cancel_url,

@@ -1098,9 +1098,13 @@ pub async fn create(
     // billing period if Stripe was unreachable now.
     if let crate::billing::LimitDecision::AllowedAsOverage {
         stripe_subscription_id,
+        overage_price_id,
     } = decision
         && let Some(sub_id) = stripe_subscription_id
-        && let Err(e) = state.stripe.report_overage_usage(&sub_id, 1).await
+        && let Err(e) = state
+            .stripe
+            .report_overage_usage(&sub_id, overage_price_id.as_deref(), 1)
+            .await
     {
         tracing::warn!(
             error = %e,

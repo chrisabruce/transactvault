@@ -9,14 +9,18 @@
 use std::collections::HashMap;
 
 use anyhow::Context;
+// The crate re-exports two different `SubscriptionProrationBehavior`
+// through overlapping globs, so name this one via its defining module.
+use stripe::generated::billing::subscription_item::SubscriptionProrationBehavior as ItemProration;
 use stripe::{
     BillingPortalSession, CheckoutSession, CheckoutSessionMode,
     CheckoutSessionPaymentMethodCollection, Client, CreateBillingPortalSession,
     CreateCheckoutSession, CreateCheckoutSessionLineItems, CreateCheckoutSessionSubscriptionData,
     CreateCustomer, CreatePrice, CreatePriceRecurring, CreatePriceRecurringInterval,
-    CreatePriceRecurringUsageType, CreateProduct, CreateUsageRecord, Currency, Customer,
-    CustomerId, IdOrCreate, ListSubscriptions, Price, Product, ProductId, Subscription,
-    SubscriptionId, UpdateProduct, UsageRecord, UsageRecordAction,
+    CreatePriceRecurringUsageType, CreateProduct, CreateSubscriptionItem, CreateUsageRecord,
+    Currency, Customer, CustomerId, IdOrCreate, ListSubscriptions, Price, PriceId, Product,
+    ProductId, Subscription, SubscriptionId, SubscriptionItem, UpdateProduct, UsageRecord,
+    UsageRecordAction,
 };
 
 use crate::config::StripeConfig;
@@ -293,16 +297,17 @@ impl Stripe {
     }
 
     /// Create a Subscription Checkout Session for the given Customer
-    /// and tier price(s). Returns the `https://checkout.stripe.com/...`
-    /// URL to redirect the browser to. The optional `overage_price_id`
-    /// is added as a second line item — Stripe will keep it on the
-    /// resulting Subscription and bill metered usage we POST later.
+    /// and tier price. Returns the `https://checkout.stripe.com/...`
+    /// URL to redirect the browser to.
+    ///
+    /// Takes no overage price: metered pricing is attached to the
+    /// subscription later, on first overage, so Checkout shows exactly
+    /// one line. See [`Stripe::report_overage_usage`].
     #[allow(clippy::too_many_arguments)]
     pub async fn create_subscription_checkout(
         &self,
         customer_id: &str,
         price_id: &str,
-        overage_price_id: Option<&str>,
         trial_days: u32,
         success_url: &str,
         cancel_url: &str,
@@ -316,21 +321,21 @@ impl Stripe {
             .parse()
             .with_context(|| format!("invalid customer id: {customer_id}"))?;
 
-        let mut line_items = vec![CreateCheckoutSessionLineItems {
+        // ONE line item, deliberately.
+        //
+        // The metered overage price used to ride along here, which made
+        // Checkout render two rows and collapse its header to "Try
+        // Enterprise and 1 more" — asking someone to interpret a second
+        // line before they have even bought the first. The overage item
+        // is attached to the subscription later, and only if the
+        // brokerage actually exceeds its allowance (see
+        // `report_overage_usage`). Same money, same timing; a customer
+        // who never exceeds simply never sees a second line anywhere.
+        let line_items = vec![CreateCheckoutSessionLineItems {
             price: Some(price_id.to_string()),
             quantity: Some(1),
             ..Default::default()
         }];
-        if let Some(op) = overage_price_id {
-            // Metered Prices: omit `quantity` — Stripe rejects an
-            // explicit quantity on metered line items because usage
-            // is reported via `subscription_item.usage_records`.
-            line_items.push(CreateCheckoutSessionLineItems {
-                price: Some(op.to_string()),
-                quantity: None,
-                ..Default::default()
-            });
-        }
 
         let mut params = CreateCheckoutSession::new();
         params.mode = Some(CheckoutSessionMode::Subscription);
@@ -403,6 +408,7 @@ impl Stripe {
     pub async fn report_overage_usage(
         &self,
         subscription_id: &str,
+        overage_price_id: Option<&str>,
         quantity: u64,
     ) -> anyhow::Result<()> {
         let Some(client) = self.client.as_ref() else {
@@ -424,9 +430,41 @@ impl Stripe {
                 .map(|r| matches!(r.usage_type, stripe::RecurringUsageType::Metered))
                 .unwrap_or(false)
         });
-        let Some(item) = metered_item else {
-            tracing::debug!(subscription = %subscription_id, "no metered subscription item — skipping overage report");
-            return Ok(());
+        // Attach the metered item the first time it is actually needed.
+        // Checkout deliberately does not include it, so most
+        // subscriptions never carry one: the brokerage that stays inside
+        // its allowance sees a single clean line in Checkout, on its
+        // invoices, and in the billing portal.
+        //
+        // `proration_behavior: None` because a metered item has no
+        // upfront amount to prorate; without it Stripe can raise a
+        // proration invoice for adding mid-period.
+        let item_id = match metered_item {
+            Some(item) => item.id.clone(),
+            None => {
+                let Some(price_id) = overage_price_id.filter(|p| !p.is_empty()) else {
+                    tracing::debug!(
+                        subscription = %subscription_id,
+                        "no metered item and no overage price configured — skipping"
+                    );
+                    return Ok(());
+                };
+                let price: PriceId = price_id
+                    .parse()
+                    .with_context(|| format!("invalid overage price id: {price_id}"))?;
+                let mut create = CreateSubscriptionItem::new(sub_id.clone());
+                create.price = Some(price);
+                create.proration_behavior = Some(ItemProration::None);
+                let created = SubscriptionItem::create(client, create)
+                    .await
+                    .context("attaching metered overage item to subscription")?;
+                tracing::info!(
+                    subscription = %subscription_id,
+                    item = %created.id,
+                    "attached metered overage item on first overage"
+                );
+                created.id
+            }
         };
 
         let mut params = CreateUsageRecord {
@@ -439,7 +477,7 @@ impl Stripe {
         // log lines that include the params object.
         params.action = Some(UsageRecordAction::Increment);
 
-        UsageRecord::create(client, &item.id, params)
+        UsageRecord::create(client, &item_id, params)
             .await
             .context("Stripe UsageRecord::create")?;
         Ok(())

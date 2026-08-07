@@ -8,12 +8,18 @@ the bottom-right of every page.
 
 ## August 2026
 
-### v0.15.0: A clearer checkout page
+### v0.15.0: A checkout page that shows one thing
 
-- **The payment page now says what you're actually buying.** Plans with
-  per-transaction pricing were listing the plan name twice and quoting
-  the extra charge as "per unit". The second line is now named for what
-  it is, extra transactions, and the price reads "per transaction".
+- **The payment page now lists just the plan you picked.** It used to
+  show the plan twice, once for the monthly price and again for
+  per-transaction charges, with a puzzling "and 1 more" at the top.
+  Now there is a single line: the plan, its price, and the free trial.
+
+- **Per-transaction charges appear only if you actually go over.** They
+  are added to the subscription the first time a brokerage exceeds its
+  monthly allowance, so anyone who stays within it never sees a second
+  line on the checkout page, on an invoice, or in the billing portal.
+  Nobody is charged any differently than before.
 
   Brokers already subscribed are unaffected. To apply this, use Re-link
   to Stripe under Admin → Tiers.

@@ -105,6 +105,10 @@ pub enum LimitDecision {
     /// upcoming usage-record POST.
     AllowedAsOverage {
         stripe_subscription_id: Option<String>,
+        /// The tier's metered price. Carried through because the
+        /// subscription may not have a metered item yet: Checkout no
+        /// longer attaches one, so it is created on first overage.
+        overage_price_id: Option<String>,
     },
 }
 
@@ -193,6 +197,7 @@ pub(crate) async fn enforce_transaction_limit_with(
     if tier.overage_fee_cents_per_tx.is_some() {
         Ok(LimitDecision::AllowedAsOverage {
             stripe_subscription_id: brokerage.stripe_subscription_id.clone(),
+            overage_price_id: tier.stripe_overage_price_id.clone(),
         })
     } else {
         Err(AppError::invalid(format!(
