@@ -76,7 +76,7 @@ pub async fn header_info_for_user(state: &AppState, user: &CurrentUser) -> Heade
     match brokerage {
         Some(b) => HeaderInfo {
             brokerage_name: b.name.clone(),
-            banner: banner_for(&b, user.role),
+            banner: banner_for(&b, user.role, state.config.trial_days),
         },
         None => HeaderInfo::default(),
     }
@@ -87,8 +87,8 @@ pub async fn header_info_for_user(state: &AppState, user: &CurrentUser) -> Heade
 /// instead of paying for the second query inside
 /// [`header_info_for_user`]. Takes the viewer's [`Role`] because the
 /// info-level banners are broker-only (see [`build_banner`]).
-pub fn banner_for(b: &Brokerage, role: Role) -> Option<SubscriptionBanner> {
-    build_banner(b, role)
+pub fn banner_for(b: &Brokerage, role: Role, trial_days: u32) -> Option<SubscriptionBanner> {
+    build_banner(b, role, trial_days)
 }
 
 /// Outcome of a monthly transaction-limit check. The caller can use
@@ -217,6 +217,52 @@ fn month_start_utc(year: i32, month: u32) -> chrono::DateTime<Utc> {
     Utc.from_utc_datetime(&dt)
 }
 
+/// Where a never-subscribed brokerage stands on its card-free trial.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrialState {
+    /// No transaction created yet, so the clock has not started. Signing
+    /// up and looking around must not burn the trial.
+    NotStarted,
+    /// Running, with this many whole days left (0 = final day).
+    Active { days_left: i64 },
+    /// Ran out. Writes are blocked until they pick a plan.
+    Expired,
+}
+
+/// Compute the trial position from the row plus the configured length.
+pub fn trial_state(b: &Brokerage, trial_days: u32) -> TrialState {
+    let Some(started) = b.trial_started_at else {
+        return TrialState::NotStarted;
+    };
+    let ends = started + chrono::Duration::days(trial_days as i64);
+    let remaining = ends - Utc::now();
+    if remaining <= chrono::Duration::zero() {
+        TrialState::Expired
+    } else {
+        TrialState::Active {
+            days_left: remaining.num_days(),
+        }
+    }
+}
+
+/// Start the trial clock on first use.
+///
+/// Called when a transaction is created. The `WHERE trial_started_at IS
+/// NONE` makes it idempotent and safe against two transactions being
+/// created at once: whichever lands first sets the time, the other is a
+/// no-op rather than resetting the clock.
+pub async fn start_trial_if_first_use(state: &AppState, brokerage_id: &surrealdb::types::RecordId) {
+    let result = state
+        .db
+        .query("UPDATE $b SET trial_started_at = time::now() WHERE trial_started_at IS NONE")
+        .bind(("b", brokerage_id.clone()))
+        .await;
+    match result {
+        Ok(_) => {}
+        Err(e) => tracing::warn!(error = %e, "failed to start trial clock"),
+    }
+}
+
 /// Gate predicate enforced at the top of every write request under
 /// `/app/*`. Wired into [`CurrentUser::from_request_parts`] so handlers
 /// don't have to remember to call it.
@@ -232,13 +278,14 @@ pub async fn assert_brokerage_writable(
     state: &AppState,
     user: &CurrentUser,
 ) -> Result<(), AppError> {
-    assert_brokerage_writable_with(&state.db, &user.brokerage_id).await
+    assert_brokerage_writable_with(&state.db, &user.brokerage_id, state.config.trial_days).await
 }
 
 /// DB-only variant of [`assert_brokerage_writable`] for unit tests.
 pub(crate) async fn assert_brokerage_writable_with(
     db: &Db,
     brokerage_id: &surrealdb::types::RecordId,
+    trial_days: u32,
 ) -> Result<(), AppError> {
     let brokerage: Option<Brokerage> = db.select(brokerage_id.clone()).await?;
     let Some(b) = brokerage else {
@@ -254,11 +301,20 @@ pub(crate) async fn assert_brokerage_writable_with(
         Some("wind_down") => Err(AppError::invalid(
             "This brokerage's subscription has ended and the account is read-only. Resubscribe from the pricing page to reopen edits.",
         )),
+        // Never subscribed: the card-free trial decides. This arm used
+        // to fall through to Ok(()), which meant an account that never
+        // entered a card could use the product indefinitely.
+        None | Some("" | "none") => match trial_state(&b, trial_days) {
+            TrialState::Expired => Err(AppError::invalid(
+                "Your free trial has ended. Choose a plan to keep adding transactions — everything already here stays readable and exportable.",
+            )),
+            _ => Ok(()),
+        },
         _ => Ok(()),
     }
 }
 
-fn build_banner(b: &Brokerage, role: Role) -> Option<SubscriptionBanner> {
+fn build_banner(b: &Brokerage, role: Role, trial_days: u32) -> Option<SubscriptionBanner> {
     if b.is_complimentary {
         return None;
     }
@@ -266,12 +322,39 @@ fn build_banner(b: &Brokerage, role: Role) -> Option<SubscriptionBanner> {
         // Never subscribed yet. Surface the subscribe CTA at the top
         // of every authenticated page — without this, the broker has
         // to remember `/pricing` exists and there's no in-app nudge.
-        None | Some("" | "none") => Some(SubscriptionBanner {
-            level: BannerLevel::Info,
-            message: "Pick a plan to start your 14-day free trial. We'll only charge your card after the trial ends.".into(),
-            action_label: Some("View plans"),
-            action_href: Some("/pricing"),
-        }),
+        // Never subscribed. What the broker needs to know depends on
+        // where the card-free trial stands, which is what the banner now
+        // reports instead of a single evergreen "pick a plan" nudge.
+        None | Some("" | "none") => match trial_state(b, trial_days) {
+            TrialState::NotStarted => Some(SubscriptionBanner {
+                level: BannerLevel::Info,
+                message: format!(
+                    "You're all set to explore. Your {trial_days}-day free trial starts when you create your first transaction, and no card is needed until it ends."
+                ),
+                action_label: Some("See plans"),
+                action_href: Some("/pricing"),
+            }),
+            TrialState::Active { days_left } => Some(SubscriptionBanner {
+                level: if days_left <= 3 {
+                    BannerLevel::Warn
+                } else {
+                    BannerLevel::Info
+                },
+                message: match days_left {
+                    0 => "Last day of your free trial. Pick a plan to keep adding transactions; everything you've already added stays put.".to_string(),
+                    1 => "1 day left in your free trial. Pick a plan to keep adding transactions.".to_string(),
+                    n => format!("{n} days left in your free trial. No card on file yet, and nothing is charged until you choose a plan."),
+                },
+                action_label: Some("See plans"),
+                action_href: Some("/pricing"),
+            }),
+            TrialState::Expired => Some(SubscriptionBanner {
+                level: BannerLevel::Danger,
+                message: "Your free trial has ended. Your documents are safe and still exportable; choose a plan to start adding transactions again.".into(),
+                action_label: Some("Choose a plan"),
+                action_href: Some("/pricing"),
+            }),
+        },
         // Inside the free trial. The countdown reassures the broker
         // they're set up correctly and the card hasn't been hit yet,
         // and doubles as a webhook smoke test — if someone just paid
@@ -436,28 +519,30 @@ mod tests {
     async fn writable_active_is_allowed() {
         let db = make_db().await;
         let b = insert_brokerage(&db, "starter", Some("active"), false).await;
-        assert!(assert_brokerage_writable_with(&db, &b).await.is_ok());
+        assert!(assert_brokerage_writable_with(&db, &b, 14).await.is_ok());
     }
 
     #[tokio::test]
     async fn writable_trialing_is_allowed() {
         let db = make_db().await;
         let b = insert_brokerage(&db, "starter", Some("trialing"), false).await;
-        assert!(assert_brokerage_writable_with(&db, &b).await.is_ok());
+        assert!(assert_brokerage_writable_with(&db, &b, 14).await.is_ok());
     }
 
     #[tokio::test]
     async fn writable_canceling_stays_writable_until_period_ends() {
         let db = make_db().await;
         let b = insert_brokerage(&db, "starter", Some("canceling"), false).await;
-        assert!(assert_brokerage_writable_with(&db, &b).await.is_ok());
+        assert!(assert_brokerage_writable_with(&db, &b, 14).await.is_ok());
     }
 
     #[tokio::test]
     async fn writable_past_due_is_blocked() {
         let db = make_db().await;
         let b = insert_brokerage(&db, "starter", Some("past_due"), false).await;
-        let err = assert_brokerage_writable_with(&db, &b).await.unwrap_err();
+        let err = assert_brokerage_writable_with(&db, &b, 14)
+            .await
+            .unwrap_err();
         let msg = format!("{err:?}");
         assert!(msg.to_lowercase().contains("payment"), "msg was: {msg}");
     }
@@ -466,7 +551,7 @@ mod tests {
     async fn writable_wind_down_is_blocked() {
         let db = make_db().await;
         let b = insert_brokerage(&db, "starter", Some("wind_down"), false).await;
-        assert!(assert_brokerage_writable_with(&db, &b).await.is_err());
+        assert!(assert_brokerage_writable_with(&db, &b, 14).await.is_err());
     }
 
     #[tokio::test]
@@ -474,7 +559,7 @@ mod tests {
         // Comp accounts stay writable even with the worst status.
         let db = make_db().await;
         let b = insert_brokerage(&db, "starter", Some("wind_down"), true).await;
-        assert!(assert_brokerage_writable_with(&db, &b).await.is_ok());
+        assert!(assert_brokerage_writable_with(&db, &b, 14).await.is_ok());
     }
 
     #[tokio::test]
@@ -482,7 +567,7 @@ mod tests {
         let db = make_db().await;
         let phantom = RecordId::new("brokerage", "does_not_exist");
         assert!(matches!(
-            assert_brokerage_writable_with(&db, &phantom).await,
+            assert_brokerage_writable_with(&db, &phantom, 14).await,
             Err(AppError::Forbidden)
         ));
     }
@@ -503,10 +588,10 @@ mod tests {
         let db = make_db().await;
         let id = insert_brokerage(&db, "starter", Some("trialing"), false).await;
         let b = fetch_brokerage(&db, &id).await;
-        let broker_banner = banner_for(&b, Role::Broker).expect("broker sees trial banner");
+        let broker_banner = banner_for(&b, Role::Broker, 14).expect("broker sees trial banner");
         assert_eq!(broker_banner.level, BannerLevel::Info);
-        assert!(banner_for(&b, Role::Agent).is_none());
-        assert!(banner_for(&b, Role::Coordinator).is_none());
+        assert!(banner_for(&b, Role::Agent, 14).is_none());
+        assert!(banner_for(&b, Role::Coordinator, 14).is_none());
     }
 
     #[tokio::test]
@@ -516,9 +601,9 @@ mod tests {
         let db = make_db().await;
         let id = insert_brokerage(&db, "starter", None, false).await;
         let b = fetch_brokerage(&db, &id).await;
-        assert!(banner_for(&b, Role::Broker).is_some());
-        assert!(banner_for(&b, Role::Agent).is_none());
-        assert!(banner_for(&b, Role::Coordinator).is_none());
+        assert!(banner_for(&b, Role::Broker, 14).is_some());
+        assert!(banner_for(&b, Role::Agent, 14).is_none());
+        assert!(banner_for(&b, Role::Coordinator, 14).is_none());
     }
 
     #[tokio::test]
@@ -529,7 +614,7 @@ mod tests {
         let id = insert_brokerage(&db, "starter", Some("past_due"), false).await;
         let b = fetch_brokerage(&db, &id).await;
         for role in [Role::Broker, Role::Agent, Role::Coordinator] {
-            let banner = banner_for(&b, role).expect("danger banner visible");
+            let banner = banner_for(&b, role, 14).expect("danger banner visible");
             assert_eq!(banner.level, BannerLevel::Danger);
         }
     }

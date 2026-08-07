@@ -68,6 +68,13 @@ pub struct Config {
     /// is exposed directly and forwarding headers are ignored.
     pub trusted_proxy_hops: usize,
 
+    /// Length of the card-free trial, in days, counted from the
+    /// brokerage's FIRST transaction rather than from signup. Distinct
+    /// from `stripe.trial_days`: this one gates the app before anyone
+    /// has entered a card, and Checkout grants only whatever is left of
+    /// it so the total free period stays exactly this long.
+    pub trial_days: u32,
+
     /// Who gets an email when someone sends feedback or uses the
     /// contact form. Comma-separated in `NOTIFY_EMAILS`; empty disables
     /// the notification (the message is still stored and visible in
@@ -193,6 +200,7 @@ impl Config {
             login_rate_per_quarter_hour: 1000,
             dev_reset_on_boot: false,
             trusted_proxy_hops: 0,
+            trial_days: 14,
             notify_emails: vec!["ops@test".into()],
             maintenance_mode: false,
             rustfs: RustFsConfig {
@@ -276,6 +284,9 @@ impl Config {
             trusted_proxy_hops: env_or("TRUSTED_PROXY_HOPS", "1")
                 .parse()
                 .context("TRUSTED_PROXY_HOPS must be a non-negative integer")?,
+            trial_days: env_or("TRIAL_DAYS", "14")
+                .parse()
+                .context("TRIAL_DAYS must be a non-negative integer")?,
             notify_emails: env_or(
                 "NOTIFY_EMAILS",
                 "jason@transactvault.app,chris@transactvault.app",

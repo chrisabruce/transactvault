@@ -832,6 +832,12 @@ pub struct TeamPage<'a> {
     /// invitations." Shown instead of the single copyable link when
     /// more than one email was submitted.
     pub invite_notice: Option<String>,
+    /// Current brokerage details, for the broker-only settings form.
+    pub brokerage_name: String,
+    pub brokerage_city: String,
+    pub brokerage_state: String,
+    pub settings_flash: Option<&'static str>,
+    pub settings_error: Option<&'static str>,
 }
 
 #[derive(Debug, Clone)]

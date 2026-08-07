@@ -4458,3 +4458,13 @@ body.contact-open { overflow: hidden; }
     font-size: var(--fs-xs);
     padding: 0.3rem 0.5rem;
 }
+
+/* Brokerage details form on the Team page. */
+.brokerage-settings-form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: var(--sp-4);
+}
+.brokerage-settings-form label { display: flex; flex-direction: column; gap: 0.3rem; font-size: var(--fs-sm); }
+.brokerage-settings-form label:first-child { flex: 1 1 18rem; }

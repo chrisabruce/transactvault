@@ -53,6 +53,10 @@ pub struct Brokerage {
     /// Toggled from `/admin/brokerages`.
     #[serde(default)]
     pub is_complimentary: bool,
+    /// When the brokerage created its first transaction, which is when
+    /// the free trial clock starts. `None` = not started.
+    #[serde(default)]
+    pub trial_started_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

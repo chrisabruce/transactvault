@@ -6934,3 +6934,192 @@ async fn csp_allows_form_redirects_to_stripe_checkout() {
         "form-action must not be wildcarded"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Brokerage settings + card-free trial
+// ---------------------------------------------------------------------------
+
+/// A broker can rename their brokerage and set city/state; an agent
+/// cannot, because the name lands on export manifests and the Stripe
+/// customer record.
+#[tokio::test]
+async fn broker_can_edit_brokerage_details_and_agents_cannot() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Old Name").await;
+    let broker = seed_user(&app.state, "broker@x.test").await;
+    join(&app.state, &broker, &b, "broker").await;
+    let agent = seed_user(&app.state, "agent@x.test").await;
+    join(&app.state, &agent, &b, "agent").await;
+
+    let (status, _) = authed_post(
+        &app,
+        &broker,
+        "/app/team/settings",
+        "name=Quartz+Hill+Realty&city=Lancaster&state=ca",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+
+    let row: Option<crate::models::Brokerage> =
+        app.state.db.select(b.clone()).await.expect("select");
+    let row = row.expect("brokerage");
+    assert_eq!(row.name, "Quartz Hill Realty");
+    assert_eq!(row.city.as_deref(), Some("Lancaster"));
+    assert_eq!(row.state, "CA", "state should be upper-cased");
+
+    // Agent is refused, and nothing changes.
+    let (status, _) = authed_post(
+        &app,
+        &agent,
+        "/app/team/settings",
+        "name=Hijacked&city=&state=CA",
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let row: Option<crate::models::Brokerage> = app.state.db.select(b).await.expect("select");
+    assert_eq!(row.expect("brokerage").name, "Quartz Hill Realty");
+
+    // An empty name is refused rather than wiping it.
+    let (status, _) =
+        authed_post(&app, &broker, "/app/team/settings", "name=+&city=&state=CA").await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let (_, body) = authed_get(&app, &broker, "/app/team?error=name_required").await;
+    assert!(squash(&body).contains("brokerage needs a name"));
+}
+
+/// The trial clock starts at the first transaction, not at signup, and
+/// blocks writes once it runs out. This is the gate that used to let a
+/// never-subscribed brokerage use the product forever.
+#[tokio::test]
+async fn trial_starts_on_first_transaction_and_expires() {
+    use chrono::{Duration, Utc};
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Trial Co").await;
+    // seed_brokerage marks brokerages complimentary, which bypasses
+    // every billing gate; clear it so the real path runs.
+    app.state
+        .db
+        .query("UPDATE $b SET is_complimentary = false")
+        .bind(("b", b.clone()))
+        .await
+        .expect("clear comp");
+    let broker = seed_user(&app.state, "broker@trial.test").await;
+    join(&app.state, &broker, &b, "broker").await;
+
+    // Signing up and looking around must not start the clock.
+    assert!(
+        load_brokerage(&app, &b).await.trial_started_at.is_none(),
+        "trial must not start before any work is done"
+    );
+    // ...and writing is allowed while it hasn't started.
+    assert!(
+        crate::billing::assert_brokerage_writable_with(&app.state.db, &b, 14)
+            .await
+            .is_ok()
+    );
+
+    // Creating the first transaction starts it.
+    let (status, _) = authed_post(
+        &app,
+        &broker,
+        "/app/transactions",
+        "property_address=123+Main+St&transaction_type=residential&side=listing&sales_type=standard&special_condition=standard&status=active",
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::SEE_OTHER,
+        "transaction should be created"
+    );
+    let started = load_brokerage(&app, &b).await.trial_started_at;
+    assert!(
+        started.is_some(),
+        "first transaction should start the trial"
+    );
+
+    // Still writable inside the window.
+    assert!(
+        crate::billing::assert_brokerage_writable_with(&app.state.db, &b, 14)
+            .await
+            .is_ok()
+    );
+
+    // Wind the clock back past the window: writes are refused with a
+    // message that explains what to do.
+    app.state
+        .db
+        .query("UPDATE $b SET trial_started_at = $t")
+        .bind(("b", b.clone()))
+        .bind(("t", Utc::now() - Duration::days(15)))
+        .await
+        .expect("age the trial");
+    let err = crate::billing::assert_brokerage_writable_with(&app.state.db, &b, 14)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("free trial has ended"), "got: {err}");
+
+    // A paying brokerage is unaffected by the trial clock.
+    app.state
+        .db
+        .query("UPDATE $b SET subscription_status = 'active'")
+        .bind(("b", b.clone()))
+        .await
+        .expect("mark active");
+    assert!(
+        crate::billing::assert_brokerage_writable_with(&app.state.db, &b, 14)
+            .await
+            .is_ok(),
+        "an active subscription must not be blocked by trial expiry"
+    );
+}
+
+/// Fetch a brokerage row in a test.
+async fn load_brokerage(
+    app: &TestApp,
+    id: &surrealdb::types::RecordId,
+) -> crate::models::Brokerage {
+    let row: Option<crate::models::Brokerage> = app
+        .state
+        .db
+        .select(id.clone())
+        .await
+        .expect("select brokerage");
+    row.expect("brokerage row")
+}
+
+/// Trial maths: not started, running, and expired.
+#[test]
+fn trial_state_transitions() {
+    use crate::billing::{TrialState, trial_state};
+    use chrono::{Duration, Utc};
+
+    let mut b = crate::models::Brokerage {
+        id: surrealdb::types::RecordId::new("brokerage", "x"),
+        name: "X".into(),
+        city: None,
+        state: "CA".into(),
+        plan: "trial".into(),
+        stripe_customer_id: None,
+        stripe_subscription_id: None,
+        subscription_status: None,
+        current_period_end: None,
+        cancel_at: None,
+        wind_down_purge_at: None,
+        is_complimentary: false,
+        trial_started_at: None,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    assert_eq!(trial_state(&b, 14), TrialState::NotStarted);
+
+    b.trial_started_at = Some(Utc::now());
+    assert!(matches!(trial_state(&b, 14), TrialState::Active { days_left } if days_left == 13));
+
+    b.trial_started_at = Some(Utc::now() - Duration::days(14));
+    assert_eq!(trial_state(&b, 14), TrialState::Expired);
+
+    // Final day still counts as active, not expired.
+    b.trial_started_at = Some(Utc::now() - Duration::days(13) - Duration::hours(23));
+    assert!(matches!(trial_state(&b, 14), TrialState::Active { .. }));
+}

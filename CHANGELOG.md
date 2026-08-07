@@ -8,6 +8,23 @@ the bottom-right of every page.
 
 ## August 2026
 
+### v0.16.0: Try it without a card, and edit your brokerage details
+
+- **No credit card to try TransactVault.** Sign up and look around for
+  as long as you like. Your 14-day free trial starts when you create
+  your first transaction, not when you sign up, so nothing is ticking
+  while you are still deciding. A banner shows the days remaining, and
+  when the trial ends your documents stay readable and exportable while
+  new transactions wait for you to pick a plan.
+
+  If you subscribe partway through the trial, you get the rest of your
+  free days rather than starting over, so the free period is 14 days
+  either way.
+
+- **Brokers can edit their brokerage details.** Name, city, and state
+  now have a form on the Team page. The name is worth getting right: it
+  is what appears on your exports and on the manifest an auditor reads.
+
 ### v0.15.1: A checkout page that shows one thing
 
 - **The payment page now lists just the plan you picked.** It used to

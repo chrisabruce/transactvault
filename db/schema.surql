@@ -63,6 +63,11 @@ DEFINE FIELD OVERWRITE wind_down_purge_at     ON brokerage TYPE option<datetime>
 -- from /admin/brokerages by a super-admin; audited as
 -- `brokerage_comp_granted` / `brokerage_comp_revoked`.
 DEFINE FIELD OVERWRITE is_complimentary       ON brokerage TYPE bool DEFAULT false;
+-- Card-free trial clock. Set when the brokerage creates its FIRST
+-- transaction, not at signup: an account that signs up and looks around
+-- should not burn its trial before anyone has tried the product. NONE
+-- means "hasn't started yet", which is why the gate treats it as open.
+DEFINE FIELD OVERWRITE trial_started_at        ON brokerage TYPE option<datetime>;
 
 -- ----------------------------------------------------------------------------
 -- Tier — pricing plan definitions managed from the super-admin UI.
@@ -536,7 +541,8 @@ DEFINE FIELD OVERWRITE kind ON audit_event TYPE string
         "contact_blocked_rate_limit", "contact_blocked_token",
         "user_deleted_by_admin", "brokerage_deleted_by_admin",
         "backup_created", "backup_deleted", "backup_restored",
-        "backup_settings_changed"
+        "backup_settings_changed",
+        "brokerage_updated", "trial_started"
     ];
 DEFINE FIELD OVERWRITE actor_email ON audit_event TYPE option<string>;
 DEFINE FIELD OVERWRITE actor       ON audit_event TYPE option<record<user>>;

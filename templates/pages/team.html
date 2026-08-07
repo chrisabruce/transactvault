@@ -35,6 +35,40 @@
         <p class="alert success" role="status">{{ notice }}</p>
     {% when None %}{% endmatch %}
 
+    {% match settings_flash %}{% when Some with (msg) %}
+        <p class="alert success" role="status">{{ msg }}</p>
+    {% when None %}{% endmatch %}
+    {% match settings_error %}{% when Some with (msg) %}
+        <p class="alert error" role="alert">{{ msg }}</p>
+    {% when None %}{% endmatch %}
+
+    {% if header.role.is_broker() %}
+    <section class="panel" aria-labelledby="brokerage-settings-heading">
+        <h2 id="brokerage-settings-heading">Brokerage details</h2>
+        <p class="panel-lede">
+            This name appears on your exports and on the manifest an auditor reads,
+            so it is worth getting exactly right.
+        </p>
+        <form method="post" action="/app/team/settings" class="brokerage-settings-form">
+            <label>
+                <span>Brokerage name</span>
+                <input type="text" name="name" required maxlength="160"
+                       value="{{ brokerage_name }}">
+            </label>
+            <label>
+                <span>City</span>
+                <input type="text" name="city" maxlength="120" value="{{ brokerage_city }}">
+            </label>
+            <label>
+                <span>State</span>
+                <input type="text" name="state" maxlength="40" size="4"
+                       value="{{ brokerage_state }}">
+            </label>
+            <button type="submit" class="btn">Save details</button>
+        </form>
+    </section>
+    {% endif %}
+
     <section class="panel" aria-labelledby="invite-heading">
         <h2 id="invite-heading">Invite a teammate</h2>
         <form method="post" action="/app/team/invite" class="filter-bar">

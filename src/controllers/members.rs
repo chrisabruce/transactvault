@@ -19,24 +19,63 @@ use crate::templates::{
     AuditRowsFragment, BrokerageAuditPage, BrokerageDeletePage, Member, TeamPage,
 };
 
+#[derive(Debug, Deserialize)]
+pub struct TeamQuery {
+    #[serde(default)]
+    pub flash: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
 pub async fn list(
     State(state): State<AppState>,
     user: CurrentUser,
+    axum::extract::Query(q): axum::extract::Query<TeamQuery>,
 ) -> Result<Html<String>, AppError> {
-    let members = load_members(&state, &user).await?;
-    let pending = load_pending_invitations(&state, &user).await?;
-
-    let header = crate::controllers::common::build_app_header(&state, &user, "team").await;
+    let page = team_page(&state, &user, InviteOutcome::default()).await?;
     render(&TeamPage {
+        settings_flash: settings_flash(q.flash.as_deref()),
+        settings_error: settings_error(q.error.as_deref()),
+        ..page
+    })
+}
+
+/// The three invite-flow fields that differ between renders of the team
+/// page. Everything else is loaded the same way every time.
+#[derive(Default)]
+pub struct InviteOutcome<'a> {
+    pub error: Option<&'a str>,
+    pub link: Option<String>,
+    pub notice: Option<String>,
+}
+
+/// Assemble the team page. Extracted because five call sites were each
+/// re-listing every field, so adding one (the brokerage settings form)
+/// meant touching all five and getting it right five times.
+async fn team_page<'a>(
+    state: &'a AppState,
+    user: &CurrentUser,
+    invite: InviteOutcome<'a>,
+) -> Result<TeamPage<'a>, AppError> {
+    let brokerage: Option<crate::models::Brokerage> =
+        state.db.select(user.brokerage_id.clone()).await?;
+    let brokerage = brokerage.ok_or(AppError::NotFound)?;
+    let header = crate::controllers::common::build_app_header(state, user, "team").await;
+    Ok(TeamPage {
         app_name: &state.config.app_name,
         base_url: &state.config.base_url,
         signed_in: true,
         header,
-        members,
-        pending,
-        invite_error: None,
-        invite_link: None,
-        invite_notice: None,
+        members: load_members(state, user).await?,
+        pending: load_pending_invitations(state, user).await?,
+        invite_error: invite.error,
+        invite_link: invite.link,
+        invite_notice: invite.notice,
+        brokerage_name: brokerage.name.clone(),
+        brokerage_city: brokerage.city.clone().unwrap_or_default(),
+        brokerage_state: brokerage.state.clone(),
+        settings_flash: None,
+        settings_error: None,
     })
 }
 
@@ -56,8 +95,6 @@ pub async fn invite(
     }
 
     let brokerage = load_brokerage(&state, &user).await?;
-    let header = crate::controllers::common::build_app_header(&state, &user, "team").await;
-
     // Throttle invites per brokerage. The field accepts a
     // comma-separated list with no cap, so one compromised broker
     // account was an unlimited email relay through our Postmark server
@@ -65,35 +102,30 @@ pub async fn invite(
     // 15 minutes is far above real onboarding use.
     let rate_key = format!("invite:{}", crate::db::record_key(&user.brokerage_id));
     if !crate::security::allow_per_quarter_hour(&state.rate_limiter, &rate_key, 20) {
-        return render(&TeamPage {
-            app_name: &state.config.app_name,
-            base_url: &state.config.base_url,
-            signed_in: true,
-            header,
-            members: load_members(&state, &user).await?,
-            pending: load_pending_invitations(&state, &user).await?,
-            invite_error: Some(
+        return render(&team_page(&state, &user, InviteOutcome {
+                error: Some(
                 "That's a lot of invitations at once — wait a few minutes and send the rest.",
             ),
-            invite_link: None,
-            invite_notice: None,
-        });
+                link: None,
+                notice: None,
+            }).await?);
     }
 
     let role = match input.role.as_str() {
         "broker" | "agent" | "coordinator" => input.role,
         _ => {
-            return render(&TeamPage {
-                app_name: &state.config.app_name,
-                base_url: &state.config.base_url,
-                signed_in: true,
-                header,
-                members: load_members(&state, &user).await?,
-                pending: load_pending_invitations(&state, &user).await?,
-                invite_error: Some("Role must be broker, agent, or coordinator."),
-                invite_link: None,
-                invite_notice: None,
-            });
+            return render(
+                &team_page(
+                    &state,
+                    &user,
+                    InviteOutcome {
+                        error: Some("Role must be broker, agent, or coordinator."),
+                        link: None,
+                        notice: None,
+                    },
+                )
+                .await?,
+            );
         }
     };
 
@@ -114,17 +146,18 @@ pub async fn invite(
         .partition(|e| e.contains('@') && e.len() >= 3);
 
     if valid.is_empty() {
-        return render(&TeamPage {
-            app_name: &state.config.app_name,
-            base_url: &state.config.base_url,
-            signed_in: true,
-            header,
-            members: load_members(&state, &user).await?,
-            pending: load_pending_invitations(&state, &user).await?,
-            invite_error: Some("Please enter at least one valid email address."),
-            invite_link: None,
-            invite_notice: None,
-        });
+        return render(
+            &team_page(
+                &state,
+                &user,
+                InviteOutcome {
+                    error: Some("Please enter at least one valid email address."),
+                    link: None,
+                    notice: None,
+                },
+            )
+            .await?,
+        );
     }
 
     // Block invites for emails already attached to a brokerage — option A
@@ -197,17 +230,18 @@ pub async fn invite(
         } else {
             parts.join(" ")
         };
-        return render(&TeamPage {
-            app_name: &state.config.app_name,
-            base_url: &state.config.base_url,
-            signed_in: true,
-            header,
-            members: load_members(&state, &user).await?,
-            pending: load_pending_invitations(&state, &user).await?,
-            invite_error: None,
-            invite_link: None,
-            invite_notice: Some(msg),
-        });
+        return render(
+            &team_page(
+                &state,
+                &user,
+                InviteOutcome {
+                    error: None,
+                    link: None,
+                    notice: Some(msg),
+                },
+            )
+            .await?,
+        );
     }
 
     // Send an invite per remaining address. Each call creates the
@@ -265,17 +299,18 @@ pub async fn invite(
         Some(notice_parts.join(" "))
     };
 
-    render(&TeamPage {
-        app_name: &state.config.app_name,
-        base_url: &state.config.base_url,
-        signed_in: true,
-        header,
-        members: load_members(&state, &user).await?,
-        pending: load_pending_invitations(&state, &user).await?,
-        invite_error: None,
-        invite_link,
-        invite_notice,
-    })
+    render(
+        &team_page(
+            &state,
+            &user,
+            InviteOutcome {
+                error: None,
+                link: invite_link,
+                notice: invite_notice,
+            },
+        )
+        .await?,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1125,4 +1160,96 @@ pub(crate) async fn purge_brokerage(
         .await?;
 
     Ok(summary)
+}
+
+/// Fixed messages for the settings form outcomes.
+pub fn settings_flash(code: Option<&str>) -> Option<&'static str> {
+    match code? {
+        "settings_saved" => Some("Brokerage details saved."),
+        _ => None,
+    }
+}
+
+pub fn settings_error(code: Option<&str>) -> Option<&'static str> {
+    match code? {
+        "name_required" => Some("The brokerage needs a name."),
+        "unsafe_text" => Some(
+            "Those details contain characters we can't store. Remove any unusual symbols and save again.",
+        ),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BrokerageSettingsForm {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub city: String,
+    #[serde(default)]
+    pub state: String,
+}
+
+/// `POST /app/team/settings` — the broker edits their brokerage's
+/// details.
+///
+/// Broker-only: the name appears on every export manifest and in the
+/// Stripe customer record, so it is not something an agent should be
+/// able to change.
+pub async fn update_brokerage(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Form(form): Form<BrokerageSettingsForm>,
+) -> Result<Response, AppError> {
+    if !user.role.is_broker() {
+        return Err(AppError::Forbidden);
+    }
+
+    let name = form.name.trim();
+    if name.is_empty() {
+        return Ok(Redirect::to("/app/team?error=name_required").into_response());
+    }
+    // Same rule as every other name we store: invisible and
+    // direction-reversing characters are refused rather than scrubbed,
+    // because this string flows into export manifests and emails where
+    // it must read as what was typed.
+    if crate::sanitize::has_unsafe_text(name)
+        || crate::sanitize::has_unsafe_text(form.city.trim())
+        || crate::sanitize::has_unsafe_text(form.state.trim())
+    {
+        return Ok(Redirect::to("/app/team?error=unsafe_text").into_response());
+    }
+
+    let city = form.city.trim();
+    let city = (!city.is_empty()).then(|| crate::sanitize::scrub_line(city, 120));
+    // Two-letter code, upper-cased. Anything longer is almost certainly
+    // a full state name, which still stores fine.
+    let state_code = crate::sanitize::scrub_line(form.state.trim(), 40).to_uppercase();
+    let state_code = if state_code.is_empty() {
+        "CA".to_string()
+    } else {
+        state_code
+    };
+
+    state
+        .db
+        .query("UPDATE $b SET name = $name, city = $city, state = $state, updated_at = time::now()")
+        .bind(("b", user.brokerage_id.clone()))
+        .bind(("name", crate::sanitize::scrub_line(name, 160)))
+        .bind(("city", city))
+        .bind(("state", state_code))
+        .await?;
+
+    crate::audit::record(
+        &state.db,
+        "brokerage_updated",
+        Some(user.user_id.clone()),
+        Some(user.email.clone()),
+        None,
+        None,
+        Some(format!("name=\"{name}\"")),
+    )
+    .await;
+
+    Ok(Redirect::to("/app/team?flash=settings_saved").into_response())
 }

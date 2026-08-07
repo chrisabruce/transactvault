@@ -1081,6 +1081,11 @@ pub async fn create(
         .bind(("u", user.user_id.clone()))
         .await?;
 
+    // First transaction starts the card-free trial. Deliberately here
+    // rather than at signup: an account that signs up, looks around and
+    // comes back next week should still get its full trial.
+    crate::billing::start_trial_if_first_use(&state, &user.brokerage_id).await;
+
     seed_default_checklist(
         &state,
         &tx.id,

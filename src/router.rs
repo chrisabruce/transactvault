@@ -135,6 +135,7 @@ pub fn build(state: AppState) -> Router {
             "/app/exports/{job}/chunks/{chunk}/download",
             get(exports::download_chunk),
         )
+        .route("/app/team/settings", post(members::update_brokerage))
         .route("/app/team/invite", post(members::invite))
         .route(
             "/app/team/invite/{token}/resend",

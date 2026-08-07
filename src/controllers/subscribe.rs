@@ -186,7 +186,11 @@ pub async fn subscribe(
         .create_subscription_checkout(
             &customer_id,
             price_id,
-            state.config.stripe.trial_days,
+            // Only whatever is LEFT of the card-free trial, so the total
+            // free period stays the advertised length. Handing over a
+            // fresh 14 days here would silently give 28 to anyone who
+            // tried the product first.
+            remaining_trial_days(&state, &brokerage),
             &success_url,
             &cancel_url,
             &brokerage_key,
@@ -285,4 +289,24 @@ pub async fn portal(
         .map_err(|e| AppError::Internal(e.context("create_portal_session")))?;
 
     Ok(Redirect::to(&url).into_response())
+}
+
+/// Days of Stripe trial to grant at Checkout.
+///
+/// The brokerage has usually already spent part (or all) of its
+/// card-free trial by the time it subscribes, so Stripe gets only the
+/// remainder. A brokerage that never created a transaction still gets
+/// the full period; one whose trial has run out gets none, and is
+/// charged at the end of the first billing cycle as normal.
+fn remaining_trial_days(state: &AppState, brokerage: &Brokerage) -> u32 {
+    let configured = state.config.stripe.trial_days;
+    match crate::billing::trial_state(brokerage, state.config.trial_days) {
+        crate::billing::TrialState::NotStarted => configured,
+        // `days_left` floors, so add the part-day back: someone with 3.5
+        // days left should not be handed 3.
+        crate::billing::TrialState::Active { days_left } => {
+            ((days_left + 1) as u32).min(configured)
+        }
+        crate::billing::TrialState::Expired => 0,
+    }
 }
