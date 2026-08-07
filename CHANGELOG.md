@@ -8,7 +8,7 @@ the bottom-right of every page.
 
 ## August 2026
 
-### v0.15.0: A checkout page that shows one thing
+### v0.15.1: A checkout page that shows one thing
 
 - **The payment page now lists just the plan you picked.** It used to
   show the plan twice, once for the monthly price and again for
