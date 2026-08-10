@@ -8,6 +8,12 @@ the bottom-right of every page.
 
 ## August 2026
 
+### v0.16.4: The homepage loads quicker
+
+- **The testimonial photos and logos are a quarter of their old weight.**
+  Same pictures, same look, far fewer bytes, so the section appears
+  right away instead of trickling in on slower connections.
+
 ### v0.16.3: Brokerage logos you can actually read
 
 - **The logos beside the testimonials are bigger and clearer.** They
