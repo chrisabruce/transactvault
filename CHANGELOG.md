@@ -8,6 +8,17 @@ the bottom-right of every page.
 
 ## August 2026
 
+### v0.16.2: A fresh coat on the homepage
+
+- **New artwork in the "why brokerages switch" section.** The eight
+  benefit cards now carry proper icons instead of typographic symbols.
+
+- **Sharper faces, and brokerage marks.** The testimonial photos were
+  re-cut from the designed originals, and each person's brokerage now
+  shows as a small, quiet logo beside their name. The logos sit in
+  gray so they don't shout, and take their real colors when you rest
+  on a card. Jason's and Glenda's quotes traded places.
+
 ### v0.16.1: The payment page states what you get
 
 - **Checkout now shows the transaction allowance and the overage rate.**

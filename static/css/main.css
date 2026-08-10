@@ -400,6 +400,11 @@ a.btn {
     font-weight: 700;
     margin-bottom: var(--sp-4);
 }
+.benefit-card .badge img {
+    width: 1.4rem;
+    height: 1.4rem;
+    display: block;
+}
 
 .compare-strip {
     background: var(--color-ink);
@@ -483,10 +488,13 @@ a.btn {
 .testimonial figcaption {
     display: flex;
     align-items: center;
+    /* Wrap so the brokerage mark drops below on narrow cards instead of
+       squeezing the name. */
+    flex-wrap: wrap;
     gap: var(--sp-3);
     padding-inline-start: var(--sp-3);
 }
-.testimonial figcaption img {
+.testimonial .testimonial-avatar {
     width: 3.5rem;
     height: 3.5rem;
     border-radius: 50%;
@@ -494,6 +502,25 @@ a.btn {
     border: 2px solid var(--color-surface);
     box-shadow: var(--shadow);
     background: var(--color-surface);
+}
+/* Brokerage mark: right-aligned, small, and deliberately quiet. The
+   grayscale + multiply treatment mutes three loud brand palettes into
+   the page's own tones (multiply also makes baked-in white backgrounds
+   vanish on our light page), and the card hover restores the real
+   colors as a small reward for attention. */
+.testimonial .testimonial-logo {
+    margin-inline-start: auto;
+    height: 22px;
+    width: auto;
+    align-self: center;
+    filter: grayscale(1);
+    opacity: 0.5;
+    mix-blend-mode: multiply;
+    transition: filter var(--transition), opacity var(--transition);
+}
+.testimonial:hover .testimonial-logo {
+    filter: grayscale(0);
+    opacity: 0.9;
 }
 .testimonial cite {
     font-style: normal;
