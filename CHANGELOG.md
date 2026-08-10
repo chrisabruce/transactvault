@@ -8,6 +8,12 @@ the bottom-right of every page.
 
 ## August 2026
 
+### v0.16.3: Brokerage logos you can actually read
+
+- **The logos beside the testimonials are bigger and clearer.** They
+  were a touch too shy at their first size. Still quiet and gray until
+  you rest on a card, just no longer squinting material.
+
 ### v0.16.2: A fresh coat on the homepage
 
 - **New artwork in the "why brokerages switch" section.** The eight

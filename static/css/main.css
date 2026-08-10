@@ -510,23 +510,27 @@ a.btn {
    colors as a small reward for attention. */
 .testimonial .testimonial-logo {
     margin-inline-start: auto;
-    height: 22px;
+    height: 32px;
     width: auto;
     align-self: center;
     filter: grayscale(1);
-    opacity: 0.5;
+    opacity: 0.75;
     mix-blend-mode: multiply;
     transition: filter var(--transition), opacity var(--transition);
 }
 .testimonial:hover .testimonial-logo {
     filter: grayscale(0);
-    opacity: 0.9;
+    opacity: 1;
 }
 .testimonial cite {
     font-style: normal;
     color: var(--color-muted);
     font-size: var(--fs-sm);
     line-height: 1.35;
+    /* Take the middle of the row and wrap long role titles internally,
+       so a wide logo can never push itself onto its own line. */
+    flex: 1;
+    min-width: 0;
 }
 .testimonial cite strong { color: var(--color-ink); display: block; }
 /* Role and brokerage each get their own line — a name, what they do,
