@@ -144,6 +144,13 @@ costs $0 today — Checkout validates the card without charging it.
   it out.
 - `invoice.payment_failed` → the broker sees the red banner; Smart Retries
   usually clears it without you doing anything.
+- If the app and Stripe ever disagree about a subscription (the classic
+  sign is the green trial banner still showing after the first charge),
+  the app re-reads Stripe on its own once the mirrored dates have passed,
+  on the next page anyone from that brokerage opens. To force it now:
+  Admin → Brokerages → the brokerage → Sync from Stripe. A row still at
+  `(none)` with a Stripe Customer set means both the Checkout return and
+  the webhook were missed; the button fixes that case too.
 - Overage billing: metered usage the app reports shows up on the upcoming
   invoice line for the overage price — glance at the first over-limit
   brokerage's invoice to see it flowing.
@@ -160,5 +167,6 @@ costs $0 today — Checkout validates the card without charging it.
 | Trial length | `STRIPE_TRIAL_DAYS` env (default 14) |
 | Tier ↔ Stripe linkage | Admin → Tiers (+ Re-link button) |
 | Comp access (skip billing) | Admin → Brokerages |
+| Force a subscription resync | Admin → Brokerages → brokerage → Sync from Stripe |
 | Rejected webhook diagnostics | Admin → Errors |
 | Webhook endpoint | `POST /webhooks/stripe`, signature-verified |

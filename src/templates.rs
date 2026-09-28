@@ -1158,6 +1158,11 @@ pub struct AdminBrokerageDetailPage<'a> {
     pub base_url: &'a str,
     pub signed_in: bool,
     pub header: AppHeader,
+    /// Outcome of the last admin action on this page (Sync from
+    /// Stripe), carried as a `?flash=` / `?error=` code and resolved
+    /// through `admin_flash` / `admin_error`.
+    pub flash: Option<&'static str>,
+    pub error: Option<&'static str>,
     pub brokerage_key: String,
     pub brokerage_name: String,
     pub plan_slug: String,

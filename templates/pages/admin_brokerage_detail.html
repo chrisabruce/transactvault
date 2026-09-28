@@ -29,6 +29,13 @@
         </nav>
     </header>
 
+    {% match flash %}{% when Some with (msg) %}
+        <p class="alert success" role="status">{{ msg }}</p>
+    {% when None %}{% endmatch %}
+    {% match error %}{% when Some with (msg) %}
+        <p class="alert error" role="alert">{{ msg }}</p>
+    {% when None %}{% endmatch %}
+
     <section class="panel">
         <h2>Account</h2>
         <dl class="kv-list">
@@ -80,6 +87,17 @@
             <dt>Cancel at</dt><dd>{% match cancel_at_display %}{% when Some with (d) %}{{ d }}{% when None %}—{% endmatch %}</dd>
             <dt>Wind-down purge at</dt><dd>{% match wind_down_purge_at_display %}{% when Some with (d) %}{{ d }}{% when None %}—{% endmatch %}</dd>
         </dl>
+        {% if stripe_customer_id.is_some() %}
+            <p>
+                The status and dates above are a copy of what Stripe last told us.
+                The app refreshes them by itself once those dates have passed, but
+                if a broker reports a trial banner that outlived their first charge,
+                or the row still says none after they paid, sync it now.
+            </p>
+            <form method="post" action="/admin/brokerages/{{ brokerage_key }}/resync" class="inline-form">
+                <button type="submit" class="btn small secondary">Sync from Stripe</button>
+            </form>
+        {% endif %}
     </section>
 
     <section class="panel">

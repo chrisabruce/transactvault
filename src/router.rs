@@ -181,6 +181,7 @@ pub fn build(state: AppState) -> Router {
             get(subscribe::review).post(subscribe::subscribe),
         )
         .route("/app/billing/portal", get(subscribe::portal))
+        .route("/app/billing/return", get(subscribe::portal_return))
         .route("/app/no-brokerage", get(orphan::landing))
         .route("/app/invites/{token}/accept", post(orphan::accept))
         .route("/app/invites/{token}/decline", post(orphan::decline))
@@ -202,6 +203,10 @@ pub fn build(state: AppState) -> Router {
         .route(
             "/admin/brokerages/{key}/comp",
             post(admin::toggle_brokerage_comp),
+        )
+        .route(
+            "/admin/brokerages/{key}/resync",
+            post(admin::resync_brokerage_subscription),
         )
         .route("/admin/tiers", get(tiers::list))
         .route("/admin/tiers/relink", post(tiers::relink_stripe))

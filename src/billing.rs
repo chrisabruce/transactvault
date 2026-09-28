@@ -15,8 +15,14 @@
 //!    name + the optional in-app banner that explains "you're in
 //!    canceling / wind_down / past_due"). The two halves use the same
 //!    data shape so they can't drift.
+//!
+//! Both read the brokerage row's *mirror* of the Stripe subscription.
+//! [`apply_subscription`] is the one writer of that mirror, whether the
+//! news arrives by webhook, by the browser returning from Checkout or
+//! the customer portal, or by [`resync_from_stripe`] noticing the
+//! mirrored dates have passed and asking Stripe directly.
 
-use chrono::{Datelike, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Utc};
 
 use crate::auth::{CurrentUser, Role};
 use crate::error::AppError;
@@ -73,12 +79,35 @@ pub async fn header_info_for_user(state: &AppState, user: &CurrentUser) -> Heade
         .await
         .ok()
         .flatten();
-    match brokerage {
-        Some(b) => HeaderInfo {
-            brokerage_name: b.name.clone(),
-            banner: banner_for(&b, user.role, state.config.trial_days),
-        },
-        None => HeaderInfo::default(),
+    let Some(mut b) = brokerage else {
+        return HeaderInfo::default();
+    };
+
+    // Self-heal a mirror the webhook has left behind. After Checkout the
+    // webhook is normally the only thing that updates the row, so one
+    // lost delivery (secret rolled, endpoint not subscribed to
+    // `customer.subscription.updated`, app down past Stripe's retry
+    // window) left it saying `trialing` after the card was charged, and
+    // every page told a paying customer their free trial "ends today".
+    // Stripe's own dates say when the local state can no longer be
+    // right; re-read it then and render from the fresh row. Anything
+    // short of a successful sync falls through to the stale row, which
+    // `build_banner` treats conservatively.
+    if subscription_looks_stale(&b, Utc::now()) {
+        match resync_from_stripe(state, &b, "stale-mirror").await {
+            Ok(Some(fresh)) => b = fresh,
+            Ok(None) => {}
+            Err(e) => tracing::warn!(
+                error = %e,
+                brokerage = %crate::db::record_key(&b.id),
+                "could not refresh stale subscription state from Stripe"
+            ),
+        }
+    }
+
+    HeaderInfo {
+        brokerage_name: b.name.clone(),
+        banner: banner_for(&b, user.role, state.config.trial_days),
     }
 }
 
@@ -263,6 +292,167 @@ pub async fn start_trial_if_first_use(state: &AppState, brokerage_id: &surrealdb
     }
 }
 
+// ---------------------------------------------------------------------------
+// Stripe → brokerage row
+// ---------------------------------------------------------------------------
+
+/// Grace period after the paid window ends before the brokerage is
+/// flagged for admin-driven purge. Matches the product spec.
+pub const WIND_DOWN_DAYS: i64 = 60;
+
+/// Write a Stripe subscription's state onto the owning brokerage row.
+///
+/// The single writer of the subscription mirror. Called by the webhook,
+/// by the post-Checkout and post-portal returns (which reconcile
+/// immediately rather than waiting for the webhook to land — otherwise
+/// the page Stripe redirects to still renders the "pick a plan" banner,
+/// because the event usually arrives a moment *after* the browser
+/// does), and by [`resync_from_stripe`]. `source` only feeds the log
+/// line, so a state change can be traced back to whichever path made it.
+pub async fn apply_subscription(
+    state: &AppState,
+    sub: &stripe::Subscription,
+    deleted: bool,
+    source: &str,
+) -> anyhow::Result<()> {
+    let customer_id = sub.customer.id().to_string();
+
+    // Decide on the local state. Order matters: a `deleted` event
+    // ALWAYS wins (Stripe fires it when the paid window finally ends),
+    // followed by an active cancel-at-period-end flag, followed by
+    // the raw status enum.
+    let now = Utc::now();
+    let (status, current_period_end, cancel_at, wind_down_purge_at) = if deleted
+        || sub.status == stripe::SubscriptionStatus::Canceled
+    {
+        let purge = Some(now + Duration::days(WIND_DOWN_DAYS));
+        ("wind_down", None, None, purge)
+    } else if sub.cancel_at_period_end {
+        let cpe = ts_to_dt(sub.current_period_end);
+        let ca = sub.cancel_at.and_then(ts_to_dt).or(cpe);
+        ("canceling", cpe, ca, None)
+    } else {
+        let cpe = ts_to_dt(sub.current_period_end);
+        let local = match sub.status {
+            stripe::SubscriptionStatus::Active => "active",
+            stripe::SubscriptionStatus::Trialing => "trialing",
+            stripe::SubscriptionStatus::PastDue | stripe::SubscriptionStatus::Unpaid => "past_due",
+            stripe::SubscriptionStatus::Incomplete
+            | stripe::SubscriptionStatus::IncompleteExpired => "incomplete",
+            stripe::SubscriptionStatus::Paused => "paused",
+            // Handled above; left exhaustive for safety.
+            stripe::SubscriptionStatus::Canceled => "wind_down",
+        };
+        (local, cpe, None, None)
+    };
+
+    let Some(brokerage) = find_brokerage_by_customer(state, &customer_id).await? else {
+        tracing::warn!(
+            customer = %customer_id,
+            source = %source,
+            "Stripe subscription matched no brokerage row"
+        );
+        return Ok(());
+    };
+
+    state
+        .db
+        .query(
+            "UPDATE $id SET
+                stripe_subscription_id = $sid,
+                subscription_status    = $status,
+                current_period_end     = $cpe,
+                cancel_at              = $cancel,
+                wind_down_purge_at     = $purge",
+        )
+        .bind(("id", brokerage.id.clone()))
+        .bind(("sid", sub.id.to_string()))
+        .bind(("status", status.to_string()))
+        .bind(("cpe", current_period_end))
+        .bind(("cancel", cancel_at))
+        .bind(("purge", wind_down_purge_at))
+        .await?;
+
+    tracing::info!(
+        customer = %customer_id,
+        source = %source,
+        status = %status,
+        "Brokerage subscription state updated from Stripe"
+    );
+    Ok(())
+}
+
+pub(crate) async fn find_brokerage_by_customer(
+    state: &AppState,
+    customer_id: &str,
+) -> anyhow::Result<Option<Brokerage>> {
+    let mut q = state
+        .db
+        .query("SELECT * FROM brokerage WHERE stripe_customer_id = $cid LIMIT 1")
+        .bind(("cid", customer_id.to_string()))
+        .await?;
+    let row: Option<Brokerage> = q.take(0)?;
+    Ok(row)
+}
+
+pub(crate) fn ts_to_dt(ts: stripe::Timestamp) -> Option<DateTime<Utc>> {
+    Utc.timestamp_opt(ts, 0).single()
+}
+
+/// Does Stripe's own clock say the mirrored state can't still be current?
+///
+/// The mirror is written from events, so a lost delivery leaves it
+/// frozen at whatever the last event said. Three of the states carry a
+/// date after which Stripe is guaranteed to have moved on:
+///
+/// - `trialing` ends at `current_period_end`; the card is then charged
+///   (`active`) or isn't (`past_due`).
+/// - `canceling` completes at `cancel_at` (or the period end), after
+///   which Stripe has deleted the subscription (`wind_down`).
+/// - `active` renews at `current_period_end`, which the renewal event
+///   pushes a cycle forward. A day of grace covers invoice settlement
+///   and webhook retries before a missed renewal counts as stale.
+///
+/// A row past one of those dates is worth one call to Stripe. The other
+/// states have no date to compare against, so they are left to the
+/// webhook and the admin "Sync from Stripe" button.
+pub fn subscription_looks_stale(b: &Brokerage, now: DateTime<Utc>) -> bool {
+    match b.subscription_status.as_deref() {
+        Some("trialing") => b.current_period_end.is_some_and(|end| end < now),
+        Some("canceling") => b
+            .cancel_at
+            .or(b.current_period_end)
+            .is_some_and(|end| end < now),
+        Some("active") => b
+            .current_period_end
+            .is_some_and(|end| end + Duration::days(1) < now),
+        _ => false,
+    }
+}
+
+/// Re-read the brokerage's newest subscription from Stripe and mirror it.
+///
+/// Returns the refreshed row when something was applied. `Ok(None)`
+/// means there was nothing to apply: Stripe is disabled, the brokerage
+/// has no Customer yet, or the Customer has no subscription (Checkout
+/// abandoned before paying). Errors are Stripe or database failures and
+/// are the caller's to log; nothing is written on the way to one.
+pub async fn resync_from_stripe(
+    state: &AppState,
+    b: &Brokerage,
+    source: &str,
+) -> anyhow::Result<Option<Brokerage>> {
+    let Some(customer_id) = b.stripe_customer_id.as_deref().filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    let Some(sub) = state.stripe.latest_subscription(customer_id).await? else {
+        return Ok(None);
+    };
+    apply_subscription(state, &sub, false, source).await?;
+    let fresh: Option<Brokerage> = state.db.select(b.id.clone()).await?;
+    Ok(fresh)
+}
+
 /// Gate predicate enforced at the top of every write request under
 /// `/app/*`. Wired into [`CurrentUser::from_request_parts`] so handlers
 /// don't have to remember to call it.
@@ -362,24 +552,35 @@ fn build_banner(b: &Brokerage, role: Role, trial_days: u32) -> Option<Subscripti
         // us.
         Some("trialing") => {
             let now = Utc::now();
-            let (days_left, on_date) = match b.current_period_end {
+            let message = match b.current_period_end {
+                // Past the end date the trial is over whatever the mirror
+                // says: Stripe has charged the card (active) or failed to
+                // (past_due), and the event saying which hasn't reached
+                // us. This used to clamp the countdown at zero, which read
+                // "your free trial ends today" to a paying customer for as
+                // long as the row stayed stale. Say nothing instead; the
+                // resync in `header_info_for_user` normally repairs the row
+                // before this arm is reached.
+                Some(end) if end < now => None,
                 Some(end) => {
-                    let diff = end.signed_duration_since(now).num_days().max(0);
-                    (Some(diff), Some(end.format("%B %-d").to_string()))
+                    let n = end.signed_duration_since(now).num_days();
+                    let date = end.format("%B %-d").to_string();
+                    Some(if n == 0 {
+                        format!(
+                            "Your free trial ends today ({date}). Your card will be charged for the first paid month."
+                        )
+                    } else {
+                        format!(
+                            "Free trial: {n} day{plural} left. Your first charge is on {date}.",
+                            plural = if n == 1 { "" } else { "s" }
+                        )
+                    })
                 }
-                None => (None, None),
-            };
-            let message = match (days_left, on_date) {
-                (Some(0), Some(date)) => format!(
-                    "Your free trial ends today ({date}). Your card will be charged for the first paid month."
+                None => Some(
+                    "You're on a free trial. We'll email you before the first charge.".to_string(),
                 ),
-                (Some(n), Some(date)) => format!(
-                    "Free trial — {n} day{plural} left (charges start {date}).",
-                    plural = if n == 1 { "" } else { "s" }
-                ),
-                _ => "You're on a free trial. We'll email you before the first charge.".into(),
             };
-            Some(SubscriptionBanner {
+            message.map(|message| SubscriptionBanner {
                 level: BannerLevel::Info,
                 message,
                 action_label: Some("Manage subscription"),
@@ -424,7 +625,7 @@ fn build_banner(b: &Brokerage, role: Role, trial_days: u32) -> Option<Subscripti
                         .into()
                 }
                 Some(n) => format!(
-                    "Subscription ended. Read-only — data will be purged in {n} day{plural}. Resubscribe to keep your file history.",
+                    "Subscription ended. The account is read-only, and its data will be purged in {n} day{plural}. Resubscribe to keep your file history.",
                     plural = if n == 1 { "" } else { "s" }
                 ),
                 None => "Subscription ended. This brokerage is in read-only mode.".into(),
@@ -617,6 +818,124 @@ mod tests {
             let banner = banner_for(&b, role, 14).expect("danger banner visible");
             assert_eq!(banner.level, BannerLevel::Danger);
         }
+    }
+
+    // ---- stale mirror + the banner after a trial has ended ----
+
+    /// Overwrite the Stripe mirror fields the way a webhook would, then
+    /// re-select: the helpers under test take a `&Brokerage`.
+    async fn set_subscription(
+        db: &Db,
+        id: &RecordId,
+        status: &str,
+        period_end: Option<chrono::DateTime<Utc>>,
+    ) -> Brokerage {
+        db.query(
+            "UPDATE $id SET subscription_status = $s, current_period_end = $e,
+             stripe_customer_id = 'cus_test'",
+        )
+        .bind(("id", id.clone()))
+        .bind(("s", status.to_string()))
+        .bind(("e", period_end))
+        .await
+        .expect("update subscription mirror");
+        fetch_brokerage(db, id).await
+    }
+
+    #[tokio::test]
+    async fn banner_trialing_counts_down_to_the_first_charge() {
+        let db = make_db().await;
+        let id = insert_brokerage(&db, "starter", Some("trialing"), false).await;
+        let b = set_subscription(
+            &db,
+            &id,
+            "trialing",
+            Some(Utc::now() + chrono::Duration::days(5)),
+        )
+        .await;
+        let banner = banner_for(&b, Role::Broker, 14).expect("countdown banner");
+        assert_eq!(banner.level, BannerLevel::Info);
+        assert!(
+            banner.message.contains("days left"),
+            "got: {}",
+            banner.message
+        );
+    }
+
+    #[tokio::test]
+    async fn banner_trialing_past_its_end_date_is_hidden() {
+        // The trial ended and the card was charged, but the event that
+        // flips the row to `active` never landed. The countdown used to
+        // clamp at zero here and tell a paying customer "your free trial
+        // ends today" on every page, indefinitely.
+        let db = make_db().await;
+        let id = insert_brokerage(&db, "starter", Some("trialing"), false).await;
+        let b = set_subscription(
+            &db,
+            &id,
+            "trialing",
+            Some(Utc::now() - chrono::Duration::days(2)),
+        )
+        .await;
+        assert!(
+            banner_for(&b, Role::Broker, 14).is_none(),
+            "a stale trial countdown must not render"
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_mirror_is_detected_from_stripe_dates() {
+        let db = make_db().await;
+        let id = insert_brokerage(&db, "starter", Some("trialing"), false).await;
+        let now = Utc::now();
+        let day = chrono::Duration::days(1);
+
+        // trialing: stale the moment the trial end passes.
+        let b = set_subscription(&db, &id, "trialing", Some(now + day)).await;
+        assert!(!subscription_looks_stale(&b, now));
+        let b = set_subscription(&db, &id, "trialing", Some(now - day)).await;
+        assert!(subscription_looks_stale(&b, now));
+
+        // active: a day of grace past the period end for the renewal
+        // event to arrive.
+        let b = set_subscription(&db, &id, "active", Some(now - chrono::Duration::hours(12))).await;
+        assert!(!subscription_looks_stale(&b, now));
+        let b = set_subscription(&db, &id, "active", Some(now - chrono::Duration::days(2))).await;
+        assert!(subscription_looks_stale(&b, now));
+
+        // canceling: stale once the scheduled end has passed.
+        let b = set_subscription(&db, &id, "canceling", Some(now - day)).await;
+        assert!(subscription_looks_stale(&b, now));
+
+        // No date to compare against, or a state with no clock: never
+        // stale, so no Stripe call on every page load.
+        let b = set_subscription(&db, &id, "trialing", None).await;
+        assert!(!subscription_looks_stale(&b, now));
+        let b = set_subscription(&db, &id, "past_due", Some(now - day)).await;
+        assert!(!subscription_looks_stale(&b, now));
+        let b = set_subscription(&db, &id, "wind_down", Some(now - day)).await;
+        assert!(!subscription_looks_stale(&b, now));
+    }
+
+    #[tokio::test]
+    async fn resync_with_stripe_disabled_leaves_the_row_alone() {
+        // Stripe is off in tests, so a stale row must survive the
+        // attempt untouched rather than erroring or being cleared.
+        let state = AppState::for_tests().await;
+        let id = insert_brokerage(&state.db, "starter", Some("trialing"), false).await;
+        let b = set_subscription(
+            &state.db,
+            &id,
+            "trialing",
+            Some(Utc::now() - chrono::Duration::days(2)),
+        )
+        .await;
+        let outcome = resync_from_stripe(&state, &b, "test")
+            .await
+            .expect("a disabled Stripe is a no-op, not an error");
+        assert!(outcome.is_none());
+        let again = fetch_brokerage(&state.db, &id).await;
+        assert_eq!(again.subscription_status.as_deref(), Some("trialing"));
     }
 
     // ---- enforce_transaction_limit ----

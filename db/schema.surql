@@ -542,7 +542,8 @@ DEFINE FIELD OVERWRITE kind ON audit_event TYPE string
         "user_deleted_by_admin", "brokerage_deleted_by_admin",
         "backup_created", "backup_deleted", "backup_restored",
         "backup_settings_changed",
-        "brokerage_updated", "trial_started"
+        "brokerage_updated", "trial_started",
+        "brokerage_subscription_synced"
     ];
 DEFINE FIELD OVERWRITE actor_email ON audit_event TYPE option<string>;
 DEFINE FIELD OVERWRITE actor       ON audit_event TYPE option<record<user>>;

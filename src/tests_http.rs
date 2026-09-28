@@ -7074,6 +7074,133 @@ async fn trial_starts_on_first_transaction_and_expires() {
     );
 }
 
+/// Overwrite the Stripe mirror fields on a brokerage the way a webhook
+/// would, and clear the comp flag `seed_brokerage` sets so the billing
+/// path actually runs.
+async fn set_stripe_mirror(
+    app: &TestApp,
+    id: &surrealdb::types::RecordId,
+    status: &str,
+    period_end: Option<chrono::DateTime<chrono::Utc>>,
+) {
+    app.state
+        .db
+        .query(
+            "UPDATE $b SET is_complimentary = false, stripe_customer_id = 'cus_test',
+             subscription_status = $s, current_period_end = $e",
+        )
+        .bind(("b", id.clone()))
+        .bind(("s", status.to_string()))
+        .bind(("e", period_end))
+        .await
+        .expect("set stripe mirror");
+}
+
+/// A paying customer must not keep seeing the trial countdown.
+///
+/// The green banner is computed from the local mirror of the Stripe
+/// subscription, and after Checkout only the webhook used to update that
+/// mirror. Lose one `customer.subscription.updated` delivery and the row
+/// says `trialing` forever, while the countdown clamped at zero: "your
+/// free trial ends today", on every page, for someone whose card was
+/// charged weeks ago. Stripe is disabled here, so this exercises the
+/// banner's own guard; the resync that normally repairs the row first is
+/// covered in `billing::tests`.
+#[tokio::test]
+async fn trial_banner_does_not_outlive_the_trial() {
+    use chrono::{Duration, Utc};
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Paid Co").await;
+    let broker = seed_user(&app.state, "broker@paid.test").await;
+    join(&app.state, &broker, &b, "broker").await;
+    let agent = seed_user(&app.state, "agent@paid.test").await;
+    join(&app.state, &agent, &b, "agent").await;
+
+    // Mid-trial: the countdown shows, and only to the broker.
+    set_stripe_mirror(&app, &b, "trialing", Some(Utc::now() + Duration::days(5))).await;
+    let (status, body) = authed_get(&app, &broker, "/app").await;
+    assert_eq!(status, StatusCode::OK);
+    let body = squash(&body);
+    assert!(
+        body.contains("app-banner info") && body.contains("days left"),
+        "broker should see the countdown mid-trial"
+    );
+    let (_, body) = authed_get(&app, &agent, "/app").await;
+    assert!(
+        !squash(&body).contains("app-banner info"),
+        "agents never see billing nudges"
+    );
+
+    // Trial over, mirror never updated: no countdown, no "ends today".
+    set_stripe_mirror(&app, &b, "trialing", Some(Utc::now() - Duration::days(3))).await;
+    let (status, body) = authed_get(&app, &broker, "/app").await;
+    assert_eq!(status, StatusCode::OK);
+    let body = squash(&body);
+    assert!(
+        !body.contains("app-banner info") && !body.contains("ends today"),
+        "stale trial countdown leaked into the page"
+    );
+}
+
+/// Coming back from the Stripe customer portal reconciles the mirror the
+/// same way the Checkout return does, so a plan change or a cancellation
+/// shows on the very next page instead of whenever the webhook lands.
+#[tokio::test]
+async fn portal_return_lands_on_the_dashboard() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    join(&app.state, &broker, &b, "broker").await;
+
+    // Stripe is disabled in tests, so the reconcile is a no-op and the
+    // handler must still redirect rather than error.
+    let (status, _) = authed_get(&app, &broker, "/app/billing/return").await;
+    assert!(
+        status.is_redirection(),
+        "portal return must redirect, got {status}"
+    );
+}
+
+/// Forcing a Stripe resync is a super-admin action, and with Stripe
+/// disabled it says so on the page instead of pretending it synced.
+#[tokio::test]
+async fn admin_resync_is_superadmin_only_and_explains_a_disabled_stripe() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let admin = seed_user(&app.state, "admin@test").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    join(&app.state, &admin, &b, "broker").await;
+    join(&app.state, &broker, &b, "broker").await;
+    let key = crate::db::record_key(&b);
+    let uri = format!("/admin/brokerages/{key}/resync");
+
+    let (status, _) = authed_post(&app, &broker, &uri, "").await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "resync must be super-admin only"
+    );
+
+    let (status, _) = authed_post(&app, &admin, &uri, "").await;
+    assert_eq!(
+        status,
+        StatusCode::SEE_OTHER,
+        "super-admin reaches the handler"
+    );
+
+    let (status, body) = authed_get(
+        &app,
+        &admin,
+        &format!("/admin/brokerages/{key}?error=stripe_disabled"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        squash(&body).contains("Stripe is not configured"),
+        "the detail page must explain why nothing happened"
+    );
+}
+
 /// Fetch a brokerage row in a test.
 async fn load_brokerage(
     app: &TestApp,

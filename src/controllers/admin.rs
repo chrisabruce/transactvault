@@ -45,6 +45,10 @@ pub fn admin_flash(code: Option<&str>) -> Option<&'static str> {
         "brokerage_deleted" => {
             Some("Brokerage deleted, along with its users, transactions, and documents.")
         }
+        "subscription_synced" => Some("Subscription state refreshed from Stripe."),
+        "subscription_unchanged" => {
+            Some("Stripe has no subscription on this brokerage's Customer, so nothing changed.")
+        }
         _ => None,
     }
 }
@@ -55,8 +59,22 @@ pub fn admin_error(code: Option<&str>) -> Option<&'static str> {
             Some("Nothing was deleted: what you typed didn't match, so we stopped.")
         }
         "self_delete" => Some("You can't delete the account you're signed in with."),
+        "no_stripe_customer" => Some(
+            "Nothing to sync: this brokerage has never started Checkout, so Stripe has no Customer for it.",
+        ),
+        "stripe_disabled" => Some("Nothing to sync: Stripe is not configured on this deployment."),
         _ => None,
     }
+}
+
+/// Query string for the brokerage detail page: just the outcome codes
+/// its own actions redirect back with.
+#[derive(Debug, Deserialize)]
+pub struct BrokerageDetailQuery {
+    #[serde(default)]
+    pub flash: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 pub async fn users(
@@ -264,6 +282,7 @@ pub async fn brokerage_detail(
     State(state): State<AppState>,
     SuperAdmin(user): SuperAdmin,
     Path(key): Path<String>,
+    Query(query): Query<BrokerageDetailQuery>,
 ) -> Result<Html<String>, AppError> {
     use chrono::{DateTime, Utc};
     use surrealdb::types::SurrealValue;
@@ -347,6 +366,8 @@ pub async fn brokerage_detail(
         base_url: &state.config.base_url,
         signed_in: true,
         header,
+        flash: admin_flash(query.flash.as_deref()),
+        error: admin_error(query.error.as_deref()),
         brokerage_key: key,
         brokerage_name: brokerage.name.clone(),
         plan_slug: brokerage.plan.clone(),
@@ -527,6 +548,7 @@ const AUDIT_KIND_OPTIONS: &[&str] = &[
     "tier_updated",
     "brokerage_comp_granted",
     "brokerage_comp_revoked",
+    "brokerage_subscription_synced",
     "error_log_cleared",
     "feedback_submitted",
     "feedback_blocked_honeypot",
@@ -631,6 +653,68 @@ pub async fn toggle_brokerage_comp(
     .await;
 
     Ok(Redirect::to("/admin/brokerages?flash=comp_toggled"))
+}
+
+/// `POST /admin/brokerages/{key}/resync` — re-read the brokerage's
+/// subscription from Stripe and overwrite the local mirror with it.
+///
+/// The row is normally kept current by the webhook, and the app
+/// re-checks Stripe by itself once the mirrored dates have passed (see
+/// [`crate::billing::subscription_looks_stale`]). This button covers
+/// what that leaves: a row still at `(none)` because both the Checkout
+/// return and the webhook were missed, or a support call where waiting
+/// for the broker's next page load is not the answer.
+pub async fn resync_brokerage_subscription(
+    State(state): State<AppState>,
+    SuperAdmin(admin): SuperAdmin,
+    Path(key): Path<String>,
+) -> Result<Redirect, AppError> {
+    let id = RecordId::new("brokerage", key.as_str());
+    let brokerage: Option<Brokerage> = state.db.select(id.clone()).await?;
+    let brokerage = brokerage.ok_or(AppError::NotFound)?;
+    let back = format!("/admin/brokerages/{key}");
+
+    if !state.stripe.is_enabled() {
+        return Ok(Redirect::to(&format!("{back}?error=stripe_disabled")));
+    }
+    if brokerage
+        .stripe_customer_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .is_none()
+    {
+        return Ok(Redirect::to(&format!("{back}?error=no_stripe_customer")));
+    }
+
+    let before = brokerage
+        .subscription_status
+        .clone()
+        .unwrap_or_else(|| "none".into());
+    let fresh = crate::billing::resync_from_stripe(&state, &brokerage, "admin-resync")
+        .await
+        .map_err(|e| AppError::Internal(e.context("resync_from_stripe")))?;
+    let Some(fresh) = fresh else {
+        return Ok(Redirect::to(&format!(
+            "{back}?flash=subscription_unchanged"
+        )));
+    };
+    let after = fresh.subscription_status.unwrap_or_else(|| "none".into());
+
+    audit::record(
+        &state.db,
+        "brokerage_subscription_synced",
+        Some(admin.user_id.clone()),
+        Some(admin.email.clone()),
+        None,
+        None,
+        Some(format!(
+            "brokerage={} ({key}): {before} -> {after}",
+            brokerage.name
+        )),
+    )
+    .await;
+
+    Ok(Redirect::to(&format!("{back}?flash=subscription_synced")))
 }
 
 /// Compile-time bundled CHANGELOG.md. Single source of truth lives at

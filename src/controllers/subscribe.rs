@@ -9,7 +9,8 @@
 //! `customer.subscription.created` on our webhook, which is the
 //! authority for subscription state from then on — but the browser
 //! comes back before that event lands, so [`checkout_return`] reconciles
-//! once, up front, and the webhook takes over afterwards.
+//! once, up front, and the webhook takes over afterwards. The customer
+//! portal gets the same treatment in [`portal_return`].
 
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Redirect, Response};
@@ -220,35 +221,48 @@ pub async fn checkout_return(
     State(state): State<AppState>,
     user: CurrentUser,
 ) -> Result<Redirect, AppError> {
-    let brokerage: Option<Brokerage> = state.db.select(user.brokerage_id.clone()).await?;
-
-    if let Some(customer_id) = brokerage.and_then(|b| b.stripe_customer_id) {
-        match state.stripe.latest_subscription(&customer_id).await {
-            Ok(Some(sub)) => {
-                if let Err(e) = crate::controllers::webhooks::apply_subscription(
-                    &state,
-                    &sub,
-                    false,
-                    "checkout-return",
-                )
-                .await
-                {
-                    tracing::warn!(error = %e, "could not apply subscription on checkout return");
-                }
-            }
-            Ok(None) => {
-                tracing::info!(
-                    customer = %customer_id,
-                    "no subscription visible yet on checkout return — leaving it to the webhook"
-                );
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "Stripe lookup failed on checkout return");
-            }
-        }
-    }
-
+    reconcile_after_stripe(&state, &user, "checkout-return").await?;
     Ok(Redirect::to("/app?flash=subscribed"))
+}
+
+/// `GET /app/billing/return` — where the Stripe customer portal sends
+/// the broker back.
+///
+/// Same reconcile as [`checkout_return`], for the same reason: a plan
+/// change or a cancellation made in the portal should be on the next
+/// page the broker sees, not on whichever page happens to load after
+/// the webhook arrives. The portal used to return straight to `/app`,
+/// which left the mirror entirely to the webhook.
+pub async fn portal_return(
+    State(state): State<AppState>,
+    user: CurrentUser,
+) -> Result<Redirect, AppError> {
+    reconcile_after_stripe(&state, &user, "portal-return").await?;
+    Ok(Redirect::to("/app"))
+}
+
+/// Best-effort sync of the caller's brokerage from Stripe on the way
+/// back from a Stripe-hosted page. A Stripe failure is logged and
+/// swallowed (the webhook still fixes the state moments later); only a
+/// database failure propagates, as it would on any page.
+async fn reconcile_after_stripe(
+    state: &AppState,
+    user: &CurrentUser,
+    source: &str,
+) -> Result<(), AppError> {
+    let brokerage: Option<Brokerage> = state.db.select(user.brokerage_id.clone()).await?;
+    let Some(brokerage) = brokerage else {
+        return Ok(());
+    };
+    match crate::billing::resync_from_stripe(state, &brokerage, source).await {
+        Ok(Some(_)) => {}
+        Ok(None) => tracing::info!(
+            source,
+            "no subscription visible on return from Stripe — leaving it to the webhook"
+        ),
+        Err(e) => tracing::warn!(error = %e, source, "Stripe lookup failed on return from Stripe"),
+    }
+    Ok(())
 }
 
 /// Open the Stripe Customer Portal so the broker can update card
@@ -281,7 +295,10 @@ pub async fn portal(
         return Ok(Redirect::to("/pricing").into_response());
     };
 
-    let return_url = format!("{}/app", state.config.base_url);
+    // Land on the reconcile route, not straight on /app, so whatever
+    // the broker just did in the portal is mirrored before the
+    // dashboard renders.
+    let return_url = format!("{}/app/billing/return", state.config.base_url);
     let url = state
         .stripe
         .create_portal_session(customer_id, &return_url)
