@@ -44,6 +44,81 @@ pub struct TierSyncResult {
     pub overage_price_id: Option<String>,
 }
 
+/// Why a webhook delivery was refused. The two halves need different
+/// messages in `/admin/errors`: one means "check the signing secret",
+/// the other "Stripe sent something this app could not read", and for
+/// three weeks the second was being reported as the first.
+#[derive(Debug)]
+pub enum WebhookParseError {
+    /// The signature or its timestamp did not check out. Untrusted.
+    Signature(anyhow::Error),
+    /// Signed by Stripe, but the JSON is not an event we can route.
+    Decode(anyhow::Error),
+}
+
+impl std::fmt::Display for WebhookParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WebhookParseError::Signature(e) | WebhookParseError::Decode(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for WebhookParseError {}
+
+/// A verified webhook delivery, decoded only as far as routing needs.
+///
+/// Deliberately NOT `stripe::Event`. That model is generated against one
+/// API version (2023-10-16 for this crate, which also pins that version
+/// on every call it makes), but a webhook payload follows the
+/// *endpoint's* API version, chosen in the Dashboard when the endpoint
+/// is created and not under this code's control. The two drift: Stripe's
+/// 2025-03-31 release moved `current_period_end` off the Subscription
+/// object, and from the day the live endpoint was created on a newer
+/// version every subscription event failed to decode ("missing field
+/// `current_period_end`") and was bounced with a 400. Three weeks of
+/// trial→active transitions never reached the brokerage row, while the
+/// error log blamed the signature.
+///
+/// So an event is read for what it is (`type`) and what it is about
+/// (the object's id and customer), and nothing else. Handlers that need
+/// the object's fields fetch it through the pinned API, where the typed
+/// model is guaranteed to fit.
+#[derive(Debug, serde::Deserialize)]
+pub struct WebhookEvent {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub type_: String,
+    pub data: WebhookData,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct WebhookData {
+    pub object: serde_json::Value,
+}
+
+impl WebhookEvent {
+    /// `data.object.id`.
+    pub fn object_id(&self) -> Option<&str> {
+        self.data.object.get("id").and_then(|v| v.as_str())
+    }
+
+    /// `data.object.customer`, whether Stripe sent the bare id or an
+    /// expanded Customer object.
+    pub fn customer_id(&self) -> Option<&str> {
+        match self.data.object.get("customer")? {
+            serde_json::Value::String(s) => Some(s.as_str()),
+            serde_json::Value::Object(o) => o.get("id").and_then(|v| v.as_str()),
+            _ => None,
+        }
+    }
+
+    /// A unix-timestamp field on `data.object`, such as `trial_end`.
+    pub fn object_timestamp(&self, field: &str) -> Option<i64> {
+        self.data.object.get(field).and_then(|v| v.as_i64())
+    }
+}
+
 impl Stripe {
     pub fn new(cfg: &StripeConfig) -> Self {
         let client = if cfg.is_enabled() {
@@ -62,28 +137,38 @@ impl Stripe {
         self.client.is_some()
     }
 
-    /// Verify a webhook payload + signature against the configured
-    /// `STRIPE_WEBHOOK_SECRET` and parse it as a Stripe `Event`. The
-    /// `payload` MUST be the raw request body — re-serializing the
-    /// JSON would change the bytes and break the HMAC.
-    /// Verify a webhook delivery and decode the event.
+    /// Verify a webhook delivery against the configured
+    /// `STRIPE_WEBHOOK_SECRET` and decode it as a [`WebhookEvent`]. The
+    /// `payload` MUST be the raw request body — re-serializing the JSON
+    /// would change the bytes and break the HMAC.
     ///
     /// Implemented here rather than via `stripe::Webhook::construct_event`
-    /// because that helper parses the `Stripe-Signature` header into a
-    /// `HashMap`, so a header carrying more than one `v1=` signature
-    /// keeps only the last and silently discards the rest. Stripe sends
-    /// several signatures whenever an endpoint has more than one active
-    /// secret, which is precisely what happens while a signing secret is
-    /// being rolled. The result is "error comparing signatures" against a
-    /// completely correct secret, which sends whoever is debugging it to
-    /// check the one thing that isn't wrong.
+    /// for two reasons. First, that helper parses the `Stripe-Signature`
+    /// header into a `HashMap`, so a header carrying more than one `v1=`
+    /// signature keeps only the last and silently discards the rest.
+    /// Stripe sends several signatures whenever an endpoint has more than
+    /// one active secret, which is precisely what happens while a signing
+    /// secret is being rolled. The result is "error comparing signatures"
+    /// against a completely correct secret, which sends whoever is
+    /// debugging it to check the one thing that isn't wrong. So: accept
+    /// the delivery when ANY offered `v1` matches, which is what Stripe's
+    /// own documentation tells integrators to do.
     ///
-    /// So: accept the delivery when ANY offered `v1` matches, which is
-    /// what Stripe's own documentation tells integrators to do.
-    pub fn parse_webhook(&self, payload: &str, signature: &str) -> anyhow::Result<stripe::Event> {
-        self.verify_signature(payload, signature)?;
-        serde_json::from_str(payload)
-            .map_err(|e| anyhow::anyhow!("webhook payload not an Event: {e}"))
+    /// Second, it decodes into the crate's typed `Event`, which only fits
+    /// payloads of the API version the crate was generated for. See
+    /// [`WebhookEvent`] for why that is a trap.
+    pub fn parse_webhook(
+        &self,
+        payload: &str,
+        signature: &str,
+    ) -> Result<WebhookEvent, WebhookParseError> {
+        self.verify_signature(payload, signature)
+            .map_err(WebhookParseError::Signature)?;
+        serde_json::from_str(payload).map_err(|e| {
+            WebhookParseError::Decode(anyhow::anyhow!(
+                "webhook payload is not a Stripe event: {e}"
+            ))
+        })
     }
 
     /// Signature + replay-window check, with no dependency on the event

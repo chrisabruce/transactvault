@@ -338,12 +338,24 @@ const MAX_CONTACT_CHARS: usize = 4000;
 /// error response is a full HTML page, which is right for a navigation
 /// and useless to a fetch() — so this endpoint answers in the same JSON
 /// shape it succeeds in.
-fn contact_error(message: &str) -> Response {
-    (
+///
+/// `reason` is for `/admin/errors` only. This endpoint is open to the
+/// internet and most refusals are scripts posting straight at it, and
+/// without a reason every one of them was recorded as "(no detail —
+/// panic or framework-generated response)", indistinguishable from a
+/// crash. `message` is what the visitor reads.
+fn contact_error(reason: &str, message: &str) -> Response {
+    let mut response = (
         axum::http::StatusCode::BAD_REQUEST,
         axum::Json(serde_json::json!({ "error": message })),
     )
-        .into_response()
+        .into_response();
+    response
+        .extensions_mut()
+        .insert(crate::error::ErrorDetail(format!(
+            "contact form refused: {reason}"
+        )));
+    response
 }
 
 /// `GET /contact/token` — hand the slide-up form a signed timestamp.
@@ -359,7 +371,10 @@ pub async fn contact_token(
 ) -> Result<Response, AppError> {
     let ip = crate::security::client_ip(&headers, Some(&peer), state.config.trusted_proxy_hops);
     if !crate::security::allow_per_hour(&state.rate_limiter, &format!("contact-token:{ip}"), 30) {
-        return Ok(contact_error("Please try again in a few minutes."));
+        return Ok(contact_error(
+            "token endpoint rate limit (30 form opens per hour per IP)",
+            "Please try again in a few minutes.",
+        ));
     }
     let token = crate::security::issue_form_token(&state.config.jwt_secret)
         .map_err(|e| AppError::Internal(anyhow::anyhow!("contact token: {e}")))?;
@@ -429,6 +444,8 @@ pub async fn contact_submit(
         )
         .await;
         return Ok(contact_error(
+            "form token missing, stale, or too fresh. Scripts that POST straight at /contact \
+             without loading the page look exactly like this",
             "That form has been open a while, or was submitted too quickly. Reload the page and send it again.",
         ));
     }
@@ -445,21 +462,27 @@ pub async fn contact_submit(
         )
         .await;
         return Ok(contact_error(
+            "rate limit (5 messages per hour per IP)",
             "That's several messages in a short time. Give it a few minutes and try again.",
         ));
     }
 
     let message = form.message.trim();
     if message.is_empty() {
-        return Ok(contact_error("Add a message and send it again."));
+        return Ok(contact_error(
+            "empty message",
+            "Add a message and send it again.",
+        ));
     }
     if message.chars().count() > MAX_CONTACT_CHARS {
         return Ok(contact_error(
+            "message over the 4000-character limit",
             "That message is longer than this form takes. Send the short version and we'll follow up by email.",
         ));
     }
     if crate::sanitize::has_unsafe_text(message) {
         return Ok(contact_error(
+            "message failed the unsafe-text check",
             "The message contains characters we can't store. Remove any unusual symbols and try again.",
         ));
     }
@@ -486,11 +509,13 @@ pub async fn contact_submit(
             let email = form.email.trim().to_ascii_lowercase();
             if name.is_empty() || crate::sanitize::has_unsafe_text(name) {
                 return Ok(contact_error(
+                    "name missing or failed the unsafe-text check",
                     "Add your name so we know who we're replying to.",
                 ));
             }
             if !crate::security::looks_like_email(&email) {
                 return Ok(contact_error(
+                    "email address did not look valid",
                     "That email address doesn't look right. Check it so our reply reaches you.",
                 ));
             }

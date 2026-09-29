@@ -302,28 +302,32 @@ pub const WIND_DOWN_DAYS: i64 = 60;
 
 /// Write a Stripe subscription's state onto the owning brokerage row.
 ///
-/// The single writer of the subscription mirror. Called by the webhook,
-/// by the post-Checkout and post-portal returns (which reconcile
-/// immediately rather than waiting for the webhook to land — otherwise
-/// the page Stripe redirects to still renders the "pick a plan" banner,
-/// because the event usually arrives a moment *after* the browser
-/// does), and by [`resync_from_stripe`]. `source` only feeds the log
-/// line, so a state change can be traced back to whichever path made it.
+/// The single writer of the subscription mirror, and every caller
+/// reaches it through [`resync_from_stripe`]: the webhook, the
+/// post-Checkout and post-portal returns (which reconcile immediately
+/// rather than waiting for the webhook to land — otherwise the page
+/// Stripe redirects to still renders the "pick a plan" banner, because
+/// the event usually arrives a moment *after* the browser does), the
+/// stale-mirror check in [`header_info_for_user`], and the admin "Sync
+/// from Stripe" button. `sub` always comes from the API, never from a
+/// webhook payload (see [`crate::stripe::WebhookEvent`]). `source` only
+/// feeds the log line, so a state change can be traced back to
+/// whichever path made it.
 pub async fn apply_subscription(
     state: &AppState,
     sub: &stripe::Subscription,
-    deleted: bool,
     source: &str,
 ) -> anyhow::Result<()> {
     let customer_id = sub.customer.id().to_string();
 
-    // Decide on the local state. Order matters: a `deleted` event
-    // ALWAYS wins (Stripe fires it when the paid window finally ends),
-    // followed by an active cancel-at-period-end flag, followed by
-    // the raw status enum.
+    // Decide on the local state. Order matters: a canceled subscription
+    // ALWAYS means wind_down (Stripe marks it `canceled` when the paid
+    // window finally ends, which is also when it fires
+    // `customer.subscription.deleted`), followed by an active
+    // cancel-at-period-end flag, followed by the raw status enum.
     let now = Utc::now();
-    let (status, current_period_end, cancel_at, wind_down_purge_at) = if deleted
-        || sub.status == stripe::SubscriptionStatus::Canceled
+    let (status, current_period_end, cancel_at, wind_down_purge_at) = if sub.status
+        == stripe::SubscriptionStatus::Canceled
     {
         let purge = Some(now + Duration::days(WIND_DOWN_DAYS));
         ("wind_down", None, None, purge)
@@ -448,7 +452,7 @@ pub async fn resync_from_stripe(
     let Some(sub) = state.stripe.latest_subscription(customer_id).await? else {
         return Ok(None);
     };
-    apply_subscription(state, &sub, false, source).await?;
+    apply_subscription(state, &sub, source).await?;
     let fresh: Option<Brokerage> = state.db.select(b.id.clone()).await?;
     Ok(fresh)
 }

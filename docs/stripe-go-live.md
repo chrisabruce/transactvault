@@ -151,6 +151,14 @@ costs $0 today — Checkout validates the card without charging it.
   Admin → Brokerages → the brokerage → Sync from Stripe. A row still at
   `(none)` with a Stripe Customer set means both the Checkout return and
   the webhook were missed; the button fixes that case too.
+- The endpoint's API version (chosen when it was created) does not matter
+  to the app. It reads only the event type and the customer id off each
+  delivery and fetches the subscription through its own pinned version.
+  Before v0.16.5 it decoded the whole payload, and an endpoint on a
+  2025+ version broke every subscription event with "missing field
+  `current_period_end`", logged as a signature failure. A rejected row
+  that starts "signature OK, but..." is a payload problem, not a secret
+  problem.
 - Overage billing: metered usage the app reports shows up on the upcoming
   invoice line for the overage price — glance at the first over-limit
   brokerage's invoice to see it flowing.

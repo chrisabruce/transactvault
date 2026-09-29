@@ -11,13 +11,14 @@ the bottom-right of every page.
 ### v0.16.5: The trial banner clears once you are paying
 
 - **The green "free trial" bar no longer hangs around after your first
-  charge.** When a trial ended and the card was billed, the app could
-  keep showing the countdown ("your free trial ends today") because it
-  was waiting on a notice from Stripe that never arrived. It now checks
-  with Stripe itself once the trial date has passed, so the bar clears
-  on the next page you open. Coming back from Manage subscription runs
-  the same check, so a plan change or a cancellation shows up right
-  away too.
+  charge.** When a trial ended and the card was billed, Stripe told the
+  app so, but in a newer format than the app could read, so the notice
+  was thrown away and the countdown ("your free trial ends today") stayed
+  on every page. The app now reads those notices whatever their format,
+  and as a backstop it also checks with Stripe itself once the trial
+  date has passed, so the bar clears on the next page you open. Coming
+  back from Manage subscription runs the same check, so a plan change or
+  a cancellation shows up right away too.
 
 ## August 2026
 

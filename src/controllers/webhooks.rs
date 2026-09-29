@@ -1,8 +1,9 @@
 //! Stripe webhook receiver. Stripe POSTs subscription + invoice
 //! events here whenever the billing state changes; the handler
-//! verifies the signature, hands the new state to
-//! [`crate::billing::apply_subscription`] (which mirrors it onto the
-//! brokerage row), and returns 200 so Stripe stops retrying.
+//! verifies the signature, works out which brokerage the event
+//! concerns, mirrors that brokerage's current Stripe state onto its
+//! row (via [`crate::billing::resync_from_stripe`]), and returns 200
+//! so Stripe stops retrying.
 //!
 //! Lookup strategy: we never trust the path or any non-signed field
 //! to identify the brokerage — we route purely by
@@ -12,6 +13,13 @@
 //! as a no-op (200 OK) — usually means the event is for a Stripe
 //! object we don't own (e.g. a test webhook fired against the wrong
 //! environment).
+//!
+//! Deliveries are decoded only as far as routing needs (see
+//! [`crate::stripe::WebhookEvent`] for why the typed `stripe::Event` is
+//! the wrong tool), and a subscription event is treated as a nudge to
+//! re-read the customer's newest subscription through the API rather
+//! than as the data itself. That makes the handler indifferent to the
+//! endpoint's API version and to delivery order.
 //!
 //! The webhook is no longer the only way the mirror gets updated: the
 //! browser returning from Checkout or the customer portal syncs once up
@@ -25,8 +33,9 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 
-use crate::billing::{apply_subscription, find_brokerage_by_customer, ts_to_dt};
+use crate::billing::{find_brokerage_by_customer, resync_from_stripe, ts_to_dt};
 use crate::state::AppState;
+use crate::stripe::{WebhookEvent, WebhookParseError};
 
 /// Reject a webhook with a 400 that carries its reason to `/admin/errors`.
 ///
@@ -63,7 +72,7 @@ pub async fn stripe(State(state): State<AppState>, headers: HeaderMap, body: Byt
 
     let event = match state.stripe.parse_webhook(payload, sig) {
         Ok(e) => e,
-        Err(e) => {
+        Err(WebhookParseError::Signature(e)) => {
             // Overwhelmingly this is a secret mismatch. Say so, rather
             // than leaving whoever reads /admin/errors to guess.
             // Name the specific likely cause instead of listing all of
@@ -74,20 +83,23 @@ pub async fn stripe(State(state): State<AppState>, headers: HeaderMap, body: Byt
                 "signature verification failed ({e}; {offered} signature(s) offered). {hint}"
             ));
         }
+        Err(WebhookParseError::Decode(e)) => {
+            // Signed by Stripe, so the secret is fine. Say that too:
+            // this case used to be reported as a signature failure, and
+            // three weeks of "missing field `current_period_end`" sent
+            // the debugging at the one setting that was correct.
+            return reject(format!(
+                "signature OK, but the payload could not be read as a Stripe event: {e}"
+            ));
+        }
     };
 
-    let result = match event.type_ {
-        stripe::EventType::CustomerSubscriptionCreated
-        | stripe::EventType::CustomerSubscriptionUpdated
-        | stripe::EventType::CustomerSubscriptionDeleted => {
-            handle_subscription(&state, &event).await
-        }
-        stripe::EventType::CustomerSubscriptionTrialWillEnd => {
-            handle_trial_will_end(&state, &event).await
-        }
-        stripe::EventType::InvoicePaymentFailed => {
-            handle_invoice_payment_failed(&state, &event).await
-        }
+    let result = match event.type_.as_str() {
+        "customer.subscription.created"
+        | "customer.subscription.updated"
+        | "customer.subscription.deleted" => handle_subscription(&state, &event).await,
+        "customer.subscription.trial_will_end" => handle_trial_will_end(&state, &event).await,
+        "invoice.payment_failed" => handle_invoice_payment_failed(&state, &event).await,
         _ => {
             // Stripe sends a lot of event types we don't care about
             // (price.created when we sync a new tier, etc.). 200 OK so
@@ -121,27 +133,59 @@ pub async fn stripe(State(state): State<AppState>, headers: HeaderMap, body: Byt
     }
 }
 
-async fn handle_subscription(state: &AppState, event: &stripe::Event) -> anyhow::Result<()> {
-    let stripe::EventObject::Subscription(ref sub) = event.data.object else {
+/// Any subscription event: re-read the customer's newest subscription
+/// and mirror it.
+///
+/// The payload's own copy of the subscription is deliberately ignored.
+/// Fetching means the typed model always fits (the client pins its API
+/// version; the endpoint's is whatever the Dashboard chose), and it
+/// means we always apply the *current* state: Stripe does not promise
+/// delivery order, so decoding each event's snapshot could let an older
+/// state overwrite a newer one. A `deleted` event needs no special
+/// handling either: the newest subscription is then either that one,
+/// now `canceled` (→ wind_down), or a replacement the customer already
+/// started (→ whatever it says).
+async fn handle_subscription(state: &AppState, event: &WebhookEvent) -> anyhow::Result<()> {
+    if !state.stripe.is_enabled() {
+        anyhow::bail!(
+            "STRIPE_SECRET_KEY is unset, so the subscription this event refers to cannot be fetched"
+        );
+    }
+    let Some(customer_id) = event.customer_id() else {
+        anyhow::bail!("{} event carried no data.object.customer", event.type_);
+    };
+    let Some(brokerage) = find_brokerage_by_customer(state, customer_id).await? else {
+        tracing::warn!(
+            event = %event.id,
+            customer = %customer_id,
+            event_type = %event.type_,
+            "Stripe subscription event matched no brokerage row"
+        );
         return Ok(());
     };
-    let deleted = matches!(event.type_, stripe::EventType::CustomerSubscriptionDeleted);
-    apply_subscription(state, sub, deleted, &event.type_.to_string()).await
+    if resync_from_stripe(state, &brokerage, &event.type_)
+        .await?
+        .is_none()
+    {
+        tracing::warn!(
+            event = %event.id,
+            customer = %customer_id,
+            subscription = event.object_id().unwrap_or("?"),
+            "Stripe subscription event, but the customer has no subscription to mirror"
+        );
+    }
+    Ok(())
 }
 
 async fn handle_invoice_payment_failed(
     state: &AppState,
-    event: &stripe::Event,
+    event: &WebhookEvent,
 ) -> anyhow::Result<()> {
-    let stripe::EventObject::Invoice(ref inv) = event.data.object else {
+    let Some(customer_id) = event.customer_id() else {
         return Ok(());
     };
-    let Some(customer) = inv.customer.as_ref() else {
-        return Ok(());
-    };
-    let customer_id = customer.id().to_string();
 
-    let Some(brokerage) = find_brokerage_by_customer(state, &customer_id).await? else {
+    let Some(brokerage) = find_brokerage_by_customer(state, customer_id).await? else {
         tracing::warn!(
             customer = %customer_id,
             "invoice.payment_failed matched no brokerage row"
@@ -164,12 +208,11 @@ async fn handle_invoice_payment_failed(
 
 /// Stripe fires this 3 days before a trial ends. Email the broker(s)
 /// so they aren't surprised by the first charge.
-async fn handle_trial_will_end(state: &AppState, event: &stripe::Event) -> anyhow::Result<()> {
-    let stripe::EventObject::Subscription(ref sub) = event.data.object else {
+async fn handle_trial_will_end(state: &AppState, event: &WebhookEvent) -> anyhow::Result<()> {
+    let Some(customer_id) = event.customer_id() else {
         return Ok(());
     };
-    let customer_id = sub.customer.id().to_string();
-    let Some(brokerage) = find_brokerage_by_customer(state, &customer_id).await? else {
+    let Some(brokerage) = find_brokerage_by_customer(state, customer_id).await? else {
         tracing::warn!(
             customer = %customer_id,
             "trial_will_end matched no brokerage row"
@@ -178,8 +221,10 @@ async fn handle_trial_will_end(state: &AppState, event: &stripe::Event) -> anyho
     };
 
     // Format the trial-end date once for both subject and body.
-    let trial_end_display = sub
-        .trial_end
+    // `trial_end` has stayed on the Subscription object across API
+    // versions, so it can be read straight off the payload.
+    let trial_end_display = event
+        .object_timestamp("trial_end")
         .and_then(ts_to_dt)
         .map(|d| d.format("%B %-d, %Y").to_string())
         .unwrap_or_else(|| "soon".to_string());

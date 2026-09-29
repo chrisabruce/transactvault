@@ -114,6 +114,54 @@ async fn authed_post(
     send(app, req).await
 }
 
+/// Like [`make_app`], but with a webhook signing secret so tests can
+/// deliver signed Stripe events. The API client stays disabled: nothing
+/// here may reach Stripe.
+async fn make_app_with_webhook_secret(secret: &str) -> TestApp {
+    let mut state = AppState::for_tests().await;
+    state.stripe = crate::stripe::Stripe::new(&crate::config::StripeConfig {
+        secret_key: String::new(),
+        webhook_secret: secret.into(),
+        trial_days: 14,
+    });
+    let router = router::build(state.clone());
+    TestApp { router, state }
+}
+
+/// A `Stripe-Signature` header for `payload`, signed the way Stripe does.
+fn stripe_signature_header(secret: &str, payload: &str) -> String {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    let ts = chrono::Utc::now().timestamp();
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("hmac key");
+    mac.update(format!("{ts}.{payload}").as_bytes());
+    format!("t={ts},v1={}", hex::encode(mac.finalize().into_bytes()))
+}
+
+/// Deliver a signed webhook and hand back the raw response, so tests
+/// can read the `ErrorDetail` extension the error log would record.
+async fn send_signed_webhook(
+    app: &TestApp,
+    secret: &str,
+    payload: &str,
+) -> axum::response::Response {
+    let req = Request::builder()
+        .method("POST")
+        .uri("/webhooks/stripe")
+        .header("Stripe-Signature", stripe_signature_header(secret, payload))
+        .body(Body::from(payload.to_string()))
+        .unwrap();
+    app.router.clone().oneshot(req).await.expect("responds")
+}
+
+/// What `/admin/errors` would show for this response.
+fn error_detail_of(res: &axum::response::Response) -> String {
+    res.extensions()
+        .get::<crate::error::ErrorDetail>()
+        .map(|d| d.0.clone())
+        .unwrap_or_default()
+}
+
 // ---------------------------------------------------------------------------
 // Seed helpers — minimal happy-path fixtures.
 //
@@ -4537,6 +4585,111 @@ async fn rejected_stripe_webhooks_record_the_reason() {
     assert!(
         detail.contains("STRIPE_WEBHOOK_SECRET"),
         "signature rejection must name the setting to check; got {detail:?}"
+    );
+}
+
+/// Webhook payloads follow the endpoint's API version, not the crate's.
+///
+/// Stripe's 2025-03-31 release moved `current_period_end` off the
+/// Subscription object. Decoding deliveries into the crate's typed
+/// `Event` (generated for 2023-10-16) then failed on every subscription
+/// event with "missing field `current_period_end`", which the handler
+/// reported as a signature failure. Three weeks of trial→active flips
+/// never reached the row, and a paying broker kept seeing the trial
+/// banner.
+///
+/// Events are now read only for their type and the object's customer,
+/// so the newer shape decodes and the handler fetches the subscription
+/// through the pinned API instead.
+#[tokio::test]
+async fn webhook_accepts_payloads_from_newer_stripe_api_versions() {
+    const SECRET: &str = "whsec_newer_api_shape";
+    let app = make_app_with_webhook_secret(SECRET).await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    set_stripe_mirror(&app, &b, "trialing", None).await;
+
+    // 2025-03-31 shape: no `current_period_end` on the subscription (it
+    // lives on the item now), `customer` as a bare id.
+    let payload = r#"{"id":"evt_1","object":"event","type":"customer.subscription.updated","data":{"object":{"id":"sub_1","object":"subscription","customer":"cus_test","status":"active","items":{"data":[{"id":"si_1","current_period_end":1790000000}]}}}}"#;
+    let res = send_signed_webhook(&app, SECRET, payload).await;
+    // Decoding succeeded, so whatever happens next is downstream: with
+    // no STRIPE_SECRET_KEY the handler cannot fetch the subscription and
+    // asks Stripe to retry with a 5xx. Never a 400.
+    assert_eq!(
+        res.status(),
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "a newer-shaped payload must decode and reach the handler"
+    );
+    let detail = error_detail_of(&res);
+    assert!(detail.contains("STRIPE_SECRET_KEY"), "got {detail:?}");
+
+    // An event that needs nothing but the customer id goes all the way
+    // through, in the same newer shape.
+    let payload = r#"{"id":"evt_2","object":"event","type":"invoice.payment_failed","data":{"object":{"id":"in_1","object":"invoice","customer":"cus_test"}}}"#;
+    let res = send_signed_webhook(&app, SECRET, payload).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        load_brokerage(&app, &b)
+            .await
+            .subscription_status
+            .as_deref(),
+        Some("past_due")
+    );
+
+    // An expanded customer object is read the same way.
+    let payload = r#"{"id":"evt_3","object":"event","type":"customer.subscription.trial_will_end","data":{"object":{"id":"sub_1","object":"subscription","customer":{"id":"cus_test","object":"customer"},"trial_end":1790000000}}}"#;
+    let res = send_signed_webhook(&app, SECRET, payload).await;
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Signed but not an event at all: refused, and the log says the
+    // signature was fine so nobody goes chasing the secret.
+    let res = send_signed_webhook(&app, SECRET, r#"{"hello":"world"}"#).await;
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let detail = error_detail_of(&res);
+    assert!(detail.contains("signature OK"), "got {detail:?}");
+
+    // A wrong secret is still a signature failure, worded as one.
+    let res = send_signed_webhook(&app, "whsec_wrong", payload).await;
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let detail = error_detail_of(&res);
+    assert!(
+        detail.contains("signature verification failed"),
+        "got {detail:?}"
+    );
+}
+
+/// Refusals from the public contact form used to be bare 400s, so every
+/// script posting at `/contact` landed in `/admin/errors` as "(no detail
+/// — panic or framework-generated response)", indistinguishable from a
+/// crash. The refusal now names its reason for the log while the visitor
+/// still gets the same JSON.
+#[tokio::test]
+async fn contact_refusals_explain_themselves_in_the_error_log() {
+    use axum::extract::ConnectInfo;
+    use std::net::SocketAddr;
+
+    let app = make_app().await;
+    // No form token: what a script that never loaded the page sends.
+    let mut req = Request::builder()
+        .method("POST")
+        .uri("/contact")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from("name=Bot&email=bot%40example.com&message=hi"))
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo::<SocketAddr>(
+        "127.0.0.1:0".parse().expect("loopback addr"),
+    ));
+    let res = app.router.clone().oneshot(req).await.expect("responds");
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let detail = error_detail_of(&res);
+    assert!(
+        detail.contains("contact form refused") && detail.contains("token"),
+        "got {detail:?}"
+    );
+    let body = to_bytes(res.into_body(), 1024 * 1024).await.expect("body");
+    assert!(
+        String::from_utf8_lossy(&body).contains("Reload the page"),
+        "the visitor still gets the inline JSON message"
     );
 }
 
