@@ -1166,6 +1166,12 @@ pub struct AdminBrokerageDetailPage<'a> {
     pub brokerage_key: String,
     pub brokerage_name: String,
     pub plan_slug: String,
+    /// Subscribed in Stripe but `plan_slug` matches no tier, so no
+    /// transaction limit or overage billing applies. Drives the warning
+    /// and the manual "Set plan" override.
+    pub plan_unresolved: bool,
+    /// Every tier, archived ones included, for the "Set plan" select.
+    pub tiers: Vec<crate::models::Tier>,
     pub is_complimentary: bool,
     pub city: Option<String>,
     pub state_code: String,

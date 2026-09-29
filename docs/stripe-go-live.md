@@ -116,7 +116,14 @@ UPDATE brokerage SET
 WHERE stripe_customer_id != NONE;
 ```
 
-Do NOT run this again after real subscriptions exist — it would orphan them.
+Avoid running this again after real subscriptions exist unless you have to.
+It never breaks the subscriptions themselves (Stripe keeps their original
+Prices alive and renews them as before), and since v0.16.5 each tier
+remembers the Product ids it had before a relink, so existing subscribers
+still resolve to their tier. It does leave the old Products and Prices
+behind in Stripe as clutter, and anything that subscribed before the
+history existed will show "no matching tier" until you set its plan by
+hand (Admin → Brokerages → the brokerage → Set plan).
 While you're in there: the Antelope Valley design partners can skip billing
 entirely via Admin → Brokerages → comp toggle if that's the arrangement.
 

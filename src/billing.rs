@@ -359,17 +359,36 @@ pub async fn apply_subscription(
         return Ok(());
     };
 
+    // Which tier was this sold under? Nothing else ever wrote `plan`, so
+    // until this every subscriber stayed on the signup default "trial":
+    // no tier resolved, and with it no transaction limit and no overage
+    // metering. Resolved from the licensed item's Product (stable across
+    // price changes, remembered across relinks), then from its Price. No
+    // match leaves the current value alone rather than clobbering it.
+    let plan = tier_slug_for_subscription(state, sub).await?;
+    if plan.is_none() {
+        tracing::warn!(
+            customer = %customer_id,
+            subscription = %sub.id,
+            "subscription's prices match no tier; plan left as-is (tiers re-linked since it was sold? set it under Admin → Brokerages)"
+        );
+    }
+    let plan_clause = if plan.is_some() { "plan = $plan," } else { "" };
+    let sql = format!(
+        "UPDATE $id SET
+            {plan_clause}
+            stripe_subscription_id = $sid,
+            subscription_status    = $status,
+            current_period_end     = $cpe,
+            cancel_at              = $cancel,
+            wind_down_purge_at     = $purge"
+    );
+
     state
         .db
-        .query(
-            "UPDATE $id SET
-                stripe_subscription_id = $sid,
-                subscription_status    = $status,
-                current_period_end     = $cpe,
-                cancel_at              = $cancel,
-                wind_down_purge_at     = $purge",
-        )
+        .query(sql.as_str())
         .bind(("id", brokerage.id.clone()))
+        .bind(("plan", plan.clone().unwrap_or_default()))
         .bind(("sid", sub.id.to_string()))
         .bind(("status", status.to_string()))
         .bind(("cpe", current_period_end))
@@ -381,9 +400,69 @@ pub async fn apply_subscription(
         customer = %customer_id,
         source = %source,
         status = %status,
+        plan = plan.as_deref().unwrap_or("(unchanged)"),
         "Brokerage subscription state updated from Stripe"
     );
     Ok(())
+}
+
+/// A subscription item's price, reduced to what tier resolution needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LicensedPrice {
+    price_id: String,
+    product_id: Option<String>,
+}
+
+/// The non-metered prices on a subscription. The metered overage item
+/// has its own Product, so it must not take part in resolving the plan.
+fn licensed_prices(sub: &stripe::Subscription) -> Vec<LicensedPrice> {
+    sub.items
+        .data
+        .iter()
+        .filter_map(|item| item.price.as_ref())
+        .filter(|price| {
+            !price
+                .recurring
+                .as_ref()
+                .is_some_and(|r| matches!(r.usage_type, stripe::RecurringUsageType::Metered))
+        })
+        .map(|price| LicensedPrice {
+            price_id: price.id.to_string(),
+            product_id: price.product.as_ref().map(|p| p.id().to_string()),
+        })
+        .collect()
+}
+
+/// The tier a subscription was sold under, or `None` when no tier claims
+/// any of its prices (typically tiers re-linked after the subscription
+/// was created, before relink started keeping a product history).
+async fn tier_slug_for_subscription(
+    state: &AppState,
+    sub: &stripe::Subscription,
+) -> anyhow::Result<Option<String>> {
+    let mut q = state.db.query("SELECT * FROM tier").await?;
+    let tiers: Vec<Tier> = q.take(0)?;
+    Ok(tier_slug_for_prices(&tiers, &licensed_prices(sub)))
+}
+
+/// Pure half of [`tier_slug_for_subscription`]: a tier owning the
+/// Product (now or before a relink) wins; the current Price id is the
+/// fallback. Archived and inactive tiers count, since a grandfathered
+/// subscriber is still on them.
+fn tier_slug_for_prices(tiers: &[Tier], prices: &[LicensedPrice]) -> Option<String> {
+    prices.iter().find_map(|price| {
+        let by_product = price
+            .product_id
+            .as_deref()
+            .and_then(|product| tiers.iter().find(|t| t.owns_product(product)));
+        by_product
+            .or_else(|| {
+                tiers
+                    .iter()
+                    .find(|t| t.stripe_price_id.as_deref() == Some(price.price_id.as_str()))
+            })
+            .map(|t| t.slug.clone())
+    })
 }
 
 pub(crate) async fn find_brokerage_by_customer(
@@ -940,6 +1019,56 @@ mod tests {
         assert!(outcome.is_none());
         let again = fetch_brokerage(&state.db, &id).await;
         assert_eq!(again.subscription_status.as_deref(), Some("trialing"));
+    }
+
+    // ---- plan resolution from the subscription's prices ----
+
+    #[tokio::test]
+    async fn plan_resolves_by_product_then_price_and_survives_a_relink() {
+        let db = make_db().await;
+        insert_tier(&db, "starter", 10, None).await;
+        insert_tier(&db, "pro", -1, None).await;
+        db.query(
+            "UPDATE tier SET stripe_product_id = 'prod_starter_new',
+                stripe_price_id = 'price_starter_new',
+                stripe_product_ids_previous = ['prod_starter_old']
+             WHERE slug = 'starter'",
+        )
+        .await
+        .expect("link starter");
+        db.query(
+            "UPDATE tier SET stripe_product_id = 'prod_pro', stripe_price_id = 'price_pro',
+                is_archived = true
+             WHERE slug = 'pro'",
+        )
+        .await
+        .expect("link pro");
+        let mut q = db.query("SELECT * FROM tier").await.expect("tiers");
+        let tiers: Vec<Tier> = q.take(0).expect("tier rows");
+
+        let lp = |price: &str, product: Option<&str>| LicensedPrice {
+            price_id: price.into(),
+            product_id: product.map(String::from),
+        };
+        // Current Product.
+        assert_eq!(
+            tier_slug_for_prices(&tiers, &[lp("price_x", Some("prod_starter_new"))]).as_deref(),
+            Some("starter")
+        );
+        // The Product from before a relink still resolves.
+        assert_eq!(
+            tier_slug_for_prices(&tiers, &[lp("price_x", Some("prod_starter_old"))]).as_deref(),
+            Some("starter")
+        );
+        // Price id fallback when the Product is unknown; archived tiers
+        // still claim their subscribers.
+        assert_eq!(
+            tier_slug_for_prices(&tiers, &[lp("price_pro", None)]).as_deref(),
+            Some("pro")
+        );
+        // Nothing matches: the caller leaves the plan alone.
+        assert!(tier_slug_for_prices(&tiers, &[lp("price_nope", Some("prod_nope"))]).is_none());
+        assert!(tier_slug_for_prices(&tiers, &[]).is_none());
     }
 
     // ---- enforce_transaction_limit ----

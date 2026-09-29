@@ -208,6 +208,14 @@ pub fn build(state: AppState) -> Router {
             "/admin/brokerages/{key}/resync",
             post(admin::resync_brokerage_subscription),
         )
+        .route(
+            "/admin/brokerages/{key}/plan",
+            post(admin::set_brokerage_plan),
+        )
+        .route(
+            "/admin/brokerages/resync-all",
+            post(admin::resync_all_subscriptions),
+        )
         .route("/admin/tiers", get(tiers::list))
         .route("/admin/tiers/relink", post(tiers::relink_stripe))
         .route("/admin/tiers/new", get(tiers::new_form).post(tiers::create))

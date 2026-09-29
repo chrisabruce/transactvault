@@ -112,6 +112,7 @@ impl AuditEvent {
             "brokerage_comp_granted" => "Comp access granted",
             "brokerage_comp_revoked" => "Comp access revoked",
             "brokerage_subscription_synced" => "Subscription synced from Stripe",
+            "brokerage_updated" => "Brokerage updated",
             "feedback_submitted" => "Feedback submitted",
             "feedback_blocked_honeypot" => "Feedback blocked — honeypot",
             "feedback_blocked_rate_limit" => "Feedback blocked — rate limit",
@@ -147,7 +148,8 @@ impl AuditEvent {
             | "invite_resent"
             | "admin_view"
             | "transaction_reassigned"
-            | "brokerage_subscription_synced" => "neutral",
+            | "brokerage_subscription_synced"
+            | "brokerage_updated" => "neutral",
             "login_failure"
             | "verify_failure"
             | "invite_cancelled"

@@ -8,6 +8,14 @@ the bottom-right of every page.
 
 ## September 2026
 
+### v0.16.6: Your plan is recorded on your account
+
+- **The plan you chose at checkout is now recorded on your account.**
+  Subscribed accounts kept their trial label, so the pricing page never
+  showed "Current plan" and the transaction allowance for the plan was
+  not being tracked. The plan now follows what Stripe has on file, and
+  switching plans through Manage subscription updates it as well.
+
 ### v0.16.5: The trial banner clears once you are paying
 
 - **The green "free trial" bar no longer hangs around after your first

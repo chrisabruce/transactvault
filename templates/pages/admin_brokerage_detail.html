@@ -87,15 +87,36 @@
             <dt>Cancel at</dt><dd>{% match cancel_at_display %}{% when Some with (d) %}{{ d }}{% when None %}—{% endmatch %}</dd>
             <dt>Wind-down purge at</dt><dd>{% match wind_down_purge_at_display %}{% when Some with (d) %}{{ d }}{% when None %}—{% endmatch %}</dd>
         </dl>
+        {% if plan_unresolved %}
+            <p class="alert error" role="alert">
+                Subscribed in Stripe, but the plan slug <code>{{ plan_slug }}</code> matches no tier,
+                so this brokerage has no transaction limit and no overage billing. Sync from Stripe
+                sets the plan from the subscription's product. If the tiers were re-linked after this
+                subscription was sold, that lookup cannot match; pick the plan below instead.
+            </p>
+        {% endif %}
         {% if stripe_customer_id.is_some() %}
             <p>
-                The status and dates above are a copy of what Stripe last told us.
+                The status, dates, and plan above are a copy of what Stripe last told us.
                 The app refreshes them by itself once those dates have passed, but
                 if a broker reports a trial banner that outlived their first charge,
                 or the row still says none after they paid, sync it now.
             </p>
             <form method="post" action="/admin/brokerages/{{ brokerage_key }}/resync" class="inline-form">
                 <button type="submit" class="btn small secondary">Sync from Stripe</button>
+            </form>
+        {% endif %}
+        {% if !tiers.is_empty() %}
+            <form method="post" action="/admin/brokerages/{{ brokerage_key }}/plan" class="inline-form">
+                <label for="plan-slug">Plan</label>
+                <select id="plan-slug" name="slug">
+                    {% for t in tiers %}
+                        <option value="{{ t.slug }}"{% if t.slug == plan_slug %} selected{% endif %}>
+                            {{ t.name }} ({{ t.slug }}){% if t.is_archived %}, archived{% endif %}
+                        </option>
+                    {% endfor %}
+                </select>
+                <button type="submit" class="btn small secondary">Set plan</button>
             </form>
         {% endif %}
     </section>

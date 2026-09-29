@@ -7354,6 +7354,109 @@ async fn admin_resync_is_superadmin_only_and_explains_a_disabled_stripe() {
     );
 }
 
+/// The manual plan override: super-admin only, refuses unknown slugs,
+/// audits the change, and the detail page flags a subscribed brokerage
+/// whose plan resolves to no tier (which, until v0.16.5, was every
+/// subscriber: nothing ever wrote `plan`).
+#[tokio::test]
+async fn admin_can_set_a_brokerage_plan_by_hand() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let admin = seed_user(&app.state, "admin@test").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    join(&app.state, &admin, &b, "broker").await;
+    join(&app.state, &broker, &b, "broker").await;
+    seed_tier(&app, "pro", -1, None).await;
+    set_stripe_mirror(&app, &b, "active", None).await;
+    // `seed_brokerage` uses "starter"; production rows start at the
+    // schema default, which is the state this test is about.
+    app.state
+        .db
+        .query("UPDATE $b SET plan = 'trial'")
+        .bind(("b", b.clone()))
+        .await
+        .expect("reset plan to the signup default");
+    let key = crate::db::record_key(&b);
+
+    // Subscribed, plan still "trial": the detail page says so and offers
+    // the override.
+    let (status, body) = authed_get(&app, &admin, &format!("/admin/brokerages/{key}")).await;
+    assert_eq!(status, StatusCode::OK);
+    let body = squash(&body);
+    assert!(
+        body.contains("matches no tier"),
+        "unresolved plan must be flagged"
+    );
+    assert!(body.contains("Set plan"), "override form must render");
+
+    let uri = format!("/admin/brokerages/{key}/plan");
+    let (status, _) = authed_post(&app, &broker, &uri, "slug=pro").await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "must be super-admin only");
+    assert_eq!(load_brokerage(&app, &b).await.plan, "trial");
+
+    let (status, _) = authed_post(&app, &admin, &uri, "slug=nope").await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(
+        load_brokerage(&app, &b).await.plan,
+        "trial",
+        "an unknown slug must not be written"
+    );
+
+    let (status, _) = authed_post(&app, &admin, &uri, "slug=pro").await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(load_brokerage(&app, &b).await.plan, "pro");
+
+    // The flag is gone once the plan resolves.
+    let (_, body) = authed_get(&app, &admin, &format!("/admin/brokerages/{key}")).await;
+    assert!(!squash(&body).contains("matches no tier"));
+
+    // Audited with both slugs.
+    let mut q = app
+        .state
+        .db
+        .query(
+            "SELECT * FROM audit_event WHERE kind = 'brokerage_updated' ORDER BY at DESC LIMIT 1",
+        )
+        .await
+        .expect("audit query");
+    let events: Vec<crate::models::AuditEvent> = q.take(0).expect("audit rows");
+    let detail = events
+        .first()
+        .and_then(|e| e.detail.clone())
+        .unwrap_or_default();
+    assert!(
+        detail.contains("trial -> pro"),
+        "override must be audited; got {detail:?}"
+    );
+}
+
+/// Re-syncing every subscribed brokerage is a super-admin action, and
+/// with Stripe disabled the list page says so instead of pretending.
+#[tokio::test]
+async fn resync_all_is_superadmin_only_and_explains_a_disabled_stripe() {
+    let app = make_app().await;
+    let b = seed_brokerage(&app.state, "Acme").await;
+    let admin = seed_user(&app.state, "admin@test").await;
+    let broker = seed_user(&app.state, "b@a").await;
+    join(&app.state, &admin, &b, "broker").await;
+    join(&app.state, &broker, &b, "broker").await;
+
+    let (status, _) = authed_post(&app, &broker, "/admin/brokerages/resync-all", "").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (status, _) = authed_post(&app, &admin, "/admin/brokerages/resync-all", "").await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+
+    let (status, body) = authed_get(&app, &admin, "/admin/brokerages?error=stripe_disabled").await;
+    assert_eq!(status, StatusCode::OK);
+    let body = squash(&body);
+    assert!(body.contains("Stripe is not configured"));
+    assert!(
+        body.contains("Sync all subscriptions from Stripe"),
+        "the list page must offer the button"
+    );
+}
+
 /// Fetch a brokerage row in a test.
 async fn load_brokerage(
     app: &TestApp,

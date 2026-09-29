@@ -96,15 +96,24 @@ pub async fn relink_stripe(
                 AppError::Internal(e.context(format!("relinking tier {:?} to Stripe", tier.slug)))
             })?;
 
+        // Remember the Product being replaced. Subscriptions sold under
+        // it keep referencing it, and `billing::apply_subscription`
+        // resolves a brokerage's plan from its subscription's Product,
+        // so without this every existing subscriber would stop matching
+        // their tier the moment the ids changed. A tier with no Product
+        // yet contributes nothing (empty list).
+        let outgoing: Vec<String> = tier.stripe_product_id.iter().cloned().collect();
         state
             .db
             .query(
                 "UPDATE $id SET
+                    stripe_product_ids_previous = array::union(stripe_product_ids_previous ?? [], $outgoing),
                     stripe_product_id       = $product,
                     stripe_price_id         = $price,
                     stripe_overage_price_id = $overage",
             )
             .bind(("id", tier.id.clone()))
+            .bind(("outgoing", outgoing))
             .bind(("product", sync.product_id))
             .bind(("price", sync.price_id))
             .bind(("overage", sync.overage_price_id))
@@ -115,7 +124,8 @@ pub async fn relink_stripe(
     tracing::info!(count = relinked, actor = %user.email, "tiers relinked to Stripe");
 
     let message = format!(
-        "Re-linked {relinked} tier{} to Stripe. Subscribe now uses the newly created Prices.",
+        "Re-linked {relinked} tier{} to Stripe. Subscribe now uses the newly created Prices; \
+         existing subscribers keep their old Prices and still resolve to their tier.",
         if relinked == 1 { "" } else { "s" }
     );
     Ok(render_list(&state, &user, Some(&message))

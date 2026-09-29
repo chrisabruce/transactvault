@@ -43,6 +43,14 @@ pub struct Tier {
     /// Second Stripe Price (metered) used to bill per-transaction
     /// overage. `None` if the tier hard-blocks at the limit instead.
     pub stripe_overage_price_id: Option<String>,
+    /// Product ids this tier had before each "Re-link to Stripe".
+    /// Existing subscriptions keep referencing the Product they were
+    /// sold under, and [`crate::billing::apply_subscription`] resolves
+    /// `brokerage.plan` from that Product, so the history keeps
+    /// pre-relink subscribers on their tier. `None` on rows that predate
+    /// the field.
+    #[serde(default)]
+    pub stripe_product_ids_previous: Option<Vec<String>>,
     /// Per-tier cap. [`UNLIMITED`] (`-1`) means no cap.
     pub user_limit: i64,
     /// Per-month transaction-create cap. [`UNLIMITED`] (`-1`) means
@@ -62,6 +70,15 @@ pub struct Tier {
 impl Tier {
     pub fn url_key(&self) -> String {
         crate::db::record_key(&self.id)
+    }
+
+    /// Does this tier own `product_id`, now or before a relink?
+    pub fn owns_product(&self, product_id: &str) -> bool {
+        self.stripe_product_id.as_deref() == Some(product_id)
+            || self
+                .stripe_product_ids_previous
+                .as_ref()
+                .is_some_and(|previous| previous.iter().any(|p| p == product_id))
     }
 
     /// Selectable on the public Subscribe page? Archived tiers stay

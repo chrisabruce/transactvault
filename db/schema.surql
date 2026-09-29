@@ -86,6 +86,12 @@ DEFINE FIELD OVERWRITE price_cents             ON tier TYPE int DEFAULT 0 ASSERT
 DEFINE FIELD OVERWRITE stripe_product_id       ON tier TYPE option<string>;
 DEFINE FIELD OVERWRITE stripe_price_id         ON tier TYPE option<string>;
 DEFINE FIELD OVERWRITE stripe_overage_price_id ON tier TYPE option<string>;
+-- Product ids this tier carried before each "Re-link to Stripe". Relink
+-- creates fresh Products/Prices and points the tier at them, but every
+-- subscription that already exists keeps referencing the old ones, and
+-- `brokerage.plan` is resolved from the subscription's Product. Keeping
+-- the history lets pre-relink subscribers still map to their tier.
+DEFINE FIELD OVERWRITE stripe_product_ids_previous ON tier TYPE option<array<string>>;
 -- `-1` means unlimited; `0` and positive ints are real caps. Limits
 -- reset monthly with the billing period (transactions); user_limit
 -- is a steady-state cap.

@@ -52,6 +52,13 @@
         <p class="alert error" role="alert">{{ msg }}</p>
     {% when None %}{% endmatch %}
 
+    {#- One click to re-read every subscribed brokerage from Stripe. For
+        the day after a webhook outage, or a change to how the mirror is
+        derived (the plan slug, for one). -#}
+    <form method="post" action="/admin/brokerages/resync-all" class="inline-form">
+        <button type="submit" class="btn small secondary">Sync all subscriptions from Stripe</button>
+    </form>
+
     {% if !pending.is_empty() %}
         <section class="panel danger-panel" aria-label="Pending deletion">
             <h2>Pending deletion ({{ pending.len() }})</h2>

@@ -7,7 +7,7 @@
 //! mounted under `/admin/*` so it's obvious in routing tables that
 //! authorization is privileged.
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{Form, Path, Query, State};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use humansize::{DECIMAL, format_size};
 use num_format::{Locale, ToFormattedString};
@@ -49,6 +49,12 @@ pub fn admin_flash(code: Option<&str>) -> Option<&'static str> {
         "subscription_unchanged" => {
             Some("Stripe has no subscription on this brokerage's Customer, so nothing changed.")
         }
+        "plan_set" => {
+            Some("Plan updated. Transaction limits and overage billing now follow that tier.")
+        }
+        "all_synced" => Some(
+            "Every brokerage with a Stripe Customer was re-synced from Stripe. The audit log has the counts.",
+        ),
         _ => None,
     }
 }
@@ -63,8 +69,15 @@ pub fn admin_error(code: Option<&str>) -> Option<&'static str> {
             "Nothing to sync: this brokerage has never started Checkout, so Stripe has no Customer for it.",
         ),
         "stripe_disabled" => Some("Nothing to sync: Stripe is not configured on this deployment."),
+        "unknown_tier" => Some("That plan slug matches no tier, so nothing changed."),
         _ => None,
     }
+}
+
+/// Body of the manual "Set plan" override on the brokerage detail page.
+#[derive(Debug, Deserialize)]
+pub struct SetPlanForm {
+    pub slug: String,
 }
 
 /// Query string for the brokerage detail page: just the outcome codes
@@ -311,6 +324,21 @@ pub async fn brokerage_detail(
         .await?;
     let tier: Option<crate::models::Tier> = tq.take(0)?;
 
+    // Every tier, archived ones included, for the "Set plan" override.
+    let mut all_tq = state
+        .db
+        .query("SELECT * FROM tier ORDER BY sort_order ASC, name ASC")
+        .await?;
+    let tiers: Vec<crate::models::Tier> = all_tq.take(0).unwrap_or_default();
+
+    // Subscribed in Stripe but no tier resolves: the transaction limit
+    // and overage billing are not being applied. Worth a red banner.
+    let plan_unresolved = tier.is_none()
+        && matches!(
+            brokerage.subscription_status.as_deref(),
+            Some("active" | "trialing" | "past_due" | "canceling")
+        );
+
     // Members on the brokerage — same shape we use elsewhere, but
     // with the role included so the admin can see who's the broker.
     let mut mq = state
@@ -371,6 +399,8 @@ pub async fn brokerage_detail(
         brokerage_key: key,
         brokerage_name: brokerage.name.clone(),
         plan_slug: brokerage.plan.clone(),
+        plan_unresolved,
+        tiers,
         is_complimentary: brokerage.is_complimentary,
         city: brokerage.city.clone(),
         state_code: brokerage.state.clone(),
@@ -715,6 +745,116 @@ pub async fn resync_brokerage_subscription(
     .await;
 
     Ok(Redirect::to(&format!("{back}?flash=subscription_synced")))
+}
+
+/// `POST /admin/brokerages/{key}/plan` — set the plan slug by hand.
+///
+/// The plan normally follows the Stripe subscription (see
+/// [`crate::billing::apply_subscription`]). This covers the case that
+/// lookup cannot: a subscription sold under a Product no tier remembers,
+/// because the tiers were re-linked before relink started keeping a
+/// product history. Audited as `brokerage_updated` with the old and new
+/// slug.
+pub async fn set_brokerage_plan(
+    State(state): State<AppState>,
+    SuperAdmin(admin): SuperAdmin,
+    Path(key): Path<String>,
+    Form(form): Form<SetPlanForm>,
+) -> Result<Redirect, AppError> {
+    let id = RecordId::new("brokerage", key.as_str());
+    let brokerage: Option<Brokerage> = state.db.select(id.clone()).await?;
+    let brokerage = brokerage.ok_or(AppError::NotFound)?;
+    let back = format!("/admin/brokerages/{key}");
+
+    // Only a slug that exists: a typo here would silently reproduce the
+    // "no matching tier" state this form exists to fix.
+    let slug = form.slug.trim().to_string();
+    let mut tq = state
+        .db
+        .query("SELECT * FROM tier WHERE slug = $s LIMIT 1")
+        .bind(("s", slug.clone()))
+        .await?;
+    let tier: Option<crate::models::Tier> = tq.take(0)?;
+    if tier.is_none() {
+        return Ok(Redirect::to(&format!("{back}?error=unknown_tier")));
+    }
+
+    state
+        .db
+        .query("UPDATE $id SET plan = $slug")
+        .bind(("id", id))
+        .bind(("slug", slug.clone()))
+        .await?;
+
+    audit::record(
+        &state.db,
+        "brokerage_updated",
+        Some(admin.user_id.clone()),
+        Some(admin.email.clone()),
+        None,
+        None,
+        Some(format!(
+            "brokerage={} ({key}): plan {} -> {slug} (admin override)",
+            brokerage.name, brokerage.plan
+        )),
+    )
+    .await;
+
+    Ok(Redirect::to(&format!("{back}?flash=plan_set")))
+}
+
+/// `POST /admin/brokerages/resync-all` — re-read every brokerage that
+/// has a Stripe Customer.
+///
+/// For the day after a webhook outage, or after a change to how the
+/// mirror is derived: v0.16.5 started writing `plan` from the
+/// subscription, and every earlier subscriber needed one pass. Failures
+/// are logged and skipped so one bad row cannot stop the rest; the audit
+/// detail carries the counts.
+pub async fn resync_all_subscriptions(
+    State(state): State<AppState>,
+    SuperAdmin(admin): SuperAdmin,
+) -> Result<Redirect, AppError> {
+    if !state.stripe.is_enabled() {
+        return Ok(Redirect::to("/admin/brokerages?error=stripe_disabled"));
+    }
+
+    let mut q = state
+        .db
+        .query("SELECT * FROM brokerage WHERE stripe_customer_id IS NOT NONE AND stripe_customer_id != ''")
+        .await?;
+    let rows: Vec<Brokerage> = q.take(0)?;
+
+    let (mut synced, mut skipped, mut failed) = (0usize, 0usize, 0usize);
+    for b in &rows {
+        match crate::billing::resync_from_stripe(&state, b, "admin-resync-all").await {
+            Ok(Some(_)) => synced += 1,
+            Ok(None) => skipped += 1,
+            Err(e) => {
+                failed += 1;
+                tracing::warn!(
+                    error = %e,
+                    brokerage = %crate::db::record_key(&b.id),
+                    "resync-all: brokerage skipped after a Stripe or database error"
+                );
+            }
+        }
+    }
+
+    audit::record(
+        &state.db,
+        "brokerage_subscription_synced",
+        Some(admin.user_id.clone()),
+        Some(admin.email.clone()),
+        None,
+        None,
+        Some(format!(
+            "all brokerages: {synced} synced, {skipped} without a subscription, {failed} failed"
+        )),
+    )
+    .await;
+
+    Ok(Redirect::to("/admin/brokerages?flash=all_synced"))
 }
 
 /// Compile-time bundled CHANGELOG.md. Single source of truth lives at
